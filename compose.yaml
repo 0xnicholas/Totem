@@ -30,8 +30,10 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-totem}:${POSTGRES_PASSWORD:-totem}@db:5432/${POSTGRES_DB:-totem}
-      # Dev default only — set a real admin key in .env (T3).
+      # Dev defaults only — set real values in .env (T3 admin key, T6 token key).
       TOTEM_ADMIN_KEY: ${TOTEM_ADMIN_KEY:-tt_dev_admin_change_me}
+      TOTEM_TOKEN_ENC_KEY: ${TOTEM_TOKEN_ENC_KEY:-tt_dev_token_enc_change_me_0123456789}
+      FEISHU_BASE_URL: ${FEISHU_BASE_URL:-https://open.feishu.cn}
       PORT: 3000
     ports:
       - "${ADMIN_PORT:-3000}:3000"

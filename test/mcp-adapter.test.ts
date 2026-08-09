@@ -79,7 +79,7 @@ describe('McpAdapter', () => {
 
     // Same connection id under another tenant does not exist.
     await expect(adapter.listTools(TENANT_B, CONN_1)).resolves.toEqual([]);
-    expect(adapter.resolveConnection(TENANT_B, CONN_1)).toBeUndefined();
+    await expect(adapter.resolveConnection(TENANT_B, CONN_1)).resolves.toBeUndefined();
     // Unknown connection id under the right tenant is also nothing.
     await expect(adapter.listTools(TENANT_A, 'conn-unknown')).resolves.toEqual([]);
   });

@@ -1,4 +1,4 @@
-import type { ApiKeyScope, AuditFilters, AuditRow, Tenant } from './repo.js';
+import type { ApiKeyScope, AuditFilters, AuditRow, ConnectionView, Tenant } from './repo.js';
 import { isRecord } from './util.js';
 
 export interface AdminApiClientOptions {
@@ -74,6 +74,25 @@ export class AdminApiClient {
 
   resumeConnection(connectionId: string): Promise<{ ok: true }> {
     return this.request('POST', `/admin/connections/${encodeURIComponent(connectionId)}/resume`);
+  }
+
+  startOAuth(
+    tenantId: string,
+    redirectUri?: string,
+    connectionId?: string,
+  ): Promise<{ authorizationUrl: string }> {
+    const body: Record<string, string> = {};
+    if (redirectUri !== undefined) body.redirectUri = redirectUri;
+    if (connectionId !== undefined) body.connectionId = connectionId;
+    return this.request(
+      'POST',
+      `/admin/tenants/${encodeURIComponent(tenantId)}/oauth/start`,
+      body,
+    );
+  }
+
+  listConnections(tenantId: string): Promise<{ connections: ConnectionView[] }> {
+    return this.request('GET', `/admin/tenants/${encodeURIComponent(tenantId)}/connections`);
   }
 
   queryAudit(tenantId: string, filters: AuditFilters): Promise<{ rows: AuditRow[] }> {

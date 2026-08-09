@@ -19,6 +19,22 @@ export interface ApiKeyRecord {
 
 export type AuditSource = 'mcp' | 'admin_api' | 'cli';
 
+export type ConnectionStatus = 'active' | 'suspended' | 'auth_expired';
+
+/** Operator-facing view of a connection (T6: OAuth flow + auth state). */
+export interface ConnectionView {
+  id: string;
+  tenantId: string;
+  connectorId: string;
+  name: string;
+  status: ConnectionStatus;
+  /** Server-set; v1 always equals the tenant id (research amendment). */
+  ownerId: string;
+  /** The deployment's canonical OAuth redirect URI, recorded for re-auth. */
+  oauthRedirectUri: string | null;
+  createdAt: string;
+}
+
 export interface AuditRow {
   id: string;
   tenantId: string;
@@ -81,12 +97,24 @@ export interface AdminRepository {
   /** @throws NotFoundError when the tenant does not exist. */
   setFeishuCreds(tenantId: string, creds: FeishuCreds): Promise<void>;
   /**
+   * Creates a connection for the OAuth flow (T6). `ownerId` is server-set
+   * to the tenant id. @throws NotFoundError when the tenant does not exist.
+   */
+  createConnection(
+    tenantId: string,
+    input: { connectorId: string; name: string; oauthRedirectUri?: string | null },
+  ): Promise<ConnectionView>;
+  /** Lists the tenant's connections with their auth state. @throws NotFoundError when the tenant does not exist. */
+  listConnections(tenantId: string): Promise<ConnectionView[]>;
+  /**
    * Replaces the connection's allowlist. @throws NotFoundError when the
    * connection does not exist.
    */
   setAllowlist(connectionId: string, actions: string[]): Promise<void>;
   /** Sets a connection's status to suspended (true) or active (false). */
   suspendConnection(connectionId: string, suspended: boolean): Promise<void>;
+  /** Re-activates a connection (OAuth re-auth path, T6). */
+  activateConnection(connectionId: string): Promise<void>;
   /** @throws NotFoundError when the tenant does not exist. */
   queryAudit(tenantId: string, filters: AuditFilters): Promise<AuditRow[]>;
 }
@@ -100,4 +128,5 @@ export const ADMIN_AUDIT_ACTIONS = {
   allowlistUpdated: 'admin.allowlist_updated',
   connectionSuspended: 'admin.connection_suspended',
   connectionResumed: 'admin.connection_resumed',
+  connectionCreated: 'admin.connection_created',
 } as const;

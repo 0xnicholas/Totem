@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AdminApiClient } from '../src/admin/client.js';
 import { run, type CommandIO } from '../src/cli/commands.js';
 
@@ -213,5 +213,122 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     const { io, stdout } = makeHarness(fetchMock);
     expect(await run(['help'], io)).toBe(0);
     expect(stdout[0]).toContain('totemctl');
+  });
+});
+
+describe('totemctl oauth + connections (T6)', () => {
+  it('oauth-start prints the authorization URL for the operator', async () => {
+    const fetchMock = vi.fn<FetchLike>(() =>
+      okJson({ authorizationUrl: 'https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=a' }),
+    );
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['oauth-start', 'tenant-1', 'https://totem.example.com/oauth/callback/feishu'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/oauth/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ redirectUri: 'https://totem.example.com/oauth/callback/feishu' }),
+      }),
+    );
+    expect(stdout[0]).toContain('https://open.feishu.cn/');
+    expect(stdout[1]).toContain('Open the URL above');
+  });
+
+  it('oauth-start without a redirect-uri is a usage error', async () => {
+    const { io, stderr } = makeHarness(vi.fn<FetchLike>());
+    const code = await run(['oauth-start', 'tenant-1'], io);
+    expect(code).toBe(2);
+    expect(stderr[0]).toContain('redirect-uri');
+  });
+
+  it('list-connections prints id, name, connector and auth state', async () => {
+    const fetchMock = vi.fn<FetchLike>(() =>
+      okJson({
+        connections: [
+          {
+            id: 'conn-1',
+            tenantId: 'tenant-1',
+            connectorId: 'feishu_docs',
+            name: 'feishu',
+            status: 'active',
+            ownerId: 'tenant-1',
+            oauthRedirectUri: 'https://totem.example.com/oauth/callback/feishu',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            id: 'conn-2',
+            tenantId: 'tenant-1',
+            connectorId: 'feishu_docs',
+            name: 'feishu',
+            status: 'auth_expired',
+            ownerId: 'tenant-1',
+            oauthRedirectUri: null,
+            createdAt: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(['list-connections', 'tenant-1'], io);
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/connections',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(stdout).toEqual([
+      'conn-1\tfeishu\tfeishu_docs\tactive',
+      'conn-2\tfeishu\tfeishu_docs\tauth_expired',
+    ]);
+  });
+});
+
+describe('totemctl oauth-start env fallback + re-auth flag (T6 review follow-up)', () => {
+  const saved = process.env.TOTEM_OAUTH_REDIRECT_URI;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.TOTEM_OAUTH_REDIRECT_URI;
+    else process.env.TOTEM_OAUTH_REDIRECT_URI = saved;
+  });
+
+  it('falls back to TOTEM_OAUTH_REDIRECT_URI when the positional is missing', async () => {
+    process.env.TOTEM_OAUTH_REDIRECT_URI = 'https://totem.example.com/oauth/callback/feishu';
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ authorizationUrl: 'https://open.feishu.cn/a' }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(['oauth-start', 'tenant-1'], io);
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/oauth/start',
+      expect.objectContaining({
+        body: JSON.stringify({ redirectUri: 'https://totem.example.com/oauth/callback/feishu' }),
+      }),
+    );
+    expect(stdout[0]).toContain('https://open.feishu.cn/');
+  });
+
+  it('passes --connection for in-place re-authorization', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ authorizationUrl: 'https://open.feishu.cn/a' }));
+    const { io } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['oauth-start', 'tenant-1', 'https://totem.example.com/oauth/callback/feishu', '--connection', 'conn-9'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/oauth/start',
+      expect.objectContaining({
+        body: JSON.stringify({
+          redirectUri: 'https://totem.example.com/oauth/callback/feishu',
+          connectionId: 'conn-9',
+        }),
+      }),
+    );
   });
 });

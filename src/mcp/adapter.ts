@@ -36,10 +36,13 @@ export class McpAdapter {
 
   /**
    * Resolves a connection for the authenticated tenant. Undefined when the
-   * connection does not exist or belongs to another tenant (the store is
+   * connection does not exist or belongs to another tenant (the lookup is
    * tenant-isolated by key).
    */
-  resolveConnection(tenantId: string, connectionId: string): ConnectionRecord | undefined {
+  async resolveConnection(
+    tenantId: string,
+    connectionId: string,
+  ): Promise<ConnectionRecord | undefined> {
     return this.executor.getConnection(tenantId, connectionId);
   }
 
@@ -49,7 +52,7 @@ export class McpAdapter {
    * unknown connections.
    */
   async listTools(tenantId: string, connectionId: string): Promise<McpToolDefinition[]> {
-    const connection = this.executor.getConnection(tenantId, connectionId);
+    const connection = await this.executor.getConnection(tenantId, connectionId);
     if (!connection) return [];
     const connector = this.executor.getConnector(connection.connectorId);
     if (!connector) return [];

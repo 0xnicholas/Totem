@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { FlowError, type OAuthFlow } from '../feishu/flow.js';
 import { generateApiKey, hashApiKey, keyPrefixForEnv } from './keys.js';
 import { NotFoundError, type AdminRepository, type AuditFilters, type AuditSource } from './repo.js';
 import { isRecord } from './util.js';
@@ -11,6 +13,17 @@ export interface AdminAppConfig {
   adminKey: string;
   /** Key prefix: tt_live_ in production, tt_dev_ otherwise. */
   production?: boolean;
+  /**
+   * The Feishu OAuth flow (T6). When absent the oauth routes are not
+   * registered.
+   */
+  oauth?: OAuthFlow;
+  /**
+   * Encrypts tenant secrets before storage (issue #15). When absent,
+   * secrets are stored as given (test/dev convenience only; the server
+   * entry always wires the real cipher).
+   */
+  secretCipher?: { encrypt(tenantId: string, plaintext: string): string };
 }
 
 /**
@@ -90,9 +103,14 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     ) {
       return badRequest(c, 'body must include non-empty "appId" and "appSecret"');
     }
+    // Encrypt at rest with the per-tenant key when the cipher is wired
+    // (issue #15); the plaintext never reaches the repository.
+    const storedSecret = config.secretCipher
+      ? config.secretCipher.encrypt(c.req.param('tenantId'), body.appSecret)
+      : body.appSecret;
     await repo.setFeishuCreds(c.req.param('tenantId'), {
       appId: body.appId,
-      appSecret: body.appSecret,
+      appSecret: storedSecret,
     });
     return c.json({ ok: true });
   });
@@ -140,6 +158,60 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json({ rows });
   });
 
+  app.post('/admin/tenants/:tenantId/oauth/start', async (c) => {
+    if (!config.oauth) return notFound(c, 'route not found');
+    const body = await readJson(c);
+    const redirectUri =
+      isRecord(body) && typeof body.redirectUri === 'string' && body.redirectUri !== ''
+        ? body.redirectUri
+        : process.env.TOTEM_OAUTH_REDIRECT_URI;
+    if (!redirectUri) {
+      return badRequest(c, 'body must include "redirectUri" (or set TOTEM_OAUTH_REDIRECT_URI)');
+    }
+    const connectionId =
+      isRecord(body) && typeof body.connectionId === 'string' && body.connectionId !== ''
+        ? body.connectionId
+        : undefined;
+    try {
+      const { authorizationUrl } = await config.oauth.start(
+        c.req.param('tenantId'),
+        redirectUri,
+        connectionId !== undefined ? { connectionId } : undefined,
+      );
+      return c.json({ authorizationUrl });
+    } catch (err) {
+      if (err instanceof FlowError) return c.json({ error: err.message }, flowStatus(err));
+      throw err;
+    }
+  });
+
+  app.get('/admin/tenants/:tenantId/connections', async (c) => {
+    const connections = await repo.listConnections(c.req.param('tenantId'));
+    return c.json({ connections });
+  });
+
+  // Public callback: Feishu redirects the user's browser here after
+  // authorization. State validation is the flow's job; no admin key is
+  // involved (the browser cannot carry one).
+  app.get('/oauth/callback/feishu', async (c) => {
+    if (!config.oauth) return notFound(c, 'route not found');
+    const code = c.req.query('code') ?? '';
+    const state = c.req.query('state') ?? '';
+    if (code === '' || state === '') {
+      return badRequest(c, 'missing "code" or "state" query parameters');
+    }
+    try {
+      await config.oauth.handleCallback(code, state);
+    } catch (err) {
+      if (err instanceof FlowError) return c.json({ error: err.message }, flowStatus(err));
+      throw err;
+    }
+    return c.html(
+      '<html><body><h2>Authorization complete</h2>' +
+        '<p>You can close this window and return to the terminal.</p></body></html>',
+    );
+  });
+
   app.notFound((c) => notFound(c, 'route not found'));
 
   app.onError((err, c) => {
@@ -169,4 +241,8 @@ function badRequest(c: Context, message: string): Response {
 
 function notFound(c: Context, message: string): Response {
   return c.json({ error: message }, 404);
+}
+
+function flowStatus(err: FlowError): ContentfulStatusCode {
+  return err.status >= 500 ? 500 : 400;
 }

@@ -1,5 +1,5 @@
 import type { AdminApiClient, ApiError } from '../admin/client.js';
-import type { AuditFilters } from '../admin/repo.js';
+import type { AuditFilters, ConnectionView } from '../admin/repo.js';
 
 export interface CommandIO {
   client: AdminApiClient;
@@ -24,16 +24,23 @@ commands:
   create-key <tenant-id> [--scope actions|admin]        (prints the key once)
   disable-key <tenant-id> <key-id>                      (alias: revoke-key)
   set-feishu-creds <tenant-id> <app-id> <app-secret>
+  oauth-start <tenant-id> [redirect-uri] [--connection <id>]
+                                      (prints the Feishu authorization URL;
+                                       --connection re-authorizes an existing
+                                       connection instead of creating one)
   set-allowlist <connection-id> <action> [action...]
   suspend-connection <connection-id>
   resume-connection <connection-id>
+  list-connections <tenant-id>                          (id, name, connector, auth state)
   query-audit <tenant-id> [--user <id>] [--action <name>] [--since <iso-timestamp>]
               [--source mcp|admin_api|cli] [--success true|false]
   help
 
 environment:
-  TOTEM_ADMIN_URL   admin API base URL (default http://localhost:3000)
-  TOTEM_ADMIN_KEY   admin key (required; see create-key --scope admin)`;
+  TOTEM_ADMIN_URL          admin API base URL (default http://localhost:3000)
+  TOTEM_ADMIN_KEY          admin key (required; see create-key --scope admin)
+  TOTEM_OAUTH_REDIRECT_URI default redirect URI for oauth-start (optional;
+                           the server's canonical callback URL)`;
 
 /** Runs one totemctl command; returns the process exit code. */
 export async function run(argv: string[], io: CommandIO): Promise<number> {
@@ -85,6 +92,38 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         }
         await io.client.setFeishuCreds(tenantId, appId, appSecret);
         io.stdout(`Feishu credentials updated for tenant ${tenantId}`);
+        return 0;
+      }
+
+      case 'oauth-start': {
+        const { positionals, flags } = parseFlags(rest);
+        const [tenantId] = positionals;
+        if (!tenantId) throw new UsageError('oauth-start <tenant-id> [redirect-uri]');
+        const redirectUri =
+          positionals[1] ?? process.env.TOTEM_OAUTH_REDIRECT_URI;
+        if (!redirectUri) {
+          throw new UsageError(
+            'oauth-start needs a redirect-uri argument (or set TOTEM_OAUTH_REDIRECT_URI)',
+          );
+        }
+        const connectionId = flags.connection;
+        const { authorizationUrl } = await io.client.startOAuth(
+          tenantId,
+          redirectUri,
+          connectionId,
+        );
+        io.stdout(authorizationUrl);
+        io.stdout('Open the URL above in a browser and authorize with Feishu.');
+        return 0;
+      }
+
+      case 'list-connections': {
+        const [tenantId] = rest;
+        if (!tenantId) throw new UsageError('list-connections <tenant-id>');
+        const { connections } = await io.client.listConnections(tenantId);
+        for (const connection of connections) {
+          io.stdout(formatConnection(connection));
+        }
         return 0;
       }
 
@@ -199,4 +238,8 @@ function flagsToAuditFilters(flags: Record<string, string>): AuditFilters {
 
 function isApiError(err: unknown): err is ApiError {
   return err instanceof Error && err.name === 'ApiError';
+}
+
+function formatConnection(connection: ConnectionView): string {
+  return [connection.id, connection.name, connection.connectorId, connection.status].join('\t');
 }

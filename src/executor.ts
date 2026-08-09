@@ -3,6 +3,7 @@ import { auditParamHash } from './audit.js';
 import type { IConnector } from './connector.js';
 import type { ActionErrorCode } from './errors.js';
 import { ActionError, errorMessage, isActionError } from './errors.js';
+import type { TokenProvider } from './feishu/token-manager.js';
 import type { AllowlistStore, AuditSink } from './governance.js';
 import { ActionRegistry } from './registry.js';
 
@@ -14,10 +15,19 @@ export interface ConnectionRecord {
 }
 
 /**
- * In-memory connection store for v1. Backed by Postgres in a later ticket;
- * the executor only depends on `get`, so the storage swap is invisible to it.
+ * The executor's connection resolution seam: tenant-isolated lookup. The
+ * in-memory `ConnectionStore` backs tests and the Postgres-backed store
+ * backs the composed server, where the OAuth flow creates connections at
+ * runtime (T6) — a static snapshot would never see them.
  */
-export class ConnectionStore {
+export interface ConnectionLookup {
+  get(tenantId: string, connectionId: string): Promise<ConnectionRecord | undefined>;
+  list(): Promise<ConnectionRecord[]>;
+}
+
+/** In-memory `ConnectionLookup` for tests and local wiring. */
+/* eslint-disable @typescript-eslint/require-await -- in-memory store: implements an async interface synchronously */
+export class ConnectionStore implements ConnectionLookup {
   private readonly connections = new Map<string, ConnectionRecord>();
 
   constructor(connections: ConnectionRecord[]) {
@@ -32,11 +42,11 @@ export class ConnectionStore {
     }
   }
 
-  get(tenantId: string, connectionId: string): ConnectionRecord | undefined {
+  async get(tenantId: string, connectionId: string): Promise<ConnectionRecord | undefined> {
     return this.connections.get(connectionKey(tenantId, connectionId));
   }
 
-  list(): ConnectionRecord[] {
+  async list(): Promise<ConnectionRecord[]> {
     return [...this.connections.values()];
   }
 }
@@ -65,25 +75,23 @@ export type ActionResult = { ok: true; output: unknown } | { ok: false; error: A
  */
 export class ActionExecutor {
   private readonly registry: ActionRegistry;
-  private readonly connections: ConnectionStore;
+  private readonly connections: ConnectionLookup;
   private readonly allowlists: AllowlistStore;
   private readonly audit: AuditSink;
+  private readonly tokenProvider?: TokenProvider;
 
   constructor(
     registry: ActionRegistry,
-    connections: ConnectionStore,
+    connections: ConnectionLookup,
     allowlists: AllowlistStore,
     audit: AuditSink,
+    tokenProvider?: TokenProvider,
   ) {
     this.registry = registry;
     this.connections = connections;
     this.allowlists = allowlists;
     this.audit = audit;
-    for (const record of connections.list()) {
-      if (!registry.getConnector(record.connectorId)) {
-        throw new Error(`Connector "${record.connectorId}" is not registered`);
-      }
-    }
+    this.tokenProvider = tokenProvider;
   }
 
   async executeAction(
@@ -93,7 +101,7 @@ export class ActionExecutor {
     args: unknown,
   ): Promise<ActionResult> {
     const startedAt = Date.now();
-    const connection = this.connections.get(tenantId, connectionId);
+    const connection = await this.connections.get(tenantId, connectionId);
     if (!connection) {
       // Unattributable attempt (no tenant row): audit_logs.tenant_id is a
       // NOT NULL foreign key, so no audit row can represent it.
@@ -171,8 +179,30 @@ export class ActionExecutor {
       };
     }
 
-    // `token` will be populated by the TokenManager (ADR-0004) in a later ticket.
-    const ctx: ActionContext = { tenantId, connectionId };
+    // Token acquisition (ADR-0004): an already-valid access token is
+    // fetched by the orchestration layer and placed in the context, so
+    // connectors never see OAuth, refresh, or expiry. Acquisition failures
+    // are vocabulary errors (auth_expired, rate_limited, ...) audited here
+    // before any handler runs.
+    let token: string | undefined;
+    if (this.tokenProvider) {
+      try {
+        token = await this.tokenProvider.getValidAccessToken(connection.connectionId);
+      } catch (err) {
+        if (isActionError(err)) {
+          await this.recordAudit(connection, actionName, args, err.code, startedAt);
+          return { ok: false, error: err };
+        }
+        const cause = errorMessage(err);
+        await this.recordAudit(connection, actionName, args, 'upstream_error', startedAt);
+        return {
+          ok: false,
+          error: new ActionError('upstream_error', `Token acquisition failed: ${cause}`),
+        };
+      }
+    }
+
+    const ctx: ActionContext = { tenantId, connectionId, ...(token !== undefined ? { token } : {}) };
     let output: unknown;
     try {
       output = await connector.execute(actionName, args, ctx);
@@ -249,7 +279,7 @@ export class ActionExecutor {
    * adapters that must resolve the caller's connection before listing
    * tools (ADR-0002).
    */
-  getConnection(tenantId: string, connectionId: string): ConnectionRecord | undefined {
+  async getConnection(tenantId: string, connectionId: string): Promise<ConnectionRecord | undefined> {
     return this.connections.get(tenantId, connectionId);
   }
 
@@ -272,15 +302,27 @@ export function createActionExecutor(config: {
   connections: ConnectionRecord[];
   allowlists: AllowlistStore;
   audit: AuditSink;
+  tokenProvider?: TokenProvider;
+  /** Live connection lookup (Postgres); defaults to an in-memory store over `connections`. */
+  connectionLookup?: ConnectionLookup;
 }): ActionExecutor {
   const registry = new ActionRegistry();
   for (const action of config.actions) registry.registerAction(action);
   for (const connector of config.connectors) registry.registerConnector(connector);
+  // Wiring guard: every seeded connection must reference a registered
+  // connector (fail fast on configuration errors). Postgres-backed
+  // lookups bypass this and degrade gracefully at execution time.
+  for (const record of config.connections) {
+    if (!registry.getConnector(record.connectorId)) {
+      throw new Error(`Connector "${record.connectorId}" is not registered`);
+    }
+  }
   return new ActionExecutor(
     registry,
-    new ConnectionStore(config.connections),
+    config.connectionLookup ?? new ConnectionStore(config.connections),
     config.allowlists,
     config.audit,
+    config.tokenProvider,
   );
 }
 

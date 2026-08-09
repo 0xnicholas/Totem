@@ -8,6 +8,8 @@ import {
   type AuditFilters,
   type AuditRow,
   type AuditSource,
+  type ConnectionStatus,
+  type ConnectionView,
   type FeishuCreds,
   type Tenant,
 } from './repo.js';
@@ -35,6 +37,17 @@ interface ApiKeyRow {
   scope: ApiKeyScope;
   disabled_at: Date | null;
   last_used_at: Date | null;
+  created_at: Date;
+}
+
+interface ConnectionRow {
+  id: string;
+  tenant_id: string;
+  connector_id: string;
+  name: string;
+  status: ConnectionStatus;
+  owner_id: string;
+  oauth_redirect_uri: string | null;
   created_at: Date;
 }
 
@@ -169,6 +182,46 @@ export class PostgresAdminRepository implements AdminRepository {
     });
   }
 
+  async createConnection(
+    tenantId: string,
+    input: { connectorId: string; name: string; oauthRedirectUri?: string | null },
+  ): Promise<ConnectionView> {
+    return this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      const row = (
+        await client.query<ConnectionRow>(
+          `INSERT INTO connections (tenant_id, connector_id, name, owner_id, oauth_redirect_uri)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, tenant_id, connector_id, name, status, owner_id, oauth_redirect_uri, created_at`,
+          [tenantId, input.connectorId, input.name, tenantId, input.oauthRedirectUri ?? null],
+        )
+      ).rows[0]!;
+      await this.writeAudit(client, {
+        tenantId,
+        connectionId: row.id,
+        actionName: ADMIN_AUDIT_ACTIONS.connectionCreated,
+        params: { connectionId: row.id, connectorId: row.connector_id, name: row.name },
+        durationMs: 0,
+      });
+      return mapConnection(row);
+    });
+  }
+
+  async listConnections(tenantId: string): Promise<ConnectionView[]> {
+    const tenant = await this.pool.query<{ one: number }>('SELECT 1 FROM tenants WHERE id = $1', [
+      tenantId,
+    ]);
+    if (tenant.rowCount === 0) throw new NotFoundError(`Tenant "${tenantId}" not found`);
+    const rows = (
+      await this.pool.query<ConnectionRow>(
+        `SELECT id, tenant_id, connector_id, name, status, owner_id, oauth_redirect_uri, created_at
+         FROM connections WHERE tenant_id = $1 ORDER BY created_at`,
+        [tenantId],
+      )
+    ).rows;
+    return rows.map(mapConnection);
+  }
+
   async setAllowlist(connectionId: string, actions: string[]): Promise<void> {
     await this.mutate(async (client) => {
       const connection = await this.requireConnection(client, connectionId);
@@ -206,6 +259,10 @@ export class PostgresAdminRepository implements AdminRepository {
         durationMs: 0,
       });
     });
+  }
+
+  async activateConnection(connectionId: string): Promise<void> {
+    await this.suspendConnection(connectionId, false);
   }
 
   async queryAudit(tenantId: string, filters: AuditFilters): Promise<AuditRow[]> {
@@ -295,6 +352,19 @@ export class PostgresAdminRepository implements AdminRepository {
 
 function mapTenant(row: { id: string; name: string; created_at: Date }): Tenant {
   return { id: row.id, name: row.name, createdAt: row.created_at.toISOString() };
+}
+
+function mapConnection(row: ConnectionRow): ConnectionView {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    connectorId: row.connector_id,
+    name: row.name,
+    status: row.status,
+    ownerId: row.owner_id,
+    oauthRedirectUri: row.oauth_redirect_uri,
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 function mapApiKey(row: {

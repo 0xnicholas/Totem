@@ -73,12 +73,17 @@ describe.runIf(hasDb)('migrations', () => {
     expect(await appliedVersions()).toBe((await listMigrations()).length);
   });
 
-  it('rolls back the latest migration (002) and keeps the rest', async () => {
-    await migrateDown(dbUrl!);
+  it('rolls back the latest migrations (003 comment, then 002) and keeps the rest', async () => {
+    await migrateDown(dbUrl!); // 003: comment-only, no structural change
+    expect(await appliedVersions()).toBe((await listMigrations()).length - 1);
+    const stillThere = await publicTables();
+    expect(stillThere).toContain('feishu_credentials');
+
+    await migrateDown(dbUrl!); // 002: drops feishu_credentials
     const tables = await publicTables();
     expect(tables).not.toContain('feishu_credentials');
     expect(tables).toContain('tenants');
-    expect(await appliedVersions()).toBe((await listMigrations()).length - 1);
+    expect(await appliedVersions()).toBe((await listMigrations()).length - 2);
   });
 
   it('rolls back cleanly when nothing is applied, then re-applies', async () => {

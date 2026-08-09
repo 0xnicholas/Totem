@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { createAdminApp } from '../src/admin/server.js';
 import { hashApiKey } from '../src/admin/keys.js';
+import { FlowError } from '../src/feishu/flow.js';
 import { InMemoryAdminRepository } from '../src/testing/memory-admin-repo.js';
 
 const ADMIN_KEY = 'test-admin-key';
@@ -241,5 +242,125 @@ describe('admin API (HTTP boundary)', () => {
   it('404s unknown routes', async () => {
     const response = await adminFetch('/admin/nope');
     expect(response.status).toBe(404);
+  });
+});
+
+describe('admin API: OAuth flow and connections (T6)', () => {
+  let repo: InMemoryAdminRepository;
+  let server: ServerType;
+  let baseUrl: string;
+  let tenantId: string;
+  const flow = {
+    start: vi.fn((tenant: string, redirectUri: string) =>
+      Promise.resolve({
+        authorizationUrl: `https://open.feishu.cn/open-apis/authen/v1/authorize?app_id=a&redirect_uri=${encodeURIComponent(redirectUri)}&state=st-${tenant}`,
+      }),
+    ),
+    handleCallback: vi.fn(() => Promise.resolve(undefined)),
+  };
+  const secretCipher = {
+    encrypt: (tenant: string, plaintext: string) => `v1:${tenant}:${plaintext}`,
+  };
+
+  beforeAll(async () => {
+    repo = new InMemoryAdminRepository();
+    tenantId = (await repo.createTenant('oauth-tenant')).id;
+    const app = createAdminApp({ repo, adminKey: ADMIN_KEY, oauth: flow, secretCipher });
+    server = serve({ fetch: app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  function adminFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    return fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN_KEY}`, ...init.headers },
+    });
+  }
+
+  it('requires the admin key to start the OAuth flow', async () => {
+    const response = await fetch(`${baseUrl}/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirectUri: 'https://totem.example.com/oauth/callback/feishu' }),
+    });
+    expect(response.status).toBe(401);
+    expect(flow.start).not.toHaveBeenCalled();
+  });
+
+  it('starts the flow and returns the authorization URL', async () => {
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({ redirectUri: 'https://totem.example.com/oauth/callback/feishu' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authorizationUrl: string };
+    expect(body.authorizationUrl).toContain('state=st-');
+    expect(flow.start).toHaveBeenCalledWith(
+      tenantId,
+      'https://totem.example.com/oauth/callback/feishu',
+      undefined,
+    );
+  });
+
+  it('rejects starting the flow without a redirect URI', async () => {
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('surfaces FlowError statuses from the flow', async () => {
+    flow.start.mockRejectedValueOnce(new FlowError(400, 'no credentials configured'));
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({ redirectUri: 'https://totem.example.com/oauth/callback/feishu' }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'no credentials configured' });
+  });
+
+  it('handles the public callback without an admin key', async () => {
+    const response = await fetch(
+      `${baseUrl}/oauth/callback/feishu?code=abc&state=st-x`,
+    );
+    expect(response.status).toBe(200);
+    expect(flow.handleCallback).toHaveBeenCalledWith('abc', 'st-x');
+  });
+
+  it('maps callback FlowErrors to their status', async () => {
+    flow.handleCallback.mockRejectedValueOnce(new FlowError(400, 'unknown state'));
+    const response = await fetch(`${baseUrl}/oauth/callback/feishu?code=abc&state=bogus`);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'unknown state' });
+  });
+
+  it('lists connections with their auth state per tenant', async () => {
+    repo.addConnection(tenantId, 'conn-active');
+    repo.addConnection(tenantId, 'conn-expired', 'auth_expired');
+    const response = await adminFetch(`/admin/tenants/${tenantId}/connections`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { connections: Array<{ id: string; status: string }> };
+    expect(body.connections.map((c) => [c.id, c.status])).toEqual([
+      ['conn-active', 'active'],
+      ['conn-expired', 'auth_expired'],
+    ]);
+
+    const missing = await adminFetch('/admin/tenants/00000000-0000-0000-0000-000000000000/connections');
+    expect(missing.status).toBe(404);
+  });
+
+  it('encrypts feishu app secrets via the injected cipher (issue #15)', async () => {
+    await adminFetch(`/admin/tenants/${tenantId}/feishu-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appId: 'app-1', appSecret: 'super-secret' }),
+    });
+    const stored = repo.getFeishuCreds(tenantId);
+    expect(stored?.appSecret).toBe(`v1:${tenantId}:super-secret`);
   });
 });

@@ -1,6 +1,7 @@
 import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector } from '../src/index.js';
 import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditSink } from '../src/governance.js';
+import type { TokenProvider } from '../src/feishu/token-manager.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 
@@ -29,6 +30,7 @@ export function makeHarness(config: {
   connections?: ConnectionRecord[];
   allowlists?: AllowlistStore;
   audit?: AuditSink;
+  tokenProvider?: TokenProvider;
 } = {}): {
   executor: ActionExecutor;
   allowlists: InMemoryAllowlistStore;
@@ -55,6 +57,7 @@ export function makeHarness(config: {
     connections,
     allowlists,
     audit,
+    ...(config.tokenProvider !== undefined ? { tokenProvider: config.tokenProvider } : {}),
   });
   return { executor, allowlists: allowlists as InMemoryAllowlistStore, audit: audit as InMemoryAuditSink };
 }

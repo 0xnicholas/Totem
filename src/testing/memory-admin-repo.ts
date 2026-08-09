@@ -7,6 +7,7 @@ import {
   type ApiKeyScope,
   type AuditFilters,
   type AuditRow,
+  type ConnectionView,
   type FeishuCreds,
   type Tenant,
 } from '../admin/repo.js';
@@ -15,7 +16,12 @@ import { auditParamHash } from '../audit.js';
 interface MemoryConnection {
   id: string;
   tenantId: string;
+  connectorId: string;
+  name: string;
   status: 'active' | 'suspended' | 'auth_expired';
+  ownerId: string;
+  oauthRedirectUri: string | null;
+  createdAt: string;
 }
 
 /**
@@ -34,12 +40,32 @@ export class InMemoryAdminRepository implements AdminRepository {
   private readonly audit: AuditRow[] = [];
 
   /** Seeds a connection (connections are created by the OAuth flow, T6). */
-  addConnection(tenantId: string, connectionId: string, status: MemoryConnection['status'] = 'active'): void {
-    this.connections.set(connectionId, { id: connectionId, tenantId, status });
+  addConnection(
+    tenantId: string,
+    connectionId: string,
+    status: MemoryConnection['status'] = 'active',
+  ): void {
+    this.connections.set(connectionId, {
+      id: connectionId,
+      tenantId,
+      connectorId: 'fake',
+      name: connectionId,
+      status,
+      ownerId: tenantId,
+      oauthRedirectUri: null,
+      createdAt: new Date().toISOString(),
+    });
   }
 
   listAllowlist(connectionId: string): string[] {
     return [...(this.allowlists.get(connectionId) ?? [])];
+  }
+
+  /** Synchronous view for test assertions. */
+  listConnectionsSync(tenantId: string): ConnectionView[] {
+    return [...this.connections.values()]
+      .filter((connection) => connection.tenantId === tenantId)
+      .map((connection) => ({ ...connection }));
   }
 
   getConnectionStatus(connectionId: string): string | undefined {
@@ -113,6 +139,40 @@ export class InMemoryAdminRepository implements AdminRepository {
     return true;
   }
 
+  async createConnection(
+    tenantId: string,
+    input: { connectorId: string; name: string; oauthRedirectUri?: string | null },
+  ): Promise<ConnectionView> {
+    this.requireTenant(tenantId);
+    const connection: MemoryConnection = {
+      id: crypto.randomUUID(),
+      tenantId,
+      connectorId: input.connectorId,
+      name: input.name,
+      status: 'active',
+      ownerId: tenantId,
+      oauthRedirectUri: input.oauthRedirectUri ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.connections.set(connection.id, connection);
+    this.writeAudit({
+      tenantId,
+      connectionId: connection.id,
+      actionName: ADMIN_AUDIT_ACTIONS.connectionCreated,
+      params: {
+        connectionId: connection.id,
+        connectorId: connection.connectorId,
+        name: connection.name,
+      },
+    });
+    return { ...connection };
+  }
+
+  async listConnections(tenantId: string): Promise<ConnectionView[]> {
+    this.requireTenant(tenantId);
+    return this.listConnectionsSync(tenantId);
+  }
+
   async setFeishuCreds(tenantId: string, creds: FeishuCreds): Promise<void> {
     this.requireTenant(tenantId);
     this.creds.set(tenantId, creds);
@@ -150,6 +210,10 @@ export class InMemoryAdminRepository implements AdminRepository {
         : ADMIN_AUDIT_ACTIONS.connectionResumed,
       params: { connectionId },
     });
+  }
+
+  async activateConnection(connectionId: string): Promise<void> {
+    await this.suspendConnection(connectionId, false);
   }
 
   async queryAudit(tenantId: string, filters: AuditFilters): Promise<AuditRow[]> {

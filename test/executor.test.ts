@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ActionError, type TokenProvider } from '../src/index.js';
 import type { CreateDocOutput } from '../src/index.js';
 import {
   CONN_1,
@@ -8,6 +9,7 @@ import {
   TENANT_B,
   makeConnector,
   makeExecutor,
+  makeHarness,
   makeMisbehavingExecutor,
 } from './fixtures.js';
 
@@ -214,16 +216,93 @@ describe('executeAction (Seam A)', () => {
 });
 
 describe('read-only lookups for transport adapters (T5)', () => {
-  it('getConnection enforces tenant isolation', () => {
+  it('getConnection enforces tenant isolation', async () => {
     const executor = makeExecutor();
-    expect(executor.getConnection(TENANT_A, CONN_1)).toMatchObject({ tenantId: TENANT_A });
-    expect(executor.getConnection(TENANT_B, CONN_1)).toBeUndefined();
-    expect(executor.getConnection(TENANT_A, 'conn-nope')).toBeUndefined();
+    await expect(executor.getConnection(TENANT_A, CONN_1)).resolves.toMatchObject({
+      tenantId: TENANT_A,
+    });
+    await expect(executor.getConnection(TENANT_B, CONN_1)).resolves.toBeUndefined();
+    await expect(executor.getConnection(TENANT_A, 'conn-nope')).resolves.toBeUndefined();
   });
 
   it('getConnector returns the connection\'s registered connector', () => {
     const executor = makeExecutor();
     expect(executor.getConnector(FAKE_CONNECTOR_ID)?.manifest.id).toBe(FAKE_CONNECTOR_ID);
     expect(executor.getConnector('no-such-connector')).toBeUndefined();
+  });
+});
+
+describe('token acquisition at the execution boundary (T6, ADR-0004)', () => {
+  let handlerRan: boolean;
+  let capturedToken: string | undefined;
+
+  // Connector that captures the context token it received.
+  const captureConnector = makeConnector('capture', ['create_doc'], {
+    create_doc: (_args, ctx) => {
+      handlerRan = true;
+      capturedToken = ctx.token;
+      return { doc_id: 'doc-1', title: 'captured', url: 'https://fake.totem.local/docs/doc-1' };
+    },
+  });
+
+  function captureHarness(provider: TokenProvider | undefined) {
+    handlerRan = false;
+    capturedToken = undefined;
+    return makeHarness({
+      connectors: [captureConnector],
+      connections: [{ ...CONN_1_A, connectorId: 'capture' }],
+      tokenProvider: provider,
+    });
+  }
+
+  it('places the provider token in ActionContext before dispatch', async () => {
+    const provider: TokenProvider = {
+      getValidAccessToken: () => Promise.resolve('tok-123'),
+    };
+    const { executor, audit } = captureHarness(provider);
+
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' });
+    expect(result).toMatchObject({ ok: true });
+    expect(capturedToken).toBe('tok-123');
+    expect(audit.list()[0]).toMatchObject({ success: true, errorCode: null });
+  });
+
+  it('maps provider auth_expired to a vocabulary error, audited, handler never runs', async () => {
+    const provider: TokenProvider = {
+      getValidAccessToken: () =>
+        Promise.reject(new ActionError('auth_expired', 'refresh token rejected')),
+    };
+    const { executor, audit } = captureHarness(provider);
+
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' });
+    expect(result).toMatchObject({ ok: false, error: { code: 'auth_expired', retryable: false } });
+    expect(handlerRan).toBe(false);
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'create_doc',
+      success: false,
+      errorCode: 'auth_expired',
+      source: 'mcp',
+    });
+  });
+
+  it('wraps a non-vocabulary provider failure as upstream_error', async () => {
+    const provider: TokenProvider = {
+      getValidAccessToken: () => Promise.reject(new Error('token store exploded')),
+    };
+    const { executor, audit } = captureHarness(provider);
+
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' });
+    expect(result).toMatchObject({ ok: false, error: { code: 'upstream_error' } });
+    expect(handlerRan).toBe(false);
+    expect(audit.list()[0]).toMatchObject({ success: false, errorCode: 'upstream_error' });
+  });
+
+  it('without a provider the context carries no token (T1 behavior preserved)', async () => {
+    const { executor } = captureHarness(undefined);
+
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' });
+    expect(result).toMatchObject({ ok: true });
+    expect(handlerRan).toBe(true);
+    expect(capturedToken).toBeUndefined();
   });
 });

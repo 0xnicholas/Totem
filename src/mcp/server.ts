@@ -59,7 +59,7 @@ export function createMcpApp(config: McpAppConfig): Hono {
     if (!connectionId) {
       return c.json({ error: 'missing x-connection-id (header or query param)' }, 400);
     }
-    const connection = adapter.resolveConnection(resolved.tenantId, connectionId);
+    const connection = await adapter.resolveConnection(resolved.tenantId, connectionId);
     if (!connection) {
       return c.json({ error: `unknown connection "${connectionId}" for this tenant` }, 400);
     }
