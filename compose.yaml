@@ -1,7 +1,7 @@
 # Totem — Docker Compose (v1)
 #
-# `docker compose up` starts Postgres and applies migrations on the API
-# container's startup. Copy .env.example to .env to override defaults.
+# `docker compose up` starts Postgres, applies migrations, and serves the
+# admin API on http://localhost:3000. Copy .env.example to .env to override.
 
 services:
   db:
@@ -30,9 +30,17 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-totem}:${POSTGRES_PASSWORD:-totem}@db:5432/${POSTGRES_DB:-totem}
-    # T2: the API server lands in T3 (admin API) / T5 (MCP); until then the
-    # container's job on startup is applying migrations.
-    command: ["npm", "run", "migrate:up"]
+      # Dev default only — set a real admin key in .env (T3).
+      TOTEM_ADMIN_KEY: ${TOTEM_ADMIN_KEY:-tt_dev_admin_change_me}
+      PORT: 3000
+    ports:
+      - "${ADMIN_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/healthz >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   totem_db_data:

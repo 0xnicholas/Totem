@@ -37,11 +37,41 @@ npm run migrate:down   # roll back the most recently applied migration
 Migrations live in `migrations/<version>_<name>.up.sql` / `.down.sql` and
 are applied by `scripts/migrate.mjs`, which tracks applied versions in a
 `schema_migrations` table (re-runnable by design; each migration runs in its
-own transaction). `docker compose up` starts Postgres and applies
-migrations on the API container's startup.
+own transaction). `docker compose up` starts Postgres, applies migrations
+on the API container's startup, and serves the admin API on
+`http://localhost:3000`.
+
+## Admin surface (totemctl + admin API)
+
+The admin API (T3) is the operator surface: tenants, tenant API keys,
+Feishu app credentials, per-connection allowlists, connection
+suspend/resume, and the audit trail. Every /admin route requires the
+platform admin key (`TOTEM_ADMIN_KEY`, separate from tenant keys); every
+mutation writes an audit row (`source: admin_api`).
+
+```sh
+npm run dev          # admin API server (requires DATABASE_URL + TOTEM_ADMIN_KEY)
+
+export TOTEM_ADMIN_URL=http://localhost:3000
+# TOTEM_ADMIN_KEY is required by every totemctl command
+npm run totemctl -- create-tenant acme
+npm run totemctl -- create-key <tenant-id> --scope admin   # prints the key once
+npm run totemctl -- set-feishu-creds <tenant-id> <app-id> <app-secret>
+npm run totemctl -- set-allowlist <connection-id> create_doc read_doc
+npm run totemctl -- suspend-connection <connection-id>
+npm run totemctl -- query-audit <tenant-id> --action admin.tenant_created
+```
+
+Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
+`POST /admin/tenants/:id/keys/:keyId/disable`, `POST
+/admin/tenants/:id/feishu-creds`, `PUT /admin/connections/:id/allowlist`,
+`POST /admin/connections/:id/suspend|resume`, `GET
+/admin/tenants/:id/audit` (filters: `user`, `action`, `since`, `source`,
+`success`), `GET /healthz`.
 
 CI (GitHub Actions) runs lint, typecheck and the full test suite —
-migrations tests included — against a Postgres service container.
+migrations and admin integration tests included — against a Postgres
+service container.
 
 ## Layout
 
@@ -53,7 +83,10 @@ migrations tests included — against a Postgres service container.
   pure translator with a `manifest` + `execute`)
 - `src/registry.ts` — schema-first action registry (Ajv-compiled schemas)
 - `src/executor.ts` — `executeAction` (Seam A) and the composition root
+- `src/admin/` — admin API (hono), Postgres repository, HTTP client, keys
+- `src/cli/` — `totemctl` commands
+- `src/server/` — service entry point (env wiring)
 - `src/errors.ts` — the unified error vocabulary (ADR-0005: seven codes)
-- `src/testing/fake-connector.ts` — in-memory connector used as the test
-  double at Seam A
-- `test/` — behavior tests through Seam A only
+- `src/testing/` — Seam A and HTTP-boundary test doubles
+  (`FakeConnector`, `InMemoryAdminRepository`)
+- `test/` — behavior tests through Seam A / HTTP boundary only

@@ -11,3 +11,6 @@ export function migrateUp(connectionString: string, options?: MigrateOptions): P
 
 /** Rolls back the most recently applied migration; returns 1 when applied. */
 export function migrateDown(connectionString: string, options?: MigrateOptions): Promise<number>;
+
+/** Available migrations (version-ordered), for tests and tooling. */
+export function listMigrations(): Promise<Array<{ stem: string; version: number }>>;

@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "test:watch": "vitest",
     "migrate:up": "node scripts/migrate.mjs up",
-    "migrate:down": "node scripts/migrate.mjs down"
+    "migrate:down": "node scripts/migrate.mjs down",
+    "totemctl": "tsx src/cli/index.ts",
+    "dev": "tsx src/server/index.ts"
   },
   "repository": {
     "type": "git",
@@ -28,16 +30,22 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "hono": "^4.13.1",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0",
     "eslint": "^10.8.1",
+    "tsx": "^4.23.11",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
+  },
+  "bin": {
+    "totemctl": "dist/cli/index.js"
   }
 }

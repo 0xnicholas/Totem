@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
-import { migrateDown, migrateUp } from '../scripts/migrate.mjs';
+import { listMigrations, migrateDown, migrateUp } from '../scripts/migrate.mjs';
 
 /**
  * Migration integration tests: apply and roll back the real schema on the
@@ -36,11 +36,11 @@ describe.runIf(hasDb)('migrations', () => {
     return result.rows[0]?.n ?? 0;
   }
 
-  it('applies all pending migrations and creates the six tables with tenant_id and foreign keys', async () => {
+  it('applies all pending migrations and creates every migration table with tenant_id and foreign keys', async () => {
     await migrateUp(dbUrl!);
 
     const tables = await publicTables();
-    for (const table of ['tenants', 'connections', 'api_keys', 'allowlists', 'audit_logs', 'tokens', 'schema_migrations']) {
+    for (const table of ['tenants', 'connections', 'api_keys', 'allowlists', 'audit_logs', 'tokens', 'feishu_credentials', 'schema_migrations']) {
       expect(tables, `table ${table}`).toContain(table);
     }
 
@@ -70,21 +70,22 @@ describe.runIf(hasDb)('migrations', () => {
 
   it('is a no-op on a second apply', async () => {
     await migrateUp(dbUrl!);
-    expect(await appliedVersions()).toBe(1);
+    expect(await appliedVersions()).toBe((await listMigrations()).length);
   });
 
-  it('rolls back the latest migration', async () => {
+  it('rolls back the latest migration (002) and keeps the rest', async () => {
     await migrateDown(dbUrl!);
     const tables = await publicTables();
-    expect(tables).not.toContain('tenants');
-    expect(await appliedVersions()).toBe(0);
+    expect(tables).not.toContain('feishu_credentials');
+    expect(tables).toContain('tenants');
+    expect(await appliedVersions()).toBe((await listMigrations()).length - 1);
   });
 
   it('rolls back cleanly when nothing is applied, then re-applies', async () => {
     await migrateDown(dbUrl!);
     await migrateUp(dbUrl!);
     const tables = await publicTables();
-    expect(tables).toContain('tenants');
-    expect(await appliedVersions()).toBe(1);
+    expect(tables).toContain('feishu_credentials');
+    expect(await appliedVersions()).toBe((await listMigrations()).length);
   });
 });
