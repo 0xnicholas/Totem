@@ -81,10 +81,14 @@ describe('MockFeishuServer docs endpoints', () => {
     );
     const envelope = (await res.json()) as {
       code: number;
-      data: { files: Array<{ token: string; name: string; type: string }> };
+      data: {
+        docs_entities: Array<{ docs_token: string; docs_type: string; title: string }>;
+      };
     };
     expect(envelope.code).toBe(0);
-    expect(envelope.data.files.map((f) => [f.token, f.name, f.type])).toEqual([
+    expect(
+      envelope.data.docs_entities.map((f) => [f.docs_token, f.title, f.docs_type]),
+    ).toEqual([
       ['doc-aaa', 'Q3 Planning', 'docx'],
       ['doc-bbb', 'Q4 Retro', 'docx'],
     ]);
@@ -96,9 +100,12 @@ describe('MockFeishuServer docs endpoints', () => {
       headers: docsHeaders(),
       body: JSON.stringify({ search_key: 'zzz-no-match' }),
     });
-    const envelope = (await res.json()) as { code: number; data: { files: unknown[] } };
+    const envelope = (await res.json()) as {
+      code: number;
+      data: { docs_entities: unknown[] };
+    };
     expect(envelope.code).toBe(0);
-    expect(envelope.data.files).toEqual([]);
+    expect(envelope.data.docs_entities).toEqual([]);
   });
 
   it('returns raw content for a document and 10662 for an unknown one', async () => {
@@ -129,7 +136,7 @@ describe('MockFeishuServer docs endpoints', () => {
           doc_type: string;
           title: string;
           owner_id: string;
-          modified_time: string;
+          latest_modify_time: string;
         }>;
       };
     };
@@ -140,7 +147,7 @@ describe('MockFeishuServer docs endpoints', () => {
         doc_type: 'sheet',
         title: 'Budget Sheet',
         owner_id: 'user-1',
-        modified_time: '2026-01-15T10:00:00.000Z',
+        latest_modify_time: '2026-01-15T10:00:00.000Z',
       },
     ]);
   });

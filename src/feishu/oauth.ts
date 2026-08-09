@@ -51,6 +51,29 @@ const AUTHORIZE_PATH = '/open-apis/authen/v1/authorize';
 const TOKEN_PATH = '/open-apis/authen/v2/oauth/token';
 
 /**
+ * Scopes the authorize request declares. Feishu's scope parameter DEFINES
+ * what the user grants (live-verified in the T9 demo pass): requesting only
+ * `offline_access` yields a token without any business scope, so every
+ * docx/drive/sheets/bitable call fails with 99991679. The platform's token
+ * refresh design (ADR-0004) requires refresh tokens → `offline_access` is
+ * mandatory; the rest covers the v1 action set. Each scope must also be
+ * enabled on the app in the Feishu console, or the authorize page rejects.
+ */
+const DEFAULT_AUTHORIZE_SCOPES = [
+  'offline_access',
+  'docx:document:readonly',
+  'docx:document:create',
+  'docx:document',
+  'drive:drive:readonly',
+  'drive:drive',
+  'drive:export:readonly',
+  'sheets:spreadsheet:readonly',
+  'sheets:spreadsheet',
+  'bitable:app:readonly',
+  'bitable:app',
+].join(' ');
+
+/**
  * HTTP client for the Feishu OAuth endpoints. The base URL is injectable so
  * tests run against the Seam B mock server; production uses
  * `FEISHU_BASE_URL` (default `https://open.feishu.cn`). Errors are
@@ -60,16 +83,25 @@ const TOKEN_PATH = '/open-apis/authen/v2/oauth/token';
  * - HTTP 429 → rate limited (surfaced via `httpStatus`);
  * - anything else (network, non-envelope responses) → generic failure.
  */
+export interface FeishuOAuthClientOptions {
+  /** Authorize-time scope list (space-separated). Defaults to the v1 set. */
+  scopes?: string;
+  now?: () => number;
+}
+
 export function createFeishuOAuthClient(
   baseUrl: string,
-  now: () => number = Date.now,
+  options: FeishuOAuthClientOptions = {},
 ): FeishuOAuthClient {
+  const scopes = options.scopes ?? DEFAULT_AUTHORIZE_SCOPES;
+  const now = options.now ?? Date.now;
   return {
     buildAuthorizationUrl({ appId, redirectUri, state }) {
       const url = new URL(`${baseUrl}${AUTHORIZE_PATH}`);
       url.searchParams.set('app_id', appId);
       url.searchParams.set('redirect_uri', redirectUri);
       url.searchParams.set('state', state);
+      url.searchParams.set('scope', scopes);
       return url.toString();
     },
 
@@ -103,14 +135,26 @@ export function createFeishuOAuthClient(
 }
 
 interface TokenEnvelope {
-  code: number;
+  code?: number;
   msg?: string;
+  /** OAuth-style error description (Feishu v2 token endpoint). */
+  error_description?: string;
   data?: {
+    token_type?: string;
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
     refresh_token_expires_in?: number;
   };
+  // Flat OAuth-style success fields — Feishu's v2 token endpoint returns
+  // these at the top level, NOT wrapped in a {code, msg, data} envelope
+  // (live-verified in the T9 demo pass; the old envelope shape is still
+  // accepted for the mock and v1-style responses).
+  token_type?: string;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
 }
 
 async function tokenRequest(opts: {
@@ -136,24 +180,50 @@ async function tokenRequest(opts: {
   }
 
   let envelope: TokenEnvelope;
+  let rawBody = '';
   try {
-    envelope = (await response.json()) as TokenEnvelope;
+    rawBody = await response.text();
+    envelope = JSON.parse(rawBody) as TokenEnvelope;
   } catch {
-    throw new FeishuApiError(0, `Feishu token endpoint returned non-JSON (HTTP ${response.status})`, response.status, false);
+    throw new FeishuApiError(
+      0,
+      `Feishu token endpoint returned non-JSON (HTTP ${response.status}): ${rawBody.slice(0, 200)}`,
+      response.status,
+      false,
+    );
   }
 
   if (response.status === 429) {
-    throw new FeishuApiError(envelope.code || 0, envelope.msg ?? 'Feishu rate limited', 429, false);
+    throw new FeishuApiError(
+      envelope.code ?? 0,
+      envelope.msg ?? envelope.error_description ?? 'Feishu rate limited',
+      429,
+      false,
+    );
   }
-  if (envelope.code !== 0 || !envelope.data?.access_token || !envelope.data.refresh_token) {
+  // Success payload: prefer the enveloped data, else the flat body itself
+  // (Feishu v2 token endpoint returns token fields at the top level).
+  const payload = envelope.data ?? envelope;
+  const code = envelope.code ?? 0;
+  if (code !== 0 || !payload.access_token || !payload.refresh_token) {
     // A token endpoint that answers with an error envelope has rejected the
     // grant: bad/expired code, revoked refresh token, or bad client creds.
     // Per OAuth token-endpoint semantics, an envelope rejection means the
     // grant cannot be used again — transient server-side trouble surfaces
     // as 429 (mapped separately) or 5xx, not as an envelope error.
+    // Live notes (T9 demo pass): Feishu's v2 endpoint answers in
+    // OAuth-style shape (error/error_description, no msg); and an app with
+    // only the base auth scope is issued an access_token but NO
+    // refresh_token, so the missing-token case gets a config hint.
+    const reason =
+      code !== 0
+        ? (envelope.msg ?? envelope.error_description ?? 'no error message')
+        : !payload.access_token
+          ? 'the response contains no access_token'
+          : 'the response contains no refresh_token — the app is likely missing the permission scopes that grant refresh tokens; enable the business scopes and re-authorize';
     throw new FeishuApiError(
-      envelope.code ?? 0,
-      envelope.msg ?? `Feishu token endpoint error (HTTP ${response.status})`,
+      code,
+      `Feishu token endpoint error (code ${code}, HTTP ${response.status}): ${reason} — raw: ${rawBody.slice(0, 600)}`,
       response.status,
       true,
     );
@@ -161,11 +231,11 @@ async function tokenRequest(opts: {
 
   const nowMs = opts.now();
   return {
-    accessToken: envelope.data.access_token,
-    refreshToken: envelope.data.refresh_token,
-    expiresAt: new Date(nowMs + (envelope.data.expires_in ?? 0) * 1000).toISOString(),
+    accessToken: payload.access_token,
+    refreshToken: payload.refresh_token,
+    expiresAt: new Date(nowMs + (payload.expires_in ?? 0) * 1000).toISOString(),
     refreshTokenExpiresAt: new Date(
-      nowMs + (envelope.data.refresh_token_expires_in ?? 0) * 1000,
+      nowMs + (payload.refresh_token_expires_in ?? 0) * 1000,
     ).toISOString(),
   };
 }

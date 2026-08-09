@@ -79,21 +79,20 @@ describe('MockFeishuServer advanced endpoints', () => {
     it('creates an export task and completes it with a file token', async () => {
       const created = await fetchApi('/open-apis/drive/v1/export_tasks', {
         method: 'POST',
-        body: JSON.stringify({ file_extension: 'md', token: 'adv-doc' }),
+        body: JSON.stringify({ type: 'docx', file_extension: 'pdf', token: 'adv-doc' }),
       });
       const envelope = (await created.json()) as { code: number; data: { ticket: string } };
       expect(envelope.code).toBe(0);
       expect(envelope.data.ticket).toBeTruthy();
 
       const polled = await fetchApi(
-        `/open-apis/drive/v1/export_tasks/${envelope.data.ticket}`,
+        `/open-apis/drive/v1/export_tasks/${envelope.data.ticket}?token=adv-doc`,
       );
       const poll = (await polled.json()) as {
         code: number;
-        data: { job_status: number; result: { file_token: string } };
+        data: { result: { file_token: string } };
       };
       expect(poll.code).toBe(0);
-      expect(poll.data.job_status).toBe(0);
       expect(poll.data.result.file_token).toBeTruthy();
     });
 
@@ -101,20 +100,19 @@ describe('MockFeishuServer advanced endpoints', () => {
       mock.holdNextExport();
       const created = await fetchApi('/open-apis/drive/v1/export_tasks', {
         method: 'POST',
-        body: JSON.stringify({ file_extension: 'docx', token: 'adv-doc' }),
+        body: JSON.stringify({ type: 'docx', file_extension: 'docx', token: 'adv-doc' }),
       });
       const envelope = (await created.json()) as { code: number; data: { ticket: string } };
       expect(envelope.code).toBe(0);
 
       const first = (await (
-        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}`)
+        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}?token=adv-doc`)
       ).json()) as { code: number; data: { job_status: number } };
       expect(first.data.job_status).toBe(1);
 
       const second = (await (
-        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}`)
-      ).json()) as { code: number; data: { job_status: number; result?: { file_token: string } } };
-      expect(second.data.job_status).toBe(0);
+        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}?token=adv-doc`)
+      ).json()) as { code: number; data: { result?: { file_token: string } } };
       expect(second.data.result?.file_token).toBeTruthy();
     });
 
@@ -122,11 +120,11 @@ describe('MockFeishuServer advanced endpoints', () => {
       mock.failNextExport();
       const created = await fetchApi('/open-apis/drive/v1/export_tasks', {
         method: 'POST',
-        body: JSON.stringify({ file_extension: 'md', token: 'adv-doc' }),
+        body: JSON.stringify({ type: 'docx', file_extension: 'pdf', token: 'adv-doc' }),
       });
       const envelope = (await created.json()) as { code: number; data: { ticket: string } };
       const polled = (await (
-        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}`)
+        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}?token=adv-doc`)
       ).json()) as { code: number; data: { job_status: number; msg?: string } };
       expect(polled.data.job_status).toBe(2);
     });
@@ -134,24 +132,60 @@ describe('MockFeishuServer advanced endpoints', () => {
     it('rejects exporting an unknown document with 10662', async () => {
       const created = await fetchApi('/open-apis/drive/v1/export_tasks', {
         method: 'POST',
-        body: JSON.stringify({ file_extension: 'md', token: 'nope' }),
+        body: JSON.stringify({ type: 'docx', file_extension: 'pdf', token: 'nope' }),
       });
       const envelope = (await created.json()) as { code: number };
       expect(envelope.code).toBe(10662);
     });
+
+    it('rejects polling without the source token (99992402)', async () => {
+      const created = await fetchApi('/open-apis/drive/v1/export_tasks', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'docx', file_extension: 'pdf', token: 'adv-doc' }),
+      });
+      const envelope = (await created.json()) as { code: number; data: { ticket: string } };
+      const polled = (await (
+        await fetchApi(`/open-apis/drive/v1/export_tasks/${envelope.data.ticket}`)
+      ).json()) as { code: number };
+      expect(polled.code).toBe(99992402);
+    });
+
+    it('requires the source type and rejects unsupported extensions (no markdown)', async () => {
+      const missingType = await fetchApi('/open-apis/drive/v1/export_tasks', {
+        method: 'POST',
+        body: JSON.stringify({ file_extension: 'pdf', token: 'adv-doc' }),
+      });
+      expect(((await missingType.json()) as { code: number }).code).toBe(99992402);
+
+      const md = await fetchApi('/open-apis/drive/v1/export_tasks', {
+        method: 'POST',
+        body: JSON.stringify({ type: 'docx', file_extension: 'md', token: 'adv-doc' }),
+      });
+      expect(((await md.json()) as { code: number }).code).toBe(99992402);
+    });
   });
 
   describe('spreadsheet values', () => {
-    it('reads a named-sheet range with native cell types', async () => {
+    it('lists sheets (id + title) via the query endpoint', async () => {
+      const listed = (await (
+        await fetchApi('/open-apis/sheets/v3/spreadsheets/adv-sheet/sheets/query')
+      ).json()) as { code: number; data: { sheets: Array<{ sheet_id: string; title: string }> } };
+      expect(listed.code).toBe(0);
+      expect(listed.data.sheets).toEqual([
+        { sheet_id: 'sht_adv-sheet', title: 'Data', index: 0 },
+      ]);
+    });
+
+    it('reads a sheet-id range with native cell types', async () => {
       const read = await fetchApi(
-        `/open-apis/sheets/v2/spreadsheets/adv-sheet/values/Data!A1:C3`,
+        `/open-apis/sheets/v2/spreadsheets/adv-sheet/values/sht_adv-sheet!A1:C3`,
       );
       const envelope = (await read.json()) as {
         code: number;
         data: { valueRange: { range: string; values: (string | number | null)[][] } };
       };
       expect(envelope.code).toBe(0);
-      expect(envelope.data.valueRange.range).toBe('Data!A1:C3');
+      expect(envelope.data.valueRange.range).toBe('sht_adv-sheet!A1:C3');
       expect(envelope.data.valueRange.values).toEqual([
         ['Region', 'Q1', 'Q2'],
         ['APAC', 10, 20],
@@ -176,7 +210,7 @@ describe('MockFeishuServer advanced endpoints', () => {
       const write = await fetchApi('/open-apis/sheets/v2/spreadsheets/adv-sheet/values', {
         method: 'PUT',
         body: JSON.stringify({
-          valueRange: { range: 'Data!C3', values: [[30]] },
+          valueRange: { range: 'sht_adv-sheet!C3', values: [[30]] },
         }),
       });
       const envelope = (await write.json()) as {
@@ -188,7 +222,7 @@ describe('MockFeishuServer advanced endpoints', () => {
       expect(envelope.data.updatedCells).toBe(1);
 
       const read = (await (
-        await fetchApi(`/open-apis/sheets/v2/spreadsheets/adv-sheet/values/Data!C3`)
+        await fetchApi(`/open-apis/sheets/v2/spreadsheets/adv-sheet/values/sht_adv-sheet!C3`)
       ).json()) as { code: number; data: { valueRange: { values: (string | number | null)[][] } } };
       expect(read.data.valueRange.values).toEqual([[30]]);
     });
@@ -197,7 +231,7 @@ describe('MockFeishuServer advanced endpoints', () => {
       const write = await fetchApi('/open-apis/sheets/v2/spreadsheets/adv-sheet/values', {
         method: 'PUT',
         body: JSON.stringify({
-          valueRange: { range: 'Data!A1:B2', values: [[1]] },
+          valueRange: { range: 'sht_adv-sheet!A1:B2', values: [[1]] },
         }),
       });
       const envelope = (await write.json()) as { code: number; msg: string };
@@ -205,16 +239,23 @@ describe('MockFeishuServer advanced endpoints', () => {
       expect(envelope.msg).toContain('does not match range');
     });
 
-    it('rejects an unknown spreadsheet or sheet name with 10662', async () => {
+    it('rejects an unknown spreadsheet with 10662 and a display-name range with 90215', async () => {
       const missingSpreadsheet = (await (
-        await fetchApi(`/open-apis/sheets/v2/spreadsheets/nope/values/Data!A1`)
+        await fetchApi(`/open-apis/sheets/v2/spreadsheets/nope/values/sht_nope!A1`)
       ).json()) as { code: number };
       expect(missingSpreadsheet.code).toBe(10662);
 
-      const missingSheet = (await (
-        await fetchApi(`/open-apis/sheets/v2/spreadsheets/adv-sheet/values/Nope!A1`)
+      // Real contract (T9 demo pass): the values API only accepts SHEET
+      // IDs — display names in ranges return 90215.
+      const nameRange = (await (
+        await fetchApi(`/open-apis/sheets/v2/spreadsheets/adv-sheet/values/Data!A1`)
       ).json()) as { code: number };
-      expect(missingSheet.code).toBe(10662);
+      expect(nameRange.code).toBe(90215);
+
+      const unknownId = (await (
+        await fetchApi(`/open-apis/sheets/v2/spreadsheets/adv-sheet/values/sht_nope!A1`)
+      ).json()) as { code: number };
+      expect(unknownId.code).toBe(90215);
     });
 
     it('applies scripted failures and auth to sheet endpoints', async () => {

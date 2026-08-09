@@ -44,7 +44,7 @@ describe('TokenManager', () => {
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    oauth = createFeishuOAuthClient(baseUrl, () => now);
+    oauth = createFeishuOAuthClient(baseUrl, { now: () => now });
     tokenStore = new InMemoryTokenStore();
     credsStore = new InMemoryFeishuCredsStore();
     credsStore.set(TENANT, { appId: APP_ID, appSecret: APP_SECRET });

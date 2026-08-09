@@ -39,7 +39,7 @@ describe('MockFeishuServer', () => {
     expect(location.searchParams.get('code')).toBeTruthy();
   });
 
-  it('exchanges an issued code for a token pair with the Feishu envelope', async () => {
+  it('exchanges an issued code for a flat v2 token body (live-verified shape)', async () => {
     const pair = await tokenCall(baseUrl, {
       grant_type: 'authorization_code',
       client_id: 'cli_app_id',
@@ -47,10 +47,13 @@ describe('MockFeishuServer', () => {
       code: await authorizeCode(baseUrl, 'flow-abc'),
       redirect_uri: 'https://totem.example.com/oauth/callback/feishu',
     });
+    // Real Feishu v2 token endpoint (T9 demo pass): token fields sit at the
+    // top level with a trailing code: 0 — NOT a {code, msg, data} envelope.
     expect(pair.code).toBe(0);
-    expect(pair.data!.access_token).toBeTruthy();
-    expect(pair.data!.refresh_token).toBeTruthy();
-    expect(pair.data!.expires_in).toBeGreaterThan(0);
+    expect(pair.access_token).toBeTruthy();
+    expect(pair.refresh_token).toBeTruthy();
+    expect(pair.expires_in).toBeGreaterThan(0);
+    expect(pair.token_type).toBe('Bearer');
     expect(mock.exchangeRequestCount).toBe(1);
   });
 
@@ -84,7 +87,7 @@ describe('MockFeishuServer', () => {
       code: await authorizeCode(baseUrl, 'flow-rev'),
       redirect_uri: 'https://totem.example.com/oauth/callback/feishu',
     });
-    const refreshToken = issued.data!.refresh_token;
+    const refreshToken = issued.refresh_token!;
 
     const refreshed = await tokenCall(baseUrl, {
       grant_type: 'refresh_token',
@@ -93,7 +96,7 @@ describe('MockFeishuServer', () => {
       refresh_token: refreshToken,
     });
     expect(refreshed.code).toBe(0);
-    expect(refreshed.data!.access_token).toBeTruthy();
+    expect(refreshed.access_token).toBeTruthy();
     expect(mock.refreshRequestCount).toBe(1);
 
     mock.revokeRefreshToken(refreshToken);
@@ -129,7 +132,14 @@ async function authorizeCode(baseUrl: string, state: string): Promise<string> {
 async function tokenCall(
   baseUrl: string,
   body: Record<string, string>,
-): Promise<{ code: number; msg?: string; data?: { access_token: string; refresh_token: string; expires_in: number } }> {
+): Promise<{
+    token_type?: string;
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    code?: number;
+    msg?: string;
+  }> {
   const res = await fetch(`${baseUrl}/open-apis/authen/v2/oauth/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },

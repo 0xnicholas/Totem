@@ -60,19 +60,18 @@ describe('MockFeishuServer write endpoints', () => {
     });
   }
 
-  it('creates a document (title, optional folder) and returns id + url', async () => {
+  it('creates a document (title, optional folder) and returns id + title', async () => {
     const res = await jsonFetch('/open-apis/docx/v1/documents', {
       method: 'POST',
       body: JSON.stringify({ title: 'Created Doc', folder_token: 'folder-1' }),
     });
     const envelope = (await res.json()) as {
       code: number;
-      data: { document: { document_id: string; title: string; url: string } };
+      data: { document: { document_id: string; title: string } };
     };
     expect(envelope.code).toBe(0);
     expect(envelope.data.document.title).toBe('Created Doc');
     expect(envelope.data.document.document_id).toBeTruthy();
-    expect(envelope.data.document.url).toContain(envelope.data.document.document_id);
     docId = envelope.data.document.document_id;
   });
 
@@ -109,14 +108,19 @@ describe('MockFeishuServer write endpoints', () => {
     expect(envelope.data.content).toContain('Appended line.');
   });
 
-  it('renames a document via the title PATCH', async () => {
-    const res = await jsonFetch(`/open-apis/docx/v1/documents/${docId}`, {
+  it('renames a document via the root-block PATCH (real contract)', async () => {
+    const res = await jsonFetch(`/open-apis/docx/v1/documents/${docId}/blocks/${docId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ title: 'Renamed Doc' }),
+      body: JSON.stringify({
+        update_text_elements: { elements: [{ text_run: { content: 'Renamed Doc' } }] },
+      }),
     });
-    const envelope = (await res.json()) as { code: number; data: { document: { title: string } } };
+    const envelope = (await res.json()) as {
+      code: number;
+      data: { block: { page: { elements: Array<{ text_run: { content: string } }> } } };
+    };
     expect(envelope.code).toBe(0);
-    expect(envelope.data.document.title).toBe('Renamed Doc');
+    expect(envelope.data.block.page.elements[0]!.text_run.content).toBe('Renamed Doc');
   });
 
   it('moves a document to a folder', async () => {
@@ -131,9 +135,11 @@ describe('MockFeishuServer write endpoints', () => {
 
   it('rejects writes to a locked document with 10667', async () => {
     mock.lockDoc('w-doc');
-    const renamed = await jsonFetch(`/open-apis/docx/v1/documents/w-doc`, {
+    const renamed = await jsonFetch(`/open-apis/docx/v1/documents/w-doc/blocks/w-doc`, {
       method: 'PATCH',
-      body: JSON.stringify({ title: 'Nope' }),
+      body: JSON.stringify({
+        update_text_elements: { elements: [{ text_run: { content: 'Nope' } }] },
+      }),
     });
     expect(((await renamed.json()) as { code: number }).code).toBe(10667);
     mock.unlockDoc('w-doc');

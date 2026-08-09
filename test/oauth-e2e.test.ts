@@ -306,7 +306,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       });
       expect(created.isError).toBeUndefined();
       const writtenId = (created.structuredContent as { doc_id: string }).doc_id;
-      expect((created.structuredContent as { url: string }).url).toContain(writtenId);
+      expect(writtenId).toBeTruthy();
 
       const appended = await mcpClient.callTool({
         name: 'append_doc_content',
@@ -344,15 +344,15 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       // The advanced set (T9) through MCP: export, sheet cells, bitable.
       const exported = await mcpClient.callTool({
         name: 'export_doc',
-        arguments: { doc_id: 'e2e-doc', format: 'md' },
+        arguments: { doc_id: 'e2e-doc', format: 'docx' },
       });
       expect(exported.isError).toBeUndefined();
-      expect(exported.structuredContent).toMatchObject({ doc_id: 'e2e-doc', format: 'md' });
+      expect(exported.structuredContent).toMatchObject({ doc_id: 'e2e-doc', format: 'docx' });
       expect((exported.structuredContent as { artifact_id: string }).artifact_id).toBeTruthy();
 
       const sheetRead = await mcpClient.callTool({
         name: 'read_sheet_cells',
-        arguments: { doc_id: 'e2e-sheet', range: 'Data!A1:B2' },
+        arguments: { doc_id: 'e2e-sheet', sheet_name: 'Data', range: 'A1:B2' },
       });
       expect(sheetRead.structuredContent).toMatchObject({
         values: [
@@ -363,7 +363,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
 
       const sheetWrite = await mcpClient.callTool({
         name: 'write_sheet_cells',
-        arguments: { doc_id: 'e2e-sheet', range: 'Data!B2', values: [[42]] },
+        arguments: { doc_id: 'e2e-sheet', sheet_name: 'Data', range: 'B2', values: [[42]] },
       });
       expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
 

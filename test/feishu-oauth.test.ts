@@ -36,7 +36,7 @@ describe('FeishuOAuthClient', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('builds the authorize URL with app_id, redirect_uri and state', () => {
+  it('builds the authorize URL with app_id, redirect_uri, state and offline_access', () => {
     const url = new URL(
       oauth.buildAuthorizationUrl({ appId: APP_ID, redirectUri: REDIRECT_URI, state: 'st-1' }),
     );
@@ -44,6 +44,15 @@ describe('FeishuOAuthClient', () => {
     expect(url.searchParams.get('app_id')).toBe(APP_ID);
     expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT_URI);
     expect(url.searchParams.get('state')).toBe('st-1');
+    // Feishu's scope parameter DEFINES the grant (T9 demo pass finding):
+    // offline_access for the refresh design (ADR-0004) plus the v1 action
+    // set's business scopes — requesting only offline_access yields a token
+    // with no business permissions.
+    expect(url.searchParams.get('scope')).toBe(
+      'offline_access docx:document:readonly docx:document:create docx:document ' +
+        'drive:drive:readonly drive:drive drive:export:readonly ' +
+        'sheets:spreadsheet:readonly sheets:spreadsheet bitable:app:readonly bitable:app',
+    );
   });
 
   it('exchanges an authorization code for a token pair with an expiry', async () => {
@@ -91,3 +100,44 @@ describe('FeishuOAuthClient', () => {
 async function mockAuthorize(mock: MockFeishuServer): Promise<string> {
   return mock.authorizeCode(REDIRECT_URI, 'state-x');
 }
+
+describe('Feishu v2 token endpoint live-shape regressions (T9 demo pass)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let oauth: FeishuOAuthClient;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    oauth = createFeishuOAuthClient(baseUrl);
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('accepts the flat success body (token fields at top level, no envelope)', async () => {
+    const pair = await oauth.exchangeCode({
+      creds: CREDS,
+      code: await mock.authorizeCode(REDIRECT_URI, 'flat-shape'),
+      redirectUri: REDIRECT_URI,
+    });
+    expect(pair.accessToken).toBeTruthy();
+    expect(pair.refreshToken).toBeTruthy();
+    expect(pair.expiresAt).toBeTruthy();
+  });
+
+  it('explains a missing refresh_token as an app-configuration problem', async () => {
+    mock.omitRefreshTokenNext();
+    await expect(
+      oauth.exchangeCode({
+        creds: CREDS,
+        code: await mock.authorizeCode(REDIRECT_URI, 'no-refresh'),
+        redirectUri: REDIRECT_URI,
+      }),
+    ).rejects.toThrow(/no refresh_token/);
+  });
+});

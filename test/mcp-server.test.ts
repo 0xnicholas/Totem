@@ -269,7 +269,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
         doc_id: 'mcp-sheet',
         title: 'MCP Sheet',
         content: '',
-        sheet: { sheetName: 'Data', values: [['Q1', 10]] },
+        sheet: { sheetId: 'sht-mcp', sheetName: 'Data', values: [['Q1', 10]] },
       },
       {
         doc_id: 'mcp-bit',
@@ -352,10 +352,10 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       // Advanced actions (T9) over MCP, non-DB: export, sheet cells, bitable.
       const exported = await client.callTool({
         name: 'export_doc',
-        arguments: { doc_id: docId, format: 'md' },
+        arguments: { doc_id: docId, format: 'pdf' },
       });
       expect(exported.isError).toBeUndefined();
-      expect(exported.structuredContent).toMatchObject({ doc_id: docId, format: 'md' });
+      expect(exported.structuredContent).toMatchObject({ doc_id: docId, format: 'pdf' });
 
       const sheetRead = await client.callTool({
         name: 'read_sheet_cells',
@@ -365,7 +365,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
 
       const sheetWrite = await client.callTool({
         name: 'write_sheet_cells',
-        arguments: { doc_id: 'mcp-sheet', range: 'Data!B2', values: [[42]] },
+        arguments: { doc_id: 'mcp-sheet', sheet_name: 'Data', range: 'B2', values: [[42]] },
       });
       expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
 

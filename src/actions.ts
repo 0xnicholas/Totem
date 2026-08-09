@@ -10,7 +10,6 @@ export interface CreateDocInput {
 export interface CreateDocOutput {
   doc_id: string;
   title: string;
-  url: string;
 }
 
 export interface SearchDocsInput {
@@ -85,13 +84,13 @@ export type CellValue = string | number | boolean | null;
 
 export interface ExportDocInput {
   doc_id: string;
-  /** Export format: 'md' (markdown) or 'docx' (binary). */
-  format: 'md' | 'docx';
+  /** Export format: 'docx' or 'pdf'. */
+  format: 'docx' | 'pdf';
 }
 
 export interface ExportDocOutput {
   doc_id: string;
-  format: 'md' | 'docx';
+  format: 'docx' | 'pdf';
   /** Opaque token of the exported artifact in the user's drive. */
   artifact_id: string;
   /** Download URL for the artifact (requires the connection's Feishu auth). */
@@ -101,7 +100,13 @@ export interface ExportDocOutput {
 export interface ReadSheetCellsInput {
   /** Opaque id of the spreadsheet (its drive file token). */
   doc_id: string;
-  /** Spreadsheet range notation, e.g. 'Data!A1:C3' (bare 'A1:C3' = first sheet). */
+  /**
+   * The tab to read, by its display name. Defaults to the first sheet.
+   * (Feishu's values API only accepts sheet IDs in ranges — the connector
+   * resolves the name — live-verified in the T9 demo pass.)
+   */
+  sheet_name?: string;
+  /** Cell range within the sheet, e.g. 'A1:C3'. */
   range: string;
 }
 
@@ -115,7 +120,9 @@ export interface ReadSheetCellsOutput {
 export interface WriteSheetCellsInput {
   /** Opaque id of the spreadsheet (its drive file token). */
   doc_id: string;
-  /** Spreadsheet range notation, e.g. 'Data!A1:C3'. */
+  /** The tab to write to, by its display name. Defaults to the first sheet. */
+  sheet_name?: string;
+  /** Cell range within the sheet, e.g. 'A1:C3'. */
   range: string;
   /** Row-major values to write; must match the range's shape. */
   values: CellValue[][];
@@ -177,9 +184,8 @@ const createDocOutputSchema: JSONSchemaType<CreateDocOutput> = {
   properties: {
     doc_id: { type: 'string' },
     title: { type: 'string' },
-    url: { type: 'string' },
   },
-  required: ['doc_id', 'title', 'url'],
+  required: ['doc_id', 'title'],
 };
 
 const searchDocsInputSchema: JSONSchemaType<SearchDocsInput> = {
@@ -303,7 +309,7 @@ const exportDocInputSchema: JSONSchemaType<ExportDocInput> = {
   additionalProperties: false,
   properties: {
     doc_id: { type: 'string' },
-    format: { type: 'string', enum: ['md', 'docx'] },
+    format: { type: 'string', enum: ['docx', 'pdf'] },
   },
   required: ['doc_id', 'format'],
 };
@@ -313,7 +319,7 @@ const exportDocOutputSchema: JSONSchemaType<ExportDocOutput> = {
   additionalProperties: false,
   properties: {
     doc_id: { type: 'string' },
-    format: { type: 'string', enum: ['md', 'docx'] },
+    format: { type: 'string', enum: ['docx', 'pdf'] },
     artifact_id: { type: 'string' },
     url: { type: 'string' },
   },
@@ -325,6 +331,7 @@ const readSheetCellsInputSchema: JSONSchemaType<ReadSheetCellsInput> = {
   additionalProperties: false,
   properties: {
     doc_id: { type: 'string' },
+    sheet_name: { type: 'string', nullable: true, minLength: 1 },
     range: { type: 'string', minLength: 1 },
   },
   required: ['doc_id', 'range'],
@@ -354,6 +361,7 @@ const writeSheetCellsInputSchema: JSONSchemaType<WriteSheetCellsInput> = {
   additionalProperties: false,
   properties: {
     doc_id: { type: 'string' },
+    sheet_name: { type: 'string', nullable: true, minLength: 1 },
     range: { type: 'string', minLength: 1 },
     values: cellMatrixSchema,
   },
@@ -453,8 +461,10 @@ const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
 export const DOCS_ACTIONS: Action[] = [
   {
     name: 'create_doc',
+    // Live finding (T9 demo pass): Feishu's create API returns no URL, so
+    // the output carries doc_id + title only.
     description:
-      'Create a new document and return its opaque doc_id, title and URL. ' +
+      'Create a new document and return its opaque doc_id and title. ' +
       'Optionally place it in a folder (folder_id) and seed it with initial content.',
     inputSchema: createDocInputSchema,
     outputSchema: createDocOutputSchema,
@@ -510,18 +520,21 @@ export const DOCS_ACTIONS: Action[] = [
   },
   {
     name: 'export_doc',
+    // Live finding (T9 demo pass): Feishu's export API supports
+    // [docx, pdf, xlsx, csv, base, pptx] — there is NO markdown export, so
+    // the original 'md' format was dropped from the platform vocabulary.
     description:
-      "Export a document by its opaque doc_id into a portable format: 'md' (markdown) " +
-      'or "docx" (binary). Returns an artifact reference: the exported file token and its ' +
-      "download URL (fetching the artifact requires the connection's Feishu authorization).",
+      "Export a document by its opaque doc_id into a portable format: 'docx' or 'pdf'. " +
+      'Returns an artifact reference: the exported file token and its download URL (fetching ' +
+      "the artifact requires the connection's Feishu authorization).",
     inputSchema: exportDocInputSchema,
     outputSchema: exportDocOutputSchema,
   },
   {
     name: 'read_sheet_cells',
     description:
-      "Read a range of cells from a spreadsheet by its opaque doc_id. The range uses " +
-      "spreadsheet notation (e.g. 'Data!A1:C3'; a bare 'A1:C3' means the first sheet). " +
+      "Read a range of cells from a spreadsheet by its opaque doc_id. sheet_name selects the " +
+      "tab (defaults to the first sheet); range is the cell range within it, e.g. 'A1:C3'. " +
       'Cell values keep their native JSON types (string, number, boolean or null).',
     inputSchema: readSheetCellsInputSchema,
     outputSchema: readSheetCellsOutputSchema,
@@ -529,9 +542,10 @@ export const DOCS_ACTIONS: Action[] = [
   {
     name: 'write_sheet_cells',
     description:
-      "Write values into a spreadsheet range by its opaque doc_id. Values is a row-major " +
-      "2-D array whose shape must match the range (e.g. range 'Data!A1:B2' takes two rows of " +
-      'two cells). Returns the number of cells updated.',
+      "Write values into a spreadsheet by its opaque doc_id. sheet_name selects the tab " +
+      "(defaults to the first sheet); range is the cell range within it, e.g. 'A1:B2'. Values " +
+      'is a row-major 2-D array whose shape must match the range. Returns the number of cells ' +
+      'updated.',
     inputSchema: writeSheetCellsInputSchema,
     outputSchema: writeSheetCellsOutputSchema,
   },

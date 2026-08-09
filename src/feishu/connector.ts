@@ -30,12 +30,11 @@ import { ActionError, errorMessage } from '../errors.js';
 import { FeishuApiError } from './oauth.js';
 
 /**
- * Feishu error-code families (T7). The mock pins these codes as the v1
- * contract; they approximate Feishu's real codes (10662 document-not-found
- * family, 99991672 invalid token, 99991400 rate limit) and should be
- * verified against the live API when the connector goes live (T7 review).
+ * Feishu error-code families (T7, live-verified in the T9 demo pass):
+ * 10662 document-not-found, 91402 sheets NOTEXIST, 90215 unknown sheetId,
+ * 99991672 invalid token, 99991400 rate limit.
  */
-const NOT_FOUND_CODES = new Set([10662]);
+const NOT_FOUND_CODES = new Set([10662, 91402, 90215]);
 const TOKEN_REJECTED_CODES = new Set([99991672]);
 const RATE_LIMIT_CODES = new Set([99991400]);
 
@@ -108,8 +107,10 @@ export class FeishuConnector implements IConnector {
     private readonly baseUrl: string,
     options: FeishuConnectorOptions = {},
   ) {
-    this.exportPollMs = options.exportPollMs ?? 500;
-    this.exportMaxAttempts = options.exportMaxAttempts ?? 10;
+    // Live note (T9 demo pass): real export jobs took 40-60s in the live
+    // walk, so the default budget is 2 minutes (60 polls × 2s).
+    this.exportPollMs = options.exportPollMs ?? 2000;
+    this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
     this.handlers = {
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
@@ -124,10 +125,12 @@ export class FeishuConnector implements IConnector {
           },
         );
         const output: SearchDocsOutput = {
-          docs: response.data.files.map((file) => ({
-            doc_id: file.token,
-            title: file.name,
-            doc_type: file.type,
+          // Live shape (T9 demo pass): data.docs_entities with docs_token /
+          // docs_type — not the files/token/type shape the mock modelled.
+          docs: response.data.docs_entities.map((file) => ({
+            doc_id: file.docs_token,
+            title: file.title,
+            doc_type: file.docs_type,
           })),
         };
         return output;
@@ -180,10 +183,11 @@ export class FeishuConnector implements IConnector {
             );
           }
         }
+        // Live shape (T9 demo pass): the create API returns document_id +
+        // title only — no URL.
         const output: CreateDocOutput = {
           doc_id: docId,
           title: response.data.document.title,
-          url: response.data.document.url,
         };
         return output;
       },
@@ -218,15 +222,25 @@ export class FeishuConnector implements IConnector {
 
       rename_doc: async (args: RenameDocInput, ctx) => {
         const input = args;
-        const response = await docsRequest<UpdateDocData>(
+        // Live finding (T9 demo pass): Feishu has NO document-title API —
+        // PATCH /docx/v1/documents/{id} with a title returns 1770001. The
+        // title is the root Page block's text, so renaming patches the root
+        // block (block_id == document_id) with update_text_elements.
+        const response = await docsRequest<UpdateBlockData>(
           this.baseUrl,
-          `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}`,
-          { method: 'PATCH', token: ctx.token, body: { title: input.new_title } },
+          `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/blocks/${encodeURIComponent(input.doc_id)}`,
+          {
+            method: 'PATCH',
+            token: ctx.token,
+            body: {
+              update_text_elements: {
+                elements: [{ text_run: { content: input.new_title } }],
+              },
+            },
+          },
         );
-        const output: RenameDocOutput = {
-          doc_id: response.data.document.document_id,
-          title: response.data.document.title,
-        };
+        const title = extractPageTitle(response.data.block);
+        const output: RenameDocOutput = { doc_id: input.doc_id, title };
         return output;
       },
 
@@ -257,10 +271,12 @@ export class FeishuConnector implements IConnector {
           {
             method: 'POST',
             token: ctx.token,
-            body: { file_extension: input.format, token: input.doc_id },
+            // Live finding (T9 demo pass): the export task requires the
+            // SOURCE type (type) — without it Feishu returns 99992402.
+            body: { type: 'docx', file_extension: input.format, token: input.doc_id },
           },
         );
-        const exported = await this.pollExport(task.data.ticket, ctx.token);
+        const exported = await this.pollExport(task.data.ticket, input.doc_id, ctx.token);
         const output: ExportDocOutput = {
           doc_id: input.doc_id,
           format: input.format,
@@ -274,9 +290,11 @@ export class FeishuConnector implements IConnector {
 
       read_sheet_cells: async (args: ReadSheetCellsInput, ctx) => {
         const input = args;
+        const sheetId = await resolveSheetId(this.baseUrl, input.doc_id, input.sheet_name, ctx.token);
+        const range = `${sheetId}!${input.range}`;
         const response = await docsRequest<SheetReadData>(
           this.baseUrl,
-          `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values/${encodeURIComponent(input.range)}`,
+          `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values/${encodeURIComponent(range)}`,
           { token: ctx.token },
         );
         const output: ReadSheetCellsOutput = {
@@ -289,13 +307,15 @@ export class FeishuConnector implements IConnector {
 
       write_sheet_cells: async (args: WriteSheetCellsInput, ctx) => {
         const input = args;
+        const sheetId = await resolveSheetId(this.baseUrl, input.doc_id, input.sheet_name, ctx.token);
+        const range = `${sheetId}!${input.range}`;
         const response = await docsRequest<SheetWriteData>(
           this.baseUrl,
           `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values`,
           {
             method: 'PUT',
             token: ctx.token,
-            body: { valueRange: { range: input.range, values: input.values } },
+            body: { valueRange: { range, values: input.values } },
           },
         );
         const output: WriteSheetCellsOutput = {
@@ -368,7 +388,9 @@ export class FeishuConnector implements IConnector {
           title: meta.title,
           owner_id: meta.owner_id,
           doc_type: meta.doc_type,
-          edited_at: meta.modified_time,
+          // Live shape (T9 demo pass): latest_modify_time is a unix-second
+          // string; the platform contract promises an ISO timestamp.
+          edited_at: toIsoTimestamp(meta.latest_modify_time),
         };
         return output;
       },
@@ -381,15 +403,21 @@ export class FeishuConnector implements IConnector {
    */
   private async pollExport(
     ticket: string,
+    docId: string,
     token: string | undefined,
   ): Promise<{ file_token: string }> {
     for (let attempt = 0; attempt < this.exportMaxAttempts; attempt++) {
+      // Live finding (T9 demo pass): the poll endpoint requires the source
+      // document's token as a query parameter (99992402 without it).
       const poll = await docsRequest<ExportPollData>(
         this.baseUrl,
         `/open-apis/drive/v1/export_tasks/${encodeURIComponent(ticket)}`,
-        { token },
+        { token, query: { token: docId } },
       );
-      if (poll.data.job_status === 0 && poll.data.result?.file_token) {
+      // Live shape (T9 demo pass): a COMPLETED task drops job_status from
+      // the response entirely — only result.file_token remains — so the
+      // presence of the artifact IS the completion signal.
+      if (poll.data.result?.file_token) {
         return poll.data.result;
       }
       if (poll.data.job_status === 2) {
@@ -424,15 +452,18 @@ interface DocsEnvelope<T> {
 }
 
 interface CreateDocData {
-  document: { document_id: string; title: string; url: string };
+  document: { document_id: string; title: string };
 }
 
 interface BlocksData {
   items: Array<{ block_id: string; block_type: number; parent_id: string | null }>;
 }
 
-interface UpdateDocData {
-  document: { document_id: string; title: string };
+interface UpdateBlockData {
+  block: {
+    block_id: string;
+    page?: { elements: Array<{ text_run?: { content?: string } }> };
+  };
 }
 
 interface ExportTaskData {
@@ -443,6 +474,10 @@ interface ExportPollData {
   job_status: number;
   msg?: string;
   result?: { file_token: string };
+}
+
+interface SheetListData {
+  sheets: Array<{ sheet_id: string; title: string; index: number }>;
 }
 
 interface SheetReadData {
@@ -468,7 +503,7 @@ interface BitableCreateData {
 }
 
 interface SearchFilesData {
-  files: Array<{ token: string; name: string; type: string }>;
+  docs_entities: Array<{ docs_token: string; docs_type: string; title: string }>;
 }
 
 interface RawContentData {
@@ -481,7 +516,7 @@ interface MetasData {
     doc_type: string;
     title: string;
     owner_id: string;
-    modified_time: string;
+    latest_modify_time: string;
   }>;
 }
 
@@ -556,7 +591,9 @@ async function appendBlocks(
     `/open-apis/docx/v1/documents/${encodeURIComponent(docId)}/blocks`,
     { token },
   );
-  const root = blocks.data.items.find((block) => block.parent_id === null);
+  // Live shape (T9 demo pass): the real API reports the root block's
+  // parent_id as '' (the mock pinned null; both are roots).
+  const root = blocks.data.items.find((block) => block.parent_id === null || block.parent_id === '');
   if (!root) {
     throw new ActionError('upstream_error', `Feishu document "${docId}" has no root block`);
   }
@@ -603,4 +640,57 @@ async function resolveBitableTable(
     );
   }
   return table.table_id;
+}
+
+/**
+ * Resolves a spreadsheet tab's sheet id from its display name via the
+ * sheets query API; defaults to the first sheet. Live finding (T9 demo
+ * pass): Feishu's values API only accepts sheet IDs in ranges — names
+ * return 90215 — so the platform's sheet_name must be resolved here.
+ */
+async function resolveSheetId(
+  baseUrl: string,
+  spreadsheetToken: string,
+  sheetName: string | undefined,
+  token: string | undefined,
+): Promise<string> {
+  const response = await docsRequest<SheetListData>(
+    baseUrl,
+    `/open-apis/sheets/v3/spreadsheets/${encodeURIComponent(spreadsheetToken)}/sheets/query`,
+    { token },
+  );
+  const sheets = response.data.sheets.sort((a, b) => a.index - b.index);
+  if (sheetName !== undefined) {
+    const sheet = sheets.find((candidate) => candidate.title === sheetName);
+    if (!sheet) {
+      throw new ActionError(
+        'not_found',
+        `Sheet "${sheetName}" not found in spreadsheet "${spreadsheetToken}"`,
+      );
+    }
+    return sheet.sheet_id;
+  }
+  const first = sheets[0];
+  if (!first) {
+    throw new ActionError('upstream_error', `Spreadsheet "${spreadsheetToken}" has no sheets`);
+  }
+  return first.sheet_id;
+}
+
+/** Extracts the page (title) text from a docx block payload. */
+function extractPageTitle(block: { page?: { elements: Array<{ text_run?: { content?: string } }> } }): string {
+  const element = block.page?.elements[0];
+  return element?.text_run?.content ?? '';
+}
+
+/**
+ * Normalizes a Feishu timestamp to ISO-8601: unix seconds (the live metas
+ * shape) are converted; already-ISO values (the mock's shape) pass through.
+ */
+function toIsoTimestamp(value: string): string {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && String(seconds) === value.trim()) {
+    return new Date(seconds * 1000).toISOString();
+  }
+  return value;
 }

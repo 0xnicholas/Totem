@@ -26,7 +26,6 @@ describe('executeAction (Seam A)', () => {
     const output = created.output as CreateDocOutput;
     expect(output.title).toBe('Q3 planning');
     expect(output.doc_id).toMatch(/^doc_/);
-    expect(output.url).toContain(output.doc_id);
   });
 
   it('dispatches to the connector with the validated arguments (Seam A round trip)', async () => {
@@ -249,7 +248,7 @@ describe('token acquisition at the execution boundary (T6, ADR-0004)', () => {
     create_doc: (_args, ctx) => {
       handlerRan = true;
       capturedToken = ctx.token;
-      return { doc_id: 'doc-1', title: 'captured', url: 'https://fake.totem.local/docs/doc-1' };
+      return { doc_id: 'doc-1', title: 'captured' };
     },
   });
 

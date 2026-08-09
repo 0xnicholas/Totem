@@ -3,10 +3,13 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../admin/util.js';
-import { parseRange, sliceValues, writeValues } from './range.js';
+import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js';
 import type { CellValue } from '../actions.js';
 
 const INVALID_TOKEN_ENVELOPE = { code: 99991672, msg: 'invalid access token' };
+
+/** Real export-task extension options (T9 demo pass): no markdown export. */
+const EXPORT_EXTENSIONS = new Set(['docx', 'pdf', 'xlsx', 'csv', 'base', 'pptx']);
 
 interface ScriptedFailure {
   code: number;
@@ -60,11 +63,15 @@ export class MockFeishuServer {
   private readonly issuedAccessTokens = new Set<string>();
   private readonly docs: MockFeishuDoc[] = [];
   private readonly lockedDocs = new Set<string>();
-  private readonly sheets = new Map<string, { sheetName: string; values: CellValue[][] }>();
+  private readonly sheets = new Map<
+    string,
+    { sheetId: string; sheetName: string; values: CellValue[][] }
+  >();
   private readonly bitables = new Map<string, Array<{ name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> }>>();
   private readonly exports = new Map<string, { status: number; fileToken: string }>();
   private holdNextExportArmed = false;
   private failNextExportArmed = false;
+  private omitRefreshTokenArmed = false;
   private scriptedFailure: ScriptedFailure | undefined;
   private scriptedDocsFailure: ScriptedFailure | undefined;
 
@@ -175,7 +182,13 @@ export class MockFeishuServer {
    * Seeds a spreadsheet (T9): a drive file plus a single named sheet of
    * values. `sheetName` is the tab name ranges can reference.
    */
-  seedSheet(docId: string, title: string, sheetName: string, values: CellValue[][]): void {
+  seedSheet(
+    docId: string,
+    title: string,
+    sheetName: string,
+    values: CellValue[][],
+    sheetId = `sht_${docId}`,
+  ): void {
     this.docs.push({
       doc_id: docId,
       title,
@@ -184,7 +197,7 @@ export class MockFeishuServer {
       doc_type: 'sheet',
       edited_at: new Date().toISOString(),
     });
-    this.sheets.set(docId, { sheetName, values: values.map((row) => [...row]) });
+    this.sheets.set(docId, { sheetId, sheetName, values: values.map((row) => [...row]) });
   }
 
   /**
@@ -227,6 +240,11 @@ export class MockFeishuServer {
     this.failNextExportArmed = true;
   }
 
+  /** Next token envelope omits refresh_token (app-config simulation). */
+  omitRefreshTokenNext(): void {
+    this.omitRefreshTokenArmed = true;
+  }
+
   /** Scripts one failure for the next docs endpoint call. */
   failNextDocs(failure: ScriptedFailure): void {
     this.scriptedDocsFailure = failure;
@@ -242,19 +260,21 @@ export class MockFeishuServer {
         isRecord(body) && typeof body.search_key === 'string' ? body.search_key : '';
       const pageSize = Number(c.req.query('page_size') ?? 50) || 50;
       const needle = searchKey.toLowerCase();
-      const files = this.docs
+      const docsEntities = this.docs
         .filter((doc) => doc.title.toLowerCase().includes(needle))
         .sort((a, b) => b.edited_at.localeCompare(a.edited_at))
         .slice(0, pageSize)
         .map((doc) => ({
-          token: doc.doc_id,
-          name: doc.title,
-          type: doc.doc_type,
-          url: `https://fake.feishu.local/docx/${doc.doc_id}`,
-          modified_time: doc.edited_at,
+          docs_token: doc.doc_id,
+          docs_type: doc.doc_type,
+          title: doc.title,
           owner_id: doc.owner_id,
         }));
-      return c.json({ code: 0, msg: 'ok', data: { files } });
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { docs_entities: docsEntities, has_more: false, total: docsEntities.length },
+      });
     });
 
     this.app.get('/open-apis/docx/v1/documents/:docId/raw_content', (c) => {
@@ -289,7 +309,7 @@ export class MockFeishuServer {
           doc_type: doc.doc_type,
           title: doc.title,
           owner_id: doc.owner_id,
-          modified_time: doc.edited_at,
+          latest_modify_time: doc.edited_at,
         });
       }
       return c.json({ code: 0, msg: 'ok', data: { metas } });
@@ -320,11 +340,7 @@ export class MockFeishuServer {
         code: 0,
         msg: 'ok',
         data: {
-          document: {
-            document_id: docId,
-            title,
-            url: `https://fake.feishu.local/docx/${docId}`,
-          },
+          document: { document_id: docId, revision_id: 1, title },
         },
       });
     });
@@ -359,26 +375,34 @@ export class MockFeishuServer {
       return c.json({ code: 0, msg: 'ok', data: { children: [] } });
     });
 
-    this.app.patch('/open-apis/docx/v1/documents/:docId', async (c) => {
+    this.app.patch('/open-apis/docx/v1/documents/:docId/blocks/:blockId', async (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;
       const doc = this.requireDoc(c.req.param('docId'));
       if (!doc) return notFound();
       if (this.lockedDocs.has(doc.doc_id)) return locked();
 
+      // Real contract (T9 demo pass): renaming patches the root Page block
+      // (block_id == document_id) with update_text_elements.
+      if (c.req.param('blockId') !== doc.doc_id) return notFound();
       const body: unknown = await c.req.json().catch(() => ({}));
-      const title = isRecord(body) && typeof body.title === 'string' ? body.title : '';
-      if (title === '') return c.json({ code: 10002, msg: 'title is required' });
+      const update =
+        isRecord(body) && isRecord(body.update_text_elements) ? body.update_text_elements : {};
+      const elements = Array.isArray(update.elements) ? update.elements : [];
+      const run = isRecord(elements[0]) && isRecord(elements[0].text_run) ? elements[0].text_run : {};
+      const title = typeof run.content === 'string' ? run.content : '';
+      if (title === '') return c.json({ code: 10002, msg: 'content is required' });
       doc.title = title;
       doc.edited_at = new Date().toISOString();
       return c.json({
         code: 0,
         msg: 'ok',
         data: {
-          document: {
-            document_id: doc.doc_id,
-            title: doc.title,
-            url: `https://fake.feishu.local/docx/${doc.doc_id}`,
+          block: {
+            block_id: doc.doc_id,
+            block_type: 1,
+            parent_id: '',
+            page: { elements: [{ text_run: { content: doc.title } }] },
           },
         },
       });
@@ -410,9 +434,16 @@ export class MockFeishuServer {
       const token = isRecord(body) && typeof body.token === 'string' ? body.token : '';
       const extension =
         isRecord(body) && typeof body.file_extension === 'string' ? body.file_extension : '';
-      if (token === '' || extension === '') {
-        return c.json({ code: 10002, msg: 'token and file_extension are required' });
+      const type = isRecord(body) && typeof body.type === 'string' ? body.type : '';
+      // Real contract (T9 demo pass): type (source) is required and the
+      // extension must be in Feishu's option list (no markdown export).
+      if (type === '') {
+        return c.json({ code: 99992402, msg: 'field validation failed' });
       }
+      if (!EXPORT_EXTENSIONS.has(extension)) {
+        return c.json({ code: 99992402, msg: 'field validation failed' });
+      }
+      if (token === '') return c.json({ code: 10002, msg: 'token is required' });
       if (!this.requireDoc(token)) return notFound();
 
       const ticket = `ticket_${randomUUID()}`;
@@ -433,6 +464,12 @@ export class MockFeishuServer {
       const gate = this.docsGate(c);
       if (gate) return gate;
 
+      // Real contract (T9 demo pass): the poll requires the source doc's
+      // token as a query parameter (99992402 without it).
+      const token = c.req.query('token');
+      if (!token || !this.requireDoc(token)) {
+        return c.json({ code: 99992402, msg: 'field validation failed' });
+      }
       const exportTask = this.exports.get(c.req.param('ticket'));
       if (!exportTask) return notFound();
       // A held export completes on its second poll.
@@ -444,13 +481,18 @@ export class MockFeishuServer {
       if (status === 2) {
         return c.json({ code: 0, msg: 'ok', data: { job_status: 2, msg: 'export failed' } });
       }
+      // Real contract (T9 demo pass): completed tasks drop job_status and
+      // carry only result.file_token.
       return c.json({
         code: 0,
         msg: 'ok',
-        data: { job_status: 0, result: { file_token: exportTask.fileToken } },
+        data: { result: { file_token: exportTask.fileToken } },
       });
     });
 
+    // Real contract (T9 demo pass): the values API resolves sheets by
+    // SHEET ID only — a display name in the range returns 90215. Bare
+    // ranges fall back to the first sheet.
     this.app.get('/open-apis/sheets/v2/spreadsheets/:token/values/:range', (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;
@@ -458,12 +500,14 @@ export class MockFeishuServer {
       const sheet = this.sheets.get(c.req.param('token'));
       if (!sheet) return notFound();
       const range = c.req.param('range');
-      const ref = parseRange(range);
-      if (!ref || (ref.sheet !== undefined && ref.sheet !== sheet.sheetName)) return notFound();
+      const sheetForRange = this.resolveSheetByRange(sheet, range);
+      if (!sheetForRange) {
+        return c.json({ code: 90215, msg: 'not found sheetId' });
+      }
       return c.json({
         code: 0,
         msg: 'ok',
-        data: { valueRange: { range, values: sliceValues(sheet.values, ref) } },
+        data: { valueRange: { range, values: sliceValues(sheetForRange.values, sheetForRange.ref) } },
       });
     });
 
@@ -478,8 +522,11 @@ export class MockFeishuServer {
       const valueRange = isRecord(body) && isRecord(body.valueRange) ? body.valueRange : {};
       const range = typeof valueRange.range === 'string' ? valueRange.range : '';
       const values = Array.isArray(valueRange.values) ? (valueRange.values as CellValue[][]) : [];
-      const ref = parseRange(range);
-      if (!ref || (ref.sheet !== undefined && ref.sheet !== sheet.sheetName)) return notFound();
+      const sheetForRange = this.resolveSheetByRange(sheet, range);
+      if (!sheetForRange) {
+        return c.json({ code: 90215, msg: 'not found sheetId' });
+      }
+      const ref = sheetForRange.ref;
       if (!values.every((row) => Array.isArray(row))) {
         return c.json({ code: 10002, msg: 'values must be a 2-D array' });
       }
@@ -493,7 +540,7 @@ export class MockFeishuServer {
           msg: `values shape (${values.length} x ${values[0]?.length ?? 0}) does not match range "${range}" (${height} x ${width})`,
         });
       }
-      const updated = writeValues(sheet.values, ref, values);
+      const updated = writeValues(sheetForRange.values, ref, values);
       return c.json({
         code: 0,
         msg: 'ok',
@@ -504,6 +551,19 @@ export class MockFeishuServer {
           updatedColumns: updated.updatedColumns,
           updatedCells: updated.updatedCells,
         },
+      });
+    });
+
+    this.app.get('/open-apis/sheets/v3/spreadsheets/:token/sheets/query', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const sheet = this.sheets.get(c.req.param('token'));
+      if (!sheet) return notFound();
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { sheets: [{ sheet_id: sheet.sheetId, title: sheet.sheetName, index: 0 }] },
       });
     });
 
@@ -552,6 +612,24 @@ export class MockFeishuServer {
     });
   }
 
+  /**
+   * Resolves a range's sheet reference: a bare cell range means the first
+   * sheet; a prefixed range must use the SHEET ID (names return the real
+   * API's 90215). Returns the target values + parsed range, or undefined.
+   */
+  private resolveSheetByRange(
+    sheet: { sheetId: string; sheetName: string; values: CellValue[][] },
+    range: string,
+  ): { values: CellValue[][]; ref: RangeRef } | undefined {
+    const ref = parseRange(range);
+    if (!ref) return undefined;
+    if (ref.sheet === undefined) {
+      return { values: sheet.values, ref };
+    }
+    if (ref.sheet !== sheet.sheetId) return undefined;
+    return { values: sheet.values, ref };
+  }
+
   private requireBitableTable(
     appToken: string,
     tableId: string,
@@ -581,32 +659,44 @@ export class MockFeishuServer {
     return undefined;
   }
 
+  /**
+   * The v2 token endpoint's success body (live-verified in the T9 demo
+   * pass): FLAT OAuth-style fields at the top level with a trailing code —
+   * not the {code, msg, data} envelope the mock previously modelled.
+   */
   private tokenEnvelope(): {
+    token_type: string;
+    access_token: string;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    expires_in: number;
     code: number;
-    msg: string;
-    data: {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-      refresh_token_expires_in: number;
-      token_type: string;
-    };
   } {
     const accessToken = `mock_access_${randomUUID()}`;
     const refreshToken = `mock_refresh_${randomUUID()}`;
     this.refreshTokens.set(refreshToken, { active: true });
     this.issuedAccessTokens.add(accessToken);
-    return {
+    const envelope: {
+      token_type: string;
+      access_token: string;
+      refresh_token?: string;
+      refresh_token_expires_in?: number;
+      expires_in: number;
+      code: number;
+    } = {
+      token_type: 'Bearer',
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: Math.floor(this.accessTokenTtlMs / 1000),
+      refresh_token_expires_in: Math.floor(this.refreshTokenTtlMs / 1000),
       code: 0,
-      msg: 'ok',
-      data: {
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        expires_in: Math.floor(this.accessTokenTtlMs / 1000),
-        refresh_token_expires_in: Math.floor(this.refreshTokenTtlMs / 1000),
-        token_type: 'Bearer',
-      },
     };
+    if (this.omitRefreshTokenArmed) {
+      this.omitRefreshTokenArmed = false;
+      delete envelope.refresh_token;
+      delete envelope.refresh_token_expires_in;
+    }
+    return envelope;
   }
 }
 

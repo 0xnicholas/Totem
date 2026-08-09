@@ -32,8 +32,9 @@ import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js'
 
 export const FAKE_CONNECTOR_ID = 'fake';
 
-/** A spreadsheet inside the fake connector (T9): one named sheet. */
+/** A spreadsheet inside the fake connector (T9): one sheet, id + name. */
 export interface FakeSheet {
+  sheetId: string;
   sheetName: string;
   values: CellValue[][];
 }
@@ -120,7 +121,7 @@ export class FakeConnector implements IConnector {
       ...(args.folder_id !== undefined ? { folder_id: args.folder_id } : {}),
     };
     this.docs.set(doc_id, doc);
-    return { doc_id, title: doc.title, url: `https://fake.totem.local/docs/${doc_id}` };
+    return { doc_id, title: doc.title };
   }
 
   private searchDocs(args: SearchDocsInput): SearchDocsOutput {
@@ -196,13 +197,13 @@ export class FakeConnector implements IConnector {
 
   private readSheetCells(args: ReadSheetCellsInput): ReadSheetCellsOutput {
     const doc = this.requireSheet(args.doc_id);
-    const ref = this.parseSheetRange(doc, args.range);
+    const ref = this.parseSheetRange(doc, args);
     return { doc_id: doc.doc_id, range: args.range, values: sliceValues(doc.sheet.values, ref) };
   }
 
   private writeSheetCells(args: WriteSheetCellsInput): WriteSheetCellsOutput {
     const doc = this.requireSheet(args.doc_id);
-    const ref = this.parseSheetRange(doc, args.range);
+    const ref = this.parseSheetRange(doc, args);
     const height = ref.rowEnd - ref.rowStart + 1;
     const width = ref.colEnd - ref.colStart + 1;
     if (args.values.length !== height || args.values.some((row) => row.length !== width)) {
@@ -220,13 +221,21 @@ export class FakeConnector implements IConnector {
   }
 
   /**
-   * Mirrors the mock's pinned sheet contract (10662 family → not_found):
-   * unknown sheet names and malformed ranges are resource-level failures.
+   * Mirrors the pinned sheet contract (live-verified): sheet_name selects
+   * the tab (unknown → not_found), the range is a bare cell range, and a
+   * prefixed range must carry the SHEET ID (names are rejected, like the
+   * real API's 90215).
    */
-  private parseSheetRange(doc: FakeDoc & { sheet: FakeSheet }, range: string): RangeRef {
-    const ref = parseRange(range);
-    if (!ref || (ref.sheet !== undefined && ref.sheet !== doc.sheet.sheetName)) {
-      throw new ActionError('not_found', `Spreadsheet range "${range}" not found`);
+  private parseSheetRange(
+    doc: FakeDoc & { sheet: FakeSheet },
+    args: { sheet_name?: string; range: string },
+  ): RangeRef {
+    if (args.sheet_name !== undefined && args.sheet_name !== doc.sheet.sheetName) {
+      throw new ActionError('not_found', `Sheet "${args.sheet_name}" not found`);
+    }
+    const ref = parseRange(args.range);
+    if (!ref || (ref.sheet !== undefined && ref.sheet !== doc.sheet.sheetId)) {
+      throw new ActionError('not_found', `Spreadsheet range "${args.range}" not found`);
     }
     return ref;
   }

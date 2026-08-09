@@ -15,7 +15,7 @@ function makeRecordingConnector(calls: string[]): IConnector {
   const createDocHandler: ActionHandler = (args) => {
     calls.push('create_doc');
     const title = (args as { title: string }).title;
-    return { doc_id: 'doc_1', title, url: 'https://fake.totem.local/docs/doc_1' };
+    return { doc_id: 'doc_1', title };
   };
   return {
     manifest: { id: RECORDING_CONNECTOR_ID, implements: ['create_doc'] },
