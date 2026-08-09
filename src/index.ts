@@ -3,10 +3,12 @@ export { DOCS_ACTIONS } from './actions.js';
 export type {
   CreateDocInput,
   CreateDocOutput,
-  ListDocsInput,
-  ListDocsOutput,
-  ReadDocInput,
-  ReadDocOutput,
+  GetDocContentInput,
+  GetDocContentOutput,
+  GetDocMetadataInput,
+  GetDocMetadataOutput,
+  SearchDocsInput,
+  SearchDocsOutput,
 } from './actions.js';
 export type { ConnectorManifest, IConnector } from './connector.js';
 export { ACTION_ERROR_CODES, ActionError, isActionError } from './errors.js';
@@ -26,6 +28,7 @@ export { decryptValue, deriveTenantKey, encryptValue, isCiphertext } from './fei
 export type { FeishuAppCredentials, FeishuCredsStore } from './feishu/creds-store.js';
 export { PostgresFeishuCredsStore } from './feishu/pg-creds-store.js';
 export { FeishuApiError, createFeishuOAuthClient } from './feishu/oauth.js';
+export { FeishuConnector, mapFeishuError } from './feishu/connector.js';
 export type { FeishuOAuthClient, TokenPair } from './feishu/oauth.js';
 export type { StoredTokens, TokenStore } from './feishu/token-store.js';
 export { PostgresTokenStore } from './feishu/pg-token-store.js';
@@ -35,7 +38,7 @@ export type { ConnectionStateStore, TokenProvider } from './feishu/token-manager
 export { FlowError, createOAuthFlow } from './feishu/flow.js';
 export type { ConnectionCreator, OAuthFlow } from './feishu/flow.js';
 export { MockFeishuServer } from './testing/mock-feishu-server.js';
-export type { MockFeishuServerOptions } from './testing/mock-feishu-server.js';
+export type { MockFeishuDoc, MockFeishuServerOptions } from './testing/mock-feishu-server.js';
 export {
   InMemoryConnectionStateStore,
   InMemoryFeishuCredsStore,

@@ -38,16 +38,19 @@ describe('executeAction (Seam A)', () => {
     if (!created.ok) return;
     const { doc_id } = created.output as CreateDocOutput;
 
-    const read = await executor.executeAction(TENANT_A, CONN_1, 'read_doc', { doc_id });
+    const read = await executor.executeAction(TENANT_A, CONN_1, 'get_doc_content', { doc_id });
     expect(read).toMatchObject({
       ok: true,
-      output: { doc_id, title: 'Q3 planning', content: 'Draft outline' },
+      output: { doc_id, content: 'Draft outline' },
     });
 
-    const listed = await executor.executeAction(TENANT_A, CONN_1, 'list_docs', { limit: 10 });
-    expect(listed).toMatchObject({ ok: true });
-    if (listed.ok) {
-      expect(listed.output).toMatchObject({ docs: [{ doc_id, title: 'Q3 planning' }] });
+    const searched = await executor.executeAction(TENANT_A, CONN_1, 'search_docs', {
+      query: 'Q3',
+      limit: 10,
+    });
+    expect(searched).toMatchObject({ ok: true });
+    if (searched.ok) {
+      expect(searched.output).toMatchObject({ docs: [{ doc_id, title: 'Q3 planning' }] });
     }
   });
 
@@ -134,7 +137,10 @@ describe('executeAction (Seam A)', () => {
 
     it('returns validation_error for out-of-range numeric properties', async () => {
       const executor = makeExecutor();
-      const result = await executor.executeAction(TENANT_A, CONN_1, 'list_docs', { limit: 0 });
+      const result = await executor.executeAction(TENANT_A, CONN_1, 'search_docs', {
+        query: 'q',
+        limit: 0,
+      });
 
       expect(result.ok).toBe(false);
       if (result.ok) return;
@@ -163,19 +169,21 @@ describe('executeAction (Seam A)', () => {
         connections: [{ ...CONN_1_A, connectorId: 'partial' }],
       });
 
-      const result = await executor.executeAction(TENANT_A, CONN_1, 'read_doc', {
+      const result = await executor.executeAction(TENANT_A, CONN_1, 'get_doc_content', {
         doc_id: 'doc_x',
       });
 
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.code).toBe('action_not_found');
-      expect(result.error.message).toBe('Action "read_doc" is not available on connection "conn-1"');
+      expect(result.error.message).toBe(
+        'Action "get_doc_content" is not available on connection "conn-1"',
+      );
     });
 
     it('passes through a connector-emitted not_found error, with the cause in the message', async () => {
       const executor = makeExecutor();
-      const result = await executor.executeAction(TENANT_A, CONN_1, 'read_doc', {
+      const result = await executor.executeAction(TENANT_A, CONN_1, 'get_doc_content', {
         doc_id: 'doc_nope',
       });
 

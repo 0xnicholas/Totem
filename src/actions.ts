@@ -13,22 +13,38 @@ export interface CreateDocOutput {
   url: string;
 }
 
-export interface ReadDocInput {
-  doc_id: string;
-}
-
-export interface ReadDocOutput {
-  doc_id: string;
-  title: string;
-  content: string;
-}
-
-export interface ListDocsInput {
+export interface SearchDocsInput {
+  /** Free-text query; matches document titles. */
+  query: string;
+  /** Max result count (1–100, default 50). */
   limit?: number;
 }
 
-export interface ListDocsOutput {
-  docs: Array<{ doc_id: string; title: string }>;
+export interface SearchDocsOutput {
+  docs: Array<{ doc_id: string; title: string; doc_type: string }>;
+}
+
+export interface GetDocContentInput {
+  doc_id: string;
+}
+
+export interface GetDocContentOutput {
+  doc_id: string;
+  /** The document's full content as plain text (markdown-style headings preserved). */
+  content: string;
+}
+
+export interface GetDocMetadataInput {
+  doc_id: string;
+}
+
+export interface GetDocMetadataOutput {
+  doc_id: string;
+  title: string;
+  owner_id: string;
+  doc_type: string;
+  /** ISO timestamp of the last edit. */
+  edited_at: string;
 }
 
 const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
@@ -53,36 +69,17 @@ const createDocOutputSchema: JSONSchemaType<CreateDocOutput> = {
   required: ['doc_id', 'title', 'url'],
 };
 
-const readDocInputSchema: JSONSchemaType<ReadDocInput> = {
+const searchDocsInputSchema: JSONSchemaType<SearchDocsInput> = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    doc_id: { type: 'string' },
-  },
-  required: ['doc_id'],
-};
-
-const readDocOutputSchema: JSONSchemaType<ReadDocOutput> = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    doc_id: { type: 'string' },
-    title: { type: 'string' },
-    content: { type: 'string' },
-  },
-  required: ['doc_id', 'title', 'content'],
-};
-
-const listDocsInputSchema: JSONSchemaType<ListDocsInput> = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
+    query: { type: 'string', minLength: 1 },
     limit: { type: 'integer', nullable: true, minimum: 1, maximum: 100 },
   },
-  required: [],
+  required: ['query'],
 };
 
-const listDocsOutputSchema: JSONSchemaType<ListDocsOutput> = {
+const searchDocsOutputSchema: JSONSchemaType<SearchDocsOutput> = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -94,12 +91,45 @@ const listDocsOutputSchema: JSONSchemaType<ListDocsOutput> = {
         properties: {
           doc_id: { type: 'string' },
           title: { type: 'string' },
+          doc_type: { type: 'string' },
         },
-        required: ['doc_id', 'title'],
+        required: ['doc_id', 'title', 'doc_type'],
       },
     },
   },
   required: ['docs'],
+};
+
+const docIdInputSchema: JSONSchemaType<{ doc_id: string }> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+  },
+  required: ['doc_id'],
+};
+
+const getDocContentOutputSchema: JSONSchemaType<GetDocContentOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    content: { type: 'string' },
+  },
+  required: ['doc_id', 'content'],
+};
+
+const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    title: { type: 'string' },
+    owner_id: { type: 'string' },
+    doc_type: { type: 'string' },
+    edited_at: { type: 'string' },
+  },
+  required: ['doc_id', 'title', 'owner_id', 'doc_type', 'edited_at'],
 };
 
 /**
@@ -119,16 +149,29 @@ export const DOCS_ACTIONS: Action[] = [
     outputSchema: createDocOutputSchema,
   },
   {
-    name: 'read_doc',
-    description: "Read a document's title and content by its opaque doc_id.",
-    inputSchema: readDocInputSchema,
-    outputSchema: readDocOutputSchema,
+    name: 'search_docs',
+    description:
+      "Search the tenant's documents by a text query (matches titles) and return matching " +
+      'documents with their opaque doc_id, title and type. ' +
+      'Cap the result count with limit (1–100, default 50).',
+    inputSchema: searchDocsInputSchema,
+    outputSchema: searchDocsOutputSchema,
   },
   {
-    name: 'list_docs',
+    name: 'get_doc_content',
     description:
-      'List documents, most recently created first. Limit the result count with limit (1–100).',
-    inputSchema: listDocsInputSchema,
-    outputSchema: listDocsOutputSchema,
+      "Read a document's full content by its opaque doc_id. Content is returned as plain " +
+      'text with markdown-style headings preserved — ideal for summarising or quoting. ' +
+      'Use get_doc_metadata for title, owner and type.',
+    inputSchema: docIdInputSchema,
+    outputSchema: getDocContentOutputSchema,
+  },
+  {
+    name: 'get_doc_metadata',
+    description:
+      "Get a document's metadata by its opaque doc_id: title, owner, document type " +
+      '(docx, sheet, bitable, wiki) and last edit time.',
+    inputSchema: docIdInputSchema,
+    outputSchema: getDocMetadataOutputSchema,
   },
 ];

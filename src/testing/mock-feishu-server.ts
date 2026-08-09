@@ -1,6 +1,16 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
+import { isRecord } from '../admin/util.js';
+
+const INVALID_TOKEN_ENVELOPE = { code: 99991672, msg: 'invalid access token' };
+
+interface ScriptedFailure {
+  code: number;
+  msg: string;
+  httpStatus?: ContentfulStatusCode;
+}
 
 export interface MockFeishuServerOptions {
   appId: string;
@@ -9,6 +19,16 @@ export interface MockFeishuServerOptions {
   accessTokenTtlMs?: number;
   /** Refresh token lifetime issued to clients, in ms. */
   refreshTokenTtlMs?: number;
+}
+
+/** A document in the mock's Feishu drive (T7: docs endpoints). */
+export interface MockFeishuDoc {
+  doc_id: string;
+  title: string;
+  content: string;
+  owner_id: string;
+  doc_type: 'docx' | 'sheet' | 'bitable' | 'wiki';
+  edited_at: string;
 }
 
 /**
@@ -33,7 +53,10 @@ export class MockFeishuServer {
   private readonly refreshTokenTtlMs: number;
   private readonly issuedCodes = new Set<string>();
   private readonly refreshTokens = new Map<string, { active: boolean }>();
-  private scriptedFailure: { code: number; msg: string; httpStatus?: ContentfulStatusCode } | undefined;
+  private readonly issuedAccessTokens = new Set<string>();
+  private readonly docs: MockFeishuDoc[] = [];
+  private scriptedFailure: ScriptedFailure | undefined;
+  private scriptedDocsFailure: ScriptedFailure | undefined;
 
   constructor(private readonly options: MockFeishuServerOptions) {
     this.accessTokenTtlMs = options.accessTokenTtlMs ?? 2 * 60 * 60 * 1000;
@@ -90,6 +113,8 @@ export class MockFeishuServer {
 
       return c.json({ code: 10002, msg: `unsupported grant_type "${grantType}"` });
     });
+
+    this.docsEndpoints();
   }
 
   /**
@@ -115,8 +140,101 @@ export class MockFeishuServer {
   }
 
   /** Scripts one failure for the next refresh_token call. */
-  failNextRefresh(failure: { code: number; msg: string; httpStatus?: ContentfulStatusCode }): void {
+  failNextRefresh(failure: ScriptedFailure): void {
     this.scriptedFailure = failure;
+  }
+
+  /** Replaces the mock's drive contents (T7 docs endpoints). */
+  seedDocs(docs: MockFeishuDoc[]): void {
+    this.docs.length = 0;
+    this.docs.push(...docs.map((doc) => ({ ...doc })));
+  }
+
+  /** Scripts one failure for the next docs endpoint call. */
+  failNextDocs(failure: ScriptedFailure): void {
+    this.scriptedDocsFailure = failure;
+  }
+
+  private docsEndpoints(): void {
+    this.app.post('/open-apis/drive/v1/files/search', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const searchKey =
+        isRecord(body) && typeof body.search_key === 'string' ? body.search_key : '';
+      const pageSize = Number(c.req.query('page_size') ?? 50) || 50;
+      const needle = searchKey.toLowerCase();
+      const files = this.docs
+        .filter((doc) => doc.title.toLowerCase().includes(needle))
+        .sort((a, b) => b.edited_at.localeCompare(a.edited_at))
+        .slice(0, pageSize)
+        .map((doc) => ({
+          token: doc.doc_id,
+          name: doc.title,
+          type: doc.doc_type,
+          url: `https://fake.feishu.local/docx/${doc.doc_id}`,
+          modified_time: doc.edited_at,
+          owner_id: doc.owner_id,
+        }));
+      return c.json({ code: 0, msg: 'ok', data: { files } });
+    });
+
+    this.app.get('/open-apis/docx/v1/documents/:docId/raw_content', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const doc = this.docs.find((d) => d.doc_id === c.req.param('docId'));
+      if (!doc) return c.json({ code: 10662, msg: 'document not found' });
+      return c.json({ code: 0, msg: 'ok', data: { content: doc.content } });
+    });
+
+    this.app.post('/open-apis/drive/v1/metas/batch_query', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const requestDocs =
+        isRecord(body) && Array.isArray(body.request_docs) ? body.request_docs : [];
+      const metas = [];
+      for (const request of requestDocs) {
+        if (!isRecord(request) || typeof request.doc_token !== 'string') continue;
+        const doc = this.docs.find((d) => d.doc_id === request.doc_token);
+        if (!doc) return c.json({ code: 10662, msg: 'document not found' });
+        // Fidelity: the requested doc_type must match the stored doc's type
+        // (the v1 connector asks for docx; anything else fails like the
+        // live API would).
+        if (isRecord(request) && typeof request.doc_type === 'string' && request.doc_type !== doc.doc_type) {
+          return c.json({ code: 10662, msg: 'document not found' });
+        }
+        metas.push({
+          doc_token: doc.doc_id,
+          doc_type: doc.doc_type,
+          title: doc.title,
+          owner_id: doc.owner_id,
+          modified_time: doc.edited_at,
+        });
+      }
+      return c.json({ code: 0, msg: 'ok', data: { metas } });
+    });
+  }
+
+  private authorized(c: Context): boolean {
+    const header = c.req.header('authorization');
+    const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
+    return token !== undefined && this.issuedAccessTokens.has(token);
+  }
+
+  /**
+   * Docs-endpoint prologue: rejects unauthenticated calls and consumes a
+   * scripted failure. Returns a Response to send, or undefined to proceed.
+   */
+  private docsGate(c: Context): Response | undefined {
+    if (!this.authorized(c)) return c.json(INVALID_TOKEN_ENVELOPE);
+    const scripted = this.scriptedDocsFailure;
+    this.scriptedDocsFailure = undefined;
+    if (scripted) return c.json({ code: scripted.code, msg: scripted.msg }, scripted.httpStatus ?? 200);
+    return undefined;
   }
 
   private tokenEnvelope(): {
@@ -133,6 +251,7 @@ export class MockFeishuServer {
     const accessToken = `mock_access_${randomUUID()}`;
     const refreshToken = `mock_refresh_${randomUUID()}`;
     this.refreshTokens.set(refreshToken, { active: true });
+    this.issuedAccessTokens.add(accessToken);
     return {
       code: 0,
       msg: 'ok',

@@ -174,17 +174,17 @@ describe('admin API (HTTP boundary)', () => {
 
     const first = await adminFetch('/admin/connections/conn-1/allowlist', {
       method: 'PUT',
-      body: JSON.stringify({ actions: ['create_doc', 'read_doc'] }),
+      body: JSON.stringify({ actions: ['create_doc', 'get_doc_content'] }),
     });
     expect(first.status).toBe(200);
 
     // Replace, not append.
     const second = await adminFetch('/admin/connections/conn-1/allowlist', {
       method: 'PUT',
-      body: JSON.stringify({ actions: ['list_docs'] }),
+      body: JSON.stringify({ actions: ['search_docs'] }),
     });
     expect(second.status).toBe(200);
-    expect(repo.listAllowlist('conn-1')).toEqual(['list_docs']);
+    expect(repo.listAllowlist('conn-1')).toEqual(['search_docs']);
 
     const unknown = await adminFetch('/admin/connections/conn-nope/allowlist', {
       method: 'PUT',

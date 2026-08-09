@@ -1,5 +1,14 @@
 import type { ActionContext, ActionHandler } from '../action.js';
-import type { CreateDocInput, CreateDocOutput, ListDocsInput, ListDocsOutput, ReadDocInput, ReadDocOutput } from '../actions.js';
+import type {
+  CreateDocInput,
+  CreateDocOutput,
+  GetDocContentInput,
+  GetDocContentOutput,
+  GetDocMetadataInput,
+  GetDocMetadataOutput,
+  SearchDocsInput,
+  SearchDocsOutput,
+} from '../actions.js';
 import type { ConnectorManifest, IConnector } from '../connector.js';
 import { ActionError } from '../errors.js';
 
@@ -24,7 +33,7 @@ export interface FakeDoc {
 export class FakeConnector implements IConnector {
   readonly manifest: ConnectorManifest = {
     id: FAKE_CONNECTOR_ID,
-    implements: ['create_doc', 'read_doc', 'list_docs'],
+    implements: ['create_doc', 'search_docs', 'get_doc_content', 'get_doc_metadata'],
   };
 
   private readonly docs = new Map<string, FakeDoc>();
@@ -34,8 +43,9 @@ export class FakeConnector implements IConnector {
     for (const doc of initialDocs) this.docs.set(doc.doc_id, { ...doc });
     this.handlers = {
       create_doc: (args: CreateDocInput) => this.createDoc(args),
-      read_doc: (args: ReadDocInput) => this.readDoc(args),
-      list_docs: (args: ListDocsInput) => this.listDocs(args),
+      search_docs: (args: SearchDocsInput) => this.searchDocs(args),
+      get_doc_content: (args: GetDocContentInput) => this.getDocContent(args),
+      get_doc_metadata: (args: GetDocMetadataInput) => this.getDocMetadata(args),
     };
   }
 
@@ -61,21 +71,37 @@ export class FakeConnector implements IConnector {
     return { doc_id, title: doc.title, url: `https://fake.totem.local/docs/${doc_id}` };
   }
 
-  private readDoc(args: ReadDocInput): ReadDocOutput {
+  private searchDocs(args: SearchDocsInput): SearchDocsOutput {
+    const needle = args.query.toLowerCase();
+    const limit = args.limit ?? 50;
+    const docs = [...this.docs.values()]
+      .filter((doc) => doc.title.toLowerCase().includes(needle))
+      .reverse()
+      .slice(0, limit)
+      .map((doc) => ({ doc_id: doc.doc_id, title: doc.title, doc_type: 'docx' }));
+    return { docs };
+  }
+
+  private getDocContent(args: GetDocContentInput): GetDocContentOutput {
     const doc = this.docs.get(args.doc_id);
     if (!doc) {
       // Connector-owned error code (ADR-0005): passed through by executeAction.
       throw new ActionError('not_found', `Document "${args.doc_id}" not found`);
     }
-    return { doc_id: doc.doc_id, title: doc.title, content: doc.content };
+    return { doc_id: doc.doc_id, content: doc.content };
   }
 
-  private listDocs(args: ListDocsInput): ListDocsOutput {
-    const limit = args.limit ?? 50;
-    const docs = [...this.docs.values()]
-      .reverse()
-      .slice(0, limit)
-      .map((doc) => ({ doc_id: doc.doc_id, title: doc.title }));
-    return { docs };
+  private getDocMetadata(args: GetDocMetadataInput): GetDocMetadataOutput {
+    const doc = this.docs.get(args.doc_id);
+    if (!doc) {
+      throw new ActionError('not_found', `Document "${args.doc_id}" not found`);
+    }
+    return {
+      doc_id: doc.doc_id,
+      title: doc.title,
+      owner_id: 'fake-owner',
+      doc_type: 'docx',
+      edited_at: '2026-01-01T00:00:00.000Z',
+    };
   }
 }

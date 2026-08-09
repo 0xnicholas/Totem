@@ -211,6 +211,16 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
 
     // A fresh connection: the revocation test above leaves its connection
     // auth_expired by design, which would make this test's call fail fast.
+    mock.seedDocs([
+      {
+        doc_id: 'e2e-doc',
+        title: 'E2E Strategy',
+        content: '# Strategy\n\nThe unified action layer.',
+        owner_id: 'user-e2e',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
     const { authorizationUrl } = await client.startOAuth(tenantId, REDIRECT_URI);
     const authorize = await fetch(authorizationUrl, { redirect: 'manual' });
     const callback = new URL(authorize.headers.get('location')!);
@@ -219,7 +229,11 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     );
     const { connections } = await client.listConnections(tenantId);
     const connection = connections.find((c) => c.status === 'active')!;
-    await client.setAllowlist(connection.id, ['create_doc', 'read_doc', 'list_docs']);
+    await client.setAllowlist(connection.id, [
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
+    ]);
     const issued = await client.createKey(tenantId, 'actions');
 
     const mcpClient = new Client({ name: 'e2e', version: '0.0.0' }, { capabilities: {} });
@@ -233,17 +247,32 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     });
     await mcpClient.connect(transport);
     try {
+      // The real Feishu connector exposes only its read actions; create_doc
+      // is hidden (not implemented until T8).
       const { tools } = await mcpClient.listTools();
-      expect(tools.map((t) => t.name)).toEqual(['create_doc', 'read_doc', 'list_docs']);
+      expect(tools.map((t) => t.name)).toEqual([
+        'search_docs',
+        'get_doc_content',
+        'get_doc_metadata',
+      ]);
 
       // The call only succeeds if the TokenManager retrieved a valid token
-      // for the OAuth-created connection (encrypted store → refresh path).
-      const created = await mcpClient.callTool({
-        name: 'create_doc',
-        arguments: { title: 'via oauth connection' },
+      // for the OAuth-created connection (encrypted store → refresh path)
+      // and the real connector's Feishu call is accepted by the mock.
+      const searched = await mcpClient.callTool({
+        name: 'search_docs',
+        arguments: { query: 'strategy' },
       });
-      expect(created.isError).toBeUndefined();
-      expect(created.structuredContent).toMatchObject({ title: 'via oauth connection' });
+      expect(searched.isError).toBeUndefined();
+      expect(searched.structuredContent).toMatchObject({
+        docs: [{ doc_id: 'e2e-doc', title: 'E2E Strategy' }],
+      });
+
+      const content = await mcpClient.callTool({
+        name: 'get_doc_content',
+        arguments: { doc_id: 'e2e-doc' },
+      });
+      expect(content.structuredContent).toMatchObject({ doc_id: 'e2e-doc' });
     } finally {
       await mcpClient.close();
     }

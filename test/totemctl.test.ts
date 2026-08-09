@@ -116,16 +116,16 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
     const { io, stdout } = makeHarness(fetchMock);
 
-    const code = await run(['set-allowlist', 'conn-1', 'create_doc', 'read_doc'], io);
+    const code = await run(['set-allowlist', 'conn-1', 'create_doc', 'get_doc_content'], io);
     expect(code).toBe(0);
     expect(fetchMock).toHaveBeenCalledWith(
       'http://api.test/admin/connections/conn-1/allowlist',
       expect.objectContaining({
         method: 'PUT',
-        body: JSON.stringify({ actions: ['create_doc', 'read_doc'] }),
+        body: JSON.stringify({ actions: ['create_doc', 'get_doc_content'] }),
       }),
     );
-    expect(stdout[0]).toBe('Allowlist for connection conn-1: create_doc, read_doc');
+    expect(stdout[0]).toBe('Allowlist for connection conn-1: create_doc, get_doc_content');
   });
 
   it('suspend-connection and resume-connection hit their routes', async () => {

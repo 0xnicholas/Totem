@@ -14,7 +14,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
     const executor = makeExecutor();
 
     const names = executor.listActions().map((a) => a.name).sort();
-    expect(names).toEqual(['create_doc', 'list_docs', 'read_doc']);
+    expect(names).toEqual(['create_doc', 'get_doc_content', 'get_doc_metadata', 'search_docs']);
   });
 
   it('rejects a duplicate action name', () => {

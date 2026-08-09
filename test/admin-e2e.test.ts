@@ -74,7 +74,7 @@ describe.runIf(hasDb)('admin API end to end', () => {
         [tenant.id, tenant.id],
       )
     ).rows[0] as { id: string };
-    await operator.setAllowlist(connection.id, ['create_doc', 'read_doc']);
+    await operator.setAllowlist(connection.id, ['create_doc', 'get_doc_content']);
     await operator.suspendConnection(connection.id);
 
     const allowlist = (
@@ -83,7 +83,7 @@ describe.runIf(hasDb)('admin API end to end', () => {
         [connection.id],
       )
     ).rows;
-    expect(allowlist.map((r) => r.action_name).sort()).toEqual(['create_doc', 'read_doc']);
+    expect(allowlist.map((r) => r.action_name).sort()).toEqual(['create_doc', 'get_doc_content']);
 
     const status = (
       await pool.query<{ status: string }>('SELECT status FROM connections WHERE id = $1', [connection.id])

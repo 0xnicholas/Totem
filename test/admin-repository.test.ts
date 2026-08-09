@@ -74,8 +74,8 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
     const tenant = await repo.createTenant('allowlist-tenant');
     const connection = await seedConnection(pool, tenant.id, 'conn-repo-1');
 
-    await repo.setAllowlist(connection.id, ['create_doc', 'read_doc']);
-    await repo.setAllowlist(connection.id, ['list_docs']);
+    await repo.setAllowlist(connection.id, ['create_doc', 'get_doc_content']);
+    await repo.setAllowlist(connection.id, ['search_docs']);
 
     const rows = (
       await pool.query<{ action_name: string }>(
@@ -83,7 +83,7 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
         connection.id,
       ])
     ).rows;
-    expect(rows).toEqual([{ action_name: 'list_docs' }]);
+    expect(rows).toEqual([{ action_name: 'search_docs' }]);
 
     const audits = await repo.queryAudit(tenant.id, { action: 'admin.allowlist_updated' });
     expect(audits[0]).toMatchObject({
@@ -93,7 +93,7 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
       success: true,
     });
     expect(audits[0]?.paramHash).toBe(
-      auditParamHash({ connectionId: connection.id, actions: ['list_docs'] }),
+      auditParamHash({ connectionId: connection.id, actions: ['search_docs'] }),
     );
 
     await expect(repo.setAllowlist('00000000-0000-0000-0000-000000000000', [])).rejects.toThrow(

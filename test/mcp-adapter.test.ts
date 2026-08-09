@@ -25,16 +25,21 @@ describe('McpAdapter', () => {
     // Default harness allowlist permits every registered action, and the
     // fake connector implements all of them: the full registry is exposed.
     const all = await adapter.listTools(TENANT_A, CONN_1);
-    expect(all.map((t) => t.name)).toEqual(['create_doc', 'read_doc', 'list_docs']);
+    expect(all.map((t) => t.name)).toEqual([
+      'create_doc',
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
+    ]);
     const createDoc = all.find((t) => t.name === 'create_doc');
     expect(createDoc?.description).toBeTruthy();
     expect(createDoc?.inputSchema).toMatchObject({ type: 'object' });
 
     // An allowlist subset hides the rest — the agent never sees tools it
     // cannot use.
-    allowlists.setAllowed(TENANT_A, CONN_1, ['read_doc']);
+    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
     await expect(adapter.listTools(TENANT_A, CONN_1)).resolves.toEqual([
-      expect.objectContaining({ name: 'read_doc' }),
+      expect.objectContaining({ name: 'get_doc_content' }),
     ]);
   });
 
@@ -92,7 +97,7 @@ describe('McpAdapter', () => {
     await expect(adapter.getTool(TENANT_A, CONN_1, 'create_doc')).resolves.toMatchObject({
       name: 'create_doc',
     });
-    await expect(adapter.getTool(TENANT_A, CONN_1, 'read_doc')).resolves.toBeUndefined();
+    await expect(adapter.getTool(TENANT_A, CONN_1, 'get_doc_content')).resolves.toBeUndefined();
     await expect(adapter.getTool(TENANT_A, 'conn-unknown', 'create_doc')).resolves.toBeUndefined();
   });
 
@@ -119,7 +124,7 @@ describe('McpAdapter', () => {
 
   it('callTool preserves the unified vocabulary when the allowlist denies (defense in depth)', async () => {
     const { executor, allowlists, audit } = makeHarness();
-    allowlists.setAllowed(TENANT_A, CONN_1, ['read_doc']);
+    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
     const adapter = new McpAdapter(executor, allowlists);
 
     const result = await adapter.callTool(TENANT_A, CONN_1, 'create_doc', { title: 'nope' });

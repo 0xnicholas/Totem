@@ -52,7 +52,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
 
     await pool.query(
       `INSERT INTO allowlists (tenant_id, connection_id, action_name)
-       VALUES ($1, $2, 'create_doc'), ($1, $2, 'read_doc')`,
+       VALUES ($1, $2, 'create_doc'), ($1, $2, 'get_doc_content')`,
       [tenantId, connectionId],
     );
 
@@ -93,7 +93,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
     const client = await connectedClient(plaintextKey);
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(['create_doc', 'read_doc']);
+      expect(tools.map((t) => t.name)).toEqual(['create_doc', 'get_doc_content']);
     } finally {
       await client.close();
     }
@@ -128,9 +128,9 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
     const client = await connectedClient(plaintextKey);
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).not.toContain('list_docs');
+      expect(tools.map((t) => t.name)).not.toContain('search_docs');
       await expect(
-        client.callTool({ name: 'list_docs', arguments: {} }),
+        client.callTool({ name: 'search_docs', arguments: { query: 'q' } }),
       ).rejects.toMatchObject({ code: -32602 });
     } finally {
       await client.close();

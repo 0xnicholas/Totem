@@ -1,9 +1,8 @@
 import { Hono } from 'hono';
 import pg from 'pg';
-import type { ActionContext } from '../action.js';
-import type { IConnector } from '../connector.js';
 import { createAdminApp } from '../admin/server.js';
 import { PostgresAdminRepository } from '../admin/pg-repo.js';
+import { FeishuConnector } from '../feishu/connector.js';
 import { encryptValue } from '../feishu/crypto.js';
 import { createOAuthFlow } from '../feishu/flow.js';
 import { createFeishuOAuthClient } from '../feishu/oauth.js';
@@ -14,7 +13,6 @@ import { TokenManager } from '../feishu/token-manager.js';
 import { DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditSink } from '../pg-governance.js';
-import { FakeConnector } from '../testing/fake-connector.js';
 
 export interface ServerEnv {
   /** Master key for per-tenant secret encryption (TOTEM_TOKEN_ENC_KEY). */
@@ -37,7 +35,8 @@ export interface ServerEnv {
 export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   const repo = new PostgresAdminRepository(pool);
   const masterKey = env.masterKey;
-  const oauth = createFeishuOAuthClient(env.feishuBaseUrl ?? 'https://open.feishu.cn');
+  const feishuBaseUrl = env.feishuBaseUrl ?? 'https://open.feishu.cn';
+  const oauth = createFeishuOAuthClient(feishuBaseUrl);
 
   const credsStore = new PostgresFeishuCredsStore(pool, masterKey);
   const tokenStore = new PostgresTokenStore(pool);
@@ -50,12 +49,9 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   });
   const flow = createOAuthFlow({ credsStore, tokenStore, oauth, connections: repo, masterKey });
 
-  // v1 ships exactly one connector implementation: the in-memory fake used
-  // for local demos and the integration story. It is registered under the
-  // Feishu connector id so connections created by the OAuth flow can
-  // execute through the whole stack; T7-T9 replace this wrapper with the
-  // real Feishu Docs connector, and the wiring below does not change.
-  const connectors: IConnector[] = [new FeishuDocsConnector()];
+  // The real Feishu Docs connector (T7): read actions live; T8-T9 add the
+  // write/export/sheet/bitable actions to this same connector.
+  const connectors = [new FeishuConnector(feishuBaseUrl)];
   const allowlists = new PostgresAllowlistStore(pool);
 
   // The executor resolves connections live from Postgres, so connections
@@ -93,18 +89,4 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     return c.json({ error: 'internal_error' }, 500);
   });
   return app;
-}
-
-/**
- * Temporary v1 stand-in: the in-memory fake connector exposed under the
- * `feishu_docs` connector id, so OAuth-created connections work end to end
- * until the real Feishu connector lands (T7-T9).
- */
-class FeishuDocsConnector implements IConnector {
-  readonly manifest = { id: 'feishu_docs', implements: ['create_doc', 'read_doc', 'list_docs'] };
-  private readonly inner = new FakeConnector();
-
-  execute(action: string, args: unknown, ctx: ActionContext): Promise<unknown> {
-    return this.inner.execute(action, args, ctx);
-  }
 }

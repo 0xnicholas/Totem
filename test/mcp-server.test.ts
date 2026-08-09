@@ -155,7 +155,12 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
     expect(listed.status).toBe(200);
     expect(rpcResult(listed.payload as never)).toMatchObject({
       result: {
-        tools: [{ name: 'create_doc' }, { name: 'read_doc' }, { name: 'list_docs' }],
+        tools: [
+          { name: 'create_doc' },
+          { name: 'search_docs' },
+          { name: 'get_doc_content' },
+          { name: 'get_doc_metadata' },
+        ],
       },
     });
 
@@ -199,7 +204,12 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
     }, { authorization: `Bearer ${ACTION_KEY}`, 'x-connection-id': CONN_1 });
     const called = await rpc(
       server.app,
-      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read_doc', arguments: { doc_id: 'x' } } },
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'get_doc_content', arguments: { doc_id: 'x' } },
+      },
       { authorization: `Bearer ${ACTION_KEY}`, 'x-connection-id': CONN_1, 'mcp-session-id': init.sessionId! },
     );
     expect(rpcResult(called.payload as never)).toMatchObject({ error: { code: -32602 } });
@@ -268,16 +278,27 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
     const client = await connectedClient(ACTION_KEY);
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name)).toEqual(['create_doc', 'read_doc', 'list_docs']);
+      expect(tools.map((t) => t.name)).toEqual([
+        'create_doc',
+        'search_docs',
+        'get_doc_content',
+        'get_doc_metadata',
+      ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
 
-      const created = await client.callTool({ name: 'create_doc', arguments: { title: 'via sdk client' } });
+      const created = await client.callTool({
+        name: 'create_doc',
+        arguments: { title: 'via sdk client', content: 'Body from the SDK client.' },
+      });
       expect(created.isError).toBeUndefined();
       expect(created.structuredContent).toMatchObject({ title: 'via sdk client' });
       const docId = (created.structuredContent as { doc_id: string }).doc_id;
 
-      const read = await client.callTool({ name: 'read_doc', arguments: { doc_id: docId } });
-      expect(read.structuredContent).toMatchObject({ doc_id: docId, title: 'via sdk client' });
+      const read = await client.callTool({ name: 'get_doc_content', arguments: { doc_id: docId } });
+      expect(read.structuredContent).toMatchObject({
+        doc_id: docId,
+        content: 'Body from the SDK client.',
+      });
     } finally {
       await client.close();
     }
@@ -306,12 +327,12 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
   });
 
   it('passes connector-mapped vocabulary errors through with their retryable flag', async () => {
-    // read_doc on a missing document is a connector-owned `not_found`
+    // get_doc_content on a missing document is a connector-owned `not_found`
     // (ADR-0005) thrown by the fake connector — it must survive the wire
     // as an isError result with the full vocabulary intact.
     const client = await connectedClient(ACTION_KEY);
     try {
-      const missing = await client.callTool({ name: 'read_doc', arguments: { doc_id: 'doc_nope' } });
+      const missing = await client.callTool({ name: 'get_doc_content', arguments: { doc_id: 'doc_nope' } });
       expect(missing.isError).toBe(true);
       const missingText = (missing.content as Array<{ type: string; text?: string }>)[0]?.text ?? '';
       expect(missingText).toContain('"code":"not_found"');
@@ -329,7 +350,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
 
       // ADR-0002 hide-don't-reject: the tool disappears from the contract;
       // calling it is a stale-client error, never an execution attempt.
-      harness.allowlists.setAllowed(TENANT_A, CONN_1, ['read_doc']);
+      harness.allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
       await expect(
         client.callTool({ name: 'create_doc', arguments: { title: 'x' } }),
       ).rejects.toMatchObject({ code: -32602 });
@@ -343,8 +364,9 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
     // full allowlist so this test's call executes.
     harness.allowlists.setAllowed(TENANT_A, CONN_1, [
       'create_doc',
-      'read_doc',
-      'list_docs',
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
     ]);
     const client = await connectedClient(ACTION_KEY);
     const before = harness.audit.list().length;

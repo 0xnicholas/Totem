@@ -59,7 +59,7 @@ describe('governance at Seam A (allowlist + audit)', () => {
       connectors: [makeRecordingConnector(calls)],
       connections: [recordingConnection(TENANT_A, CONN_1)],
     });
-    allowlists.setAllowed(TENANT_A, CONN_1, ['list_docs']);
+    allowlists.setAllowed(TENANT_A, CONN_1, ['search_docs']);
 
     const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' });
 
@@ -135,13 +135,15 @@ describe('governance at Seam A (allowlist + audit)', () => {
 
   it('audits a handler failure with the mapped error code', async () => {
     const { executor, audit } = makeHarness();
-    const result = await executor.executeAction(TENANT_A, CONN_1, 'read_doc', { doc_id: 'nope' });
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'get_doc_content', {
+      doc_id: 'nope',
+    });
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe('not_found');
     expect(audit.list()[0]).toMatchObject({
-      actionName: 'read_doc',
+      actionName: 'get_doc_content',
       success: false,
       errorCode: 'not_found',
     });

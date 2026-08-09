@@ -1,0 +1,220 @@
+import type { ActionContext, ActionHandler } from '../action.js';
+import type {
+  GetDocContentInput,
+  GetDocContentOutput,
+  GetDocMetadataInput,
+  GetDocMetadataOutput,
+  SearchDocsInput,
+  SearchDocsOutput,
+} from '../actions.js';
+import type { IConnector } from '../connector.js';
+import { ActionError } from '../errors.js';
+import { FeishuApiError } from './oauth.js';
+
+/**
+ * Feishu error-code families (T7). The mock pins these codes as the v1
+ * contract; they approximate Feishu's real codes (10662 document-not-found
+ * family, 99991672 invalid token, 99991400 rate limit) and should be
+ * verified against the live API when the connector goes live (T7 review).
+ */
+const NOT_FOUND_CODES = new Set([10662]);
+const TOKEN_REJECTED_CODES = new Set([99991672]);
+const RATE_LIMIT_CODES = new Set([99991400]);
+
+/**
+ * Maps a Feishu Docs API failure into the unified error vocabulary
+ * (ADR-0005). The connector owns `not_found`, `rate_limited` and
+ * `upstream_error`, and signals `auth_expired` when Feishu rejects the
+ * access token mid-call (refresh failures are caught earlier, in the
+ * orchestration layer per ADR-0004). Permission failures and everything
+ * else surface as `upstream_error` with the original code preserved in
+ * `upstream` for diagnostics — the vocabulary has no better fit.
+ */
+export function mapFeishuError(err: FeishuApiError): ActionError {
+  // Rate limits arrive as HTTP 429 and sometimes as a 200 envelope with
+  // the rate-limit code; both map to rate_limited.
+  if (err.httpStatus === 429 || RATE_LIMIT_CODES.has(err.code)) {
+    return new ActionError('rate_limited', `Feishu rate limited: ${err.message}`);
+  }
+  if (TOKEN_REJECTED_CODES.has(err.code)) {
+    return new ActionError('auth_expired', `Feishu rejected the access token: ${err.message}`);
+  }
+  if (NOT_FOUND_CODES.has(err.code)) {
+    return new ActionError('not_found', `Document not found: ${err.message}`, {
+      upstream: { code: String(err.code), message: err.message },
+    });
+  }
+  return new ActionError('upstream_error', `Feishu Docs API error (${err.code}): ${err.message}`, {
+    upstream: { code: String(err.code), message: err.message },
+  });
+}
+
+/**
+ * The real Feishu Docs connector (T7): a pure translator per ADR-0003 —
+ * unified args → Feishu request, Feishu response → unified output, Feishu
+ * errors → the unified vocabulary. It receives an already-valid access
+ * token in `ActionContext.token` (ADR-0004) and never touches the
+ * database, governance, or config stores.
+ */
+export class FeishuConnector implements IConnector {
+  readonly manifest = {
+    id: 'feishu_docs',
+    implements: ['search_docs', 'get_doc_content', 'get_doc_metadata'],
+  };
+
+  private readonly handlers: Record<string, ActionHandler>;
+
+  constructor(private readonly baseUrl: string) {
+    this.handlers = {
+      search_docs: async (args: SearchDocsInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<SearchFilesData>(
+          this.baseUrl,
+          '/open-apis/drive/v1/files/search',
+          {
+            method: 'POST',
+            token: ctx.token,
+            query: { page_size: String(input.limit ?? 50) },
+            body: { search_key: input.query },
+          },
+        );
+        const output: SearchDocsOutput = {
+          docs: response.data.files.map((file) => ({
+            doc_id: file.token,
+            title: file.name,
+            doc_type: file.type,
+          })),
+        };
+        return output;
+      },
+
+      get_doc_content: async (args: GetDocContentInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<RawContentData>(
+          this.baseUrl,
+          `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/raw_content`,
+          { token: ctx.token },
+        );
+        const output: GetDocContentOutput = {
+          doc_id: input.doc_id,
+          content: response.data.content,
+        };
+        return output;
+      },
+
+      get_doc_metadata: async (args: GetDocMetadataInput, ctx) => {
+        const input = args;
+        // v1 boundary: the docs actions address Feishu docx documents — the
+        // opaque doc_id carries no type, so non-docx metadata (sheets,
+        // bitables) fails on the live API until T9's dedicated actions.
+        const response = await docsRequest<MetasData>(
+          this.baseUrl,
+          '/open-apis/drive/v1/metas/batch_query',
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: { request_docs: [{ doc_token: input.doc_id, doc_type: 'docx' }] },
+          },
+        );
+        const meta = response.data.metas[0]!;
+        const output: GetDocMetadataOutput = {
+          doc_id: meta.doc_token,
+          title: meta.title,
+          owner_id: meta.owner_id,
+          doc_type: meta.doc_type,
+          edited_at: meta.modified_time,
+        };
+        return output;
+      },
+    };
+  }
+
+  execute(action: string, args: unknown, ctx: ActionContext): Promise<unknown> {
+    const handler = this.handlers[action];
+    if (!handler) {
+      // Unreachable through the executor (implements check); defensive for
+      // direct misuse. A plain error becomes upstream_error at Seam A.
+      return Promise.reject(new Error(`Action "${action}" is not implemented by feishu_docs`));
+    }
+    return Promise.resolve(handler(args, ctx));
+  }
+}
+
+interface DocsEnvelope<T> {
+  code: number;
+  msg?: string;
+  data: T;
+}
+
+interface SearchFilesData {
+  files: Array<{ token: string; name: string; type: string }>;
+}
+
+interface RawContentData {
+  content: string;
+}
+
+interface MetasData {
+  metas: Array<{
+    doc_token: string;
+    doc_type: string;
+    title: string;
+    owner_id: string;
+    modified_time: string;
+  }>;
+}
+
+/**
+ * One Feishu Docs API call: Bearer auth with the connection's token,
+ * envelope parsing, and vocabulary mapping of every failure. Network and
+ * non-envelope failures are upstream errors — Feishu told us nothing.
+ */
+async function docsRequest<T>(
+  baseUrl: string,
+  path: string,
+  opts: { method?: 'GET' | 'POST'; token?: string; query?: Record<string, string>; body?: unknown },
+): Promise<DocsEnvelope<T>> {
+  const url = new URL(`${baseUrl}${path}`);
+  for (const [key, value] of Object.entries(opts.query ?? {})) {
+    url.searchParams.set(key, value);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: opts.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${opts.token ?? ''}`,
+        ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch (err) {
+    throw new ActionError(
+      'upstream_error',
+      `Feishu Docs API unreachable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  let envelope: DocsEnvelope<never>;
+  try {
+    envelope = (await response.json()) as DocsEnvelope<never>;
+  } catch {
+    throw new ActionError(
+      'upstream_error',
+      `Feishu Docs API returned non-JSON (HTTP ${response.status})`,
+    );
+  }
+
+  if (envelope.code !== 0) {
+    throw mapFeishuError(
+      new FeishuApiError(
+        envelope.code ?? 0,
+        envelope.msg ?? `Feishu Docs API error (HTTP ${response.status})`,
+        response.status,
+        false,
+      ),
+    );
+  }
+  return envelope;
+}

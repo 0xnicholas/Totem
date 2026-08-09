@@ -51,13 +51,13 @@ describe.runIf(hasDb)('governance stores (Postgres)', () => {
     const b = await seedTenantAndConnection('al-b');
 
     await pool.query(
-      `INSERT INTO allowlists (tenant_id, connection_id, action_name) VALUES ($1, $2, 'create_doc'), ($1, $2, 'read_doc')`,
+      `INSERT INTO allowlists (tenant_id, connection_id, action_name) VALUES ($1, $2, 'create_doc'), ($1, $2, 'get_doc_content')`,
       [a.tenantId, a.connectionId],
     );
 
     await expect(store.getAllowedActions(a.tenantId, a.connectionId)).resolves.toEqual([
       'create_doc',
-      'read_doc',
+      'get_doc_content',
     ]);
     await expect(store.getAllowedActions(b.tenantId, b.connectionId)).resolves.toEqual([]);
   });
