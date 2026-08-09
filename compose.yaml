@@ -1,0 +1,38 @@
+# Totem — Docker Compose (v1)
+#
+# `docker compose up` starts Postgres and applies migrations on the API
+# container's startup. Copy .env.example to .env to override defaults.
+
+services:
+  db:
+    # postgres:18+ requires the mount at /var/lib/postgresql (not .../data);
+    # image and mount point must move together.
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-totem}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-totem}
+      POSTGRES_DB: ${POSTGRES_DB:-totem}
+    # 5433 by default: 5432 clashes with a local Postgres.app install on macOS.
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - totem_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-totem}:${POSTGRES_PASSWORD:-totem}@db:5432/${POSTGRES_DB:-totem}
+    # T2: the API server lands in T3 (admin API) / T5 (MCP); until then the
+    # container's job on startup is applying migrations.
+    command: ["npm", "run", "migrate:up"]
+
+volumes:
+  totem_db_data:

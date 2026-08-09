@@ -22,8 +22,26 @@ npm run typecheck # tsc --noEmit
 npm test          # Vitest
 ```
 
-CI (GitHub Actions) runs lint, typecheck and the full test suite on push and
-pull requests.
+The migration tests run only when `DATABASE_URL` is set (the CI postgres
+service, or locally: `docker compose up db` then
+`DATABASE_URL=postgres://totem:totem@localhost:5433/totem npm test`).
+
+## Database
+
+```sh
+cp .env.example .env   # optional; compose defaults work out of the box
+npm run migrate:up     # apply pending migrations (requires DATABASE_URL)
+npm run migrate:down   # roll back the most recently applied migration
+```
+
+Migrations live in `migrations/<version>_<name>.up.sql` / `.down.sql` and
+are applied by `scripts/migrate.mjs`, which tracks applied versions in a
+`schema_migrations` table (re-runnable by design; each migration runs in its
+own transaction). `docker compose up` starts Postgres and applies
+migrations on the API container's startup.
+
+CI (GitHub Actions) runs lint, typecheck and the full test suite —
+migrations tests included — against a Postgres service container.
 
 ## Layout
 

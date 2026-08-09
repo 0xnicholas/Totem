@@ -8,6 +8,22 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: totem
+          POSTGRES_PASSWORD: totem
+          POSTGRES_DB: totem
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U totem -d totem"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://totem:totem@localhost:5433/totem
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
