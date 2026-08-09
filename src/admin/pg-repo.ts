@@ -2,7 +2,6 @@ import pg from 'pg';
 import {
   ADMIN_AUDIT_ACTIONS,
   NotFoundError,
-  auditParamHash,
   type AdminRepository,
   type ApiKeyRecord,
   type ApiKeyScope,
@@ -12,6 +11,7 @@ import {
   type FeishuCreds,
   type Tenant,
 } from './repo.js';
+import { auditParamHash } from '../audit.js';
 
 interface AuditInsert {
   tenantId: string;

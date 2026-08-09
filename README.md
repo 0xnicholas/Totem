@@ -69,6 +69,22 @@ Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
 /admin/tenants/:id/audit` (filters: `user`, `action`, `since`, `source`,
 `success`), `GET /healthz`.
 
+## Governance (T4)
+
+`executeAction` enforces governance at the execution boundary (Seam A):
+
+- **Allowlist (fail-closed)** — an action not on the connection's allowlist
+  is rejected with a structured `forbidden` error before validation or
+  dispatch. An empty allowlist allows nothing. Allowlist rows are set via
+  `totemctl set-allowlist` and read per (tenant, connection).
+- **Audit** — every attempt on a resolvable connection writes an
+  `audit_logs` row (tenant, connection, action, SHA-256 param hash, source,
+  success, ADR-0005 error code, duration). Writes are best effort: an audit
+  outage is logged, never fatal to the action. Rows are queryable with
+  `totemctl query-audit`. Attempts with an unknown tenant/connection are
+  unattributable under the schema's `audit_logs.tenant_id` foreign key and
+  are not recorded.
+
 CI (GitHub Actions) runs lint, typecheck and the full test suite —
 migrations and admin integration tests included — against a Postgres
 service container.
@@ -83,6 +99,9 @@ service container.
   pure translator with a `manifest` + `execute`)
 - `src/registry.ts` — schema-first action registry (Ajv-compiled schemas)
 - `src/executor.ts` — `executeAction` (Seam A) and the composition root
+- `src/governance.ts` — allowlist store + audit sink contracts (T4)
+- `src/pg-governance.ts` — Postgres implementations of both
+- `src/audit.ts` — canonical param hashing for audit rows
 - `src/admin/` — admin API (hono), Postgres repository, HTTP client, keys
 - `src/cli/` — `totemctl` commands
 - `src/server/` — service entry point (env wiring)

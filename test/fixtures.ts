@@ -1,6 +1,8 @@
 import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector } from '../src/index.js';
 import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import type { AllowlistStore, AuditSink } from '../src/governance.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
+import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 
 export const TENANT_A = 'tenant-a';
 export const TENANT_B = 'tenant-b';
@@ -14,17 +16,56 @@ export const CONN_1_A: ConnectionRecord = {
   connectorId: FAKE_CONNECTOR_ID,
 };
 
-/** Executor wired to the fake connector, with connection conn-1 under tenant-a. */
+/**
+ * Seam A harness: executor plus the governance stores it was wired with.
+ * When no allowlist store is passed, the harness seeds one allowing every
+ * registered action on every seeded connection, so non-governance tests
+ * exercise the rest of the seam unchanged; governance tests override with
+ * `setAllowed` (replace semantics).
+ */
+export function makeHarness(config: {
+  actions?: Action[];
+  connectors?: IConnector[];
+  connections?: ConnectionRecord[];
+  allowlists?: AllowlistStore;
+  audit?: AuditSink;
+} = {}): {
+  executor: ActionExecutor;
+  allowlists: InMemoryAllowlistStore;
+  audit: InMemoryAuditSink;
+} {
+  const actions = config.actions ?? DOCS_ACTIONS;
+  const connectors = config.connectors ?? [new FakeConnector()];
+  const connections = config.connections ?? [CONN_1_A];
+  const createdAllowlists = config.allowlists === undefined;
+  const allowlists = config.allowlists ?? new InMemoryAllowlistStore();
+  const audit = config.audit ?? new InMemoryAuditSink();
+  if (createdAllowlists) {
+    for (const connection of connections) {
+      (allowlists as InMemoryAllowlistStore).setAllowed(
+        connection.tenantId,
+        connection.connectionId,
+        actions.map((a) => a.name),
+      );
+    }
+  }
+  const executor = createActionExecutor({
+    actions,
+    connectors,
+    connections,
+    allowlists,
+    audit,
+  });
+  return { executor, allowlists: allowlists as InMemoryAllowlistStore, audit: audit as InMemoryAuditSink };
+}
+
+/** Executor with a fully-permissive allowlist (default harness), for T1-style tests. */
 export function makeExecutor(config?: {
   actions?: Action[];
   connectors?: IConnector[];
   connections?: ConnectionRecord[];
 }): ActionExecutor {
-  return createActionExecutor({
-    actions: config?.actions ?? DOCS_ACTIONS,
-    connectors: config?.connectors ?? [new FakeConnector()],
-    connections: config?.connections ?? [CONN_1_A],
-  });
+  return makeHarness(config).executor;
 }
 
 export const EMPTY_INPUT_SCHEMA = {

@@ -2,7 +2,6 @@
 import {
   ADMIN_AUDIT_ACTIONS,
   NotFoundError,
-  auditParamHash,
   type AdminRepository,
   type ApiKeyRecord,
   type ApiKeyScope,
@@ -11,6 +10,7 @@ import {
   type FeishuCreds,
   type Tenant,
 } from '../admin/repo.js';
+import { auditParamHash } from '../audit.js';
 
 interface MemoryConnection {
   id: string;

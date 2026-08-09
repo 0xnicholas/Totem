@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
-import { NotFoundError, auditParamHash } from '../src/admin/repo.js';
+import { NotFoundError } from '../src/admin/repo.js';
+import { auditParamHash } from '../src/audit.js';
 import { PostgresAdminRepository } from '../src/admin/pg-repo.js';
 
 /**
