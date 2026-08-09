@@ -80,6 +80,86 @@ export interface MoveDocOutput {
   folder_id: string;
 }
 
+/** A spreadsheet cell value with its native JSON type preserved. */
+export type CellValue = string | number | boolean | null;
+
+export interface ExportDocInput {
+  doc_id: string;
+  /** Export format: 'md' (markdown) or 'docx' (binary). */
+  format: 'md' | 'docx';
+}
+
+export interface ExportDocOutput {
+  doc_id: string;
+  format: 'md' | 'docx';
+  /** Opaque token of the exported artifact in the user's drive. */
+  artifact_id: string;
+  /** Download URL for the artifact (requires the connection's Feishu auth). */
+  url: string;
+}
+
+export interface ReadSheetCellsInput {
+  /** Opaque id of the spreadsheet (its drive file token). */
+  doc_id: string;
+  /** Spreadsheet range notation, e.g. 'Data!A1:C3' (bare 'A1:C3' = first sheet). */
+  range: string;
+}
+
+export interface ReadSheetCellsOutput {
+  doc_id: string;
+  range: string;
+  /** The range's cells, row-major, with native value types preserved. */
+  values: CellValue[][];
+}
+
+export interface WriteSheetCellsInput {
+  /** Opaque id of the spreadsheet (its drive file token). */
+  doc_id: string;
+  /** Spreadsheet range notation, e.g. 'Data!A1:C3'. */
+  range: string;
+  /** Row-major values to write; must match the range's shape. */
+  values: CellValue[][];
+}
+
+export interface WriteSheetCellsOutput {
+  doc_id: string;
+  range: string;
+  /** Number of cells written. */
+  updated_cells: number;
+}
+
+export interface ReadBitableRecordsInput {
+  /** Opaque id of the Bitable app (its drive file token). */
+  doc_id: string;
+  /** The table to read, by its display name. */
+  table_name: string;
+  /** Max records to return (1–100, default 100). */
+  limit?: number;
+}
+
+export interface ReadBitableRecordsOutput {
+  doc_id: string;
+  table_name: string;
+  /** Records with their field-name-based values. */
+  records: Array<{ record_id: string; fields: Record<string, unknown> }>;
+}
+
+export interface WriteBitableRecordsInput {
+  /** Opaque id of the Bitable app (its drive file token). */
+  doc_id: string;
+  /** The table to write to, by its display name. */
+  table_name: string;
+  /** Field-name-based values for the new record. */
+  fields: Record<string, unknown>;
+}
+
+export interface WriteBitableRecordsOutput {
+  doc_id: string;
+  table_name: string;
+  /** The created record's opaque id. */
+  record_id: string;
+}
+
 const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
   type: 'object',
   additionalProperties: false,
@@ -212,6 +292,144 @@ const moveDocOutputSchema: JSONSchemaType<MoveDocOutput> = {
   required: ['doc_id', 'folder_id'],
 };
 
+// JSONSchemaType cannot infer unions from oneOf; the runtime schema below
+// is exact, so the cast only satisfies the generic.
+const cellValueSchema = {
+  oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }, { type: 'null' }],
+} as JSONSchemaType<CellValue>;
+
+const exportDocInputSchema: JSONSchemaType<ExportDocInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    format: { type: 'string', enum: ['md', 'docx'] },
+  },
+  required: ['doc_id', 'format'],
+};
+
+const exportDocOutputSchema: JSONSchemaType<ExportDocOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    format: { type: 'string', enum: ['md', 'docx'] },
+    artifact_id: { type: 'string' },
+    url: { type: 'string' },
+  },
+  required: ['doc_id', 'format', 'artifact_id', 'url'],
+};
+
+const readSheetCellsInputSchema: JSONSchemaType<ReadSheetCellsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    range: { type: 'string', minLength: 1 },
+  },
+  required: ['doc_id', 'range'],
+};
+
+const cellMatrixSchema: JSONSchemaType<CellValue[][]> = {
+  type: 'array',
+  items: {
+    type: 'array',
+    items: cellValueSchema,
+  },
+};
+
+const readSheetCellsOutputSchema: JSONSchemaType<ReadSheetCellsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    range: { type: 'string' },
+    values: cellMatrixSchema,
+  },
+  required: ['doc_id', 'range', 'values'],
+};
+
+const writeSheetCellsInputSchema: JSONSchemaType<WriteSheetCellsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    range: { type: 'string', minLength: 1 },
+    values: cellMatrixSchema,
+  },
+  required: ['doc_id', 'range', 'values'],
+};
+
+const writeSheetCellsOutputSchema: JSONSchemaType<WriteSheetCellsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    range: { type: 'string' },
+    updated_cells: { type: 'number' },
+  },
+  required: ['doc_id', 'range', 'updated_cells'],
+};
+
+const bitableRecordListSchema: JSONSchemaType<
+  Array<{ record_id: string; fields: Record<string, unknown> }>
+> = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      record_id: { type: 'string' },
+      fields: { type: 'object', additionalProperties: true },
+    },
+    required: ['record_id', 'fields'],
+  },
+};
+
+const readBitableRecordsInputSchema: JSONSchemaType<ReadBitableRecordsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string', minLength: 1 },
+    limit: { type: 'integer', nullable: true, minimum: 1, maximum: 100 },
+  },
+  required: ['doc_id', 'table_name'],
+};
+
+const readBitableRecordsOutputSchema: JSONSchemaType<ReadBitableRecordsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string' },
+    records: bitableRecordListSchema,
+  },
+  required: ['doc_id', 'table_name', 'records'],
+};
+
+const writeBitableRecordsInputSchema: JSONSchemaType<WriteBitableRecordsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string', minLength: 1 },
+    fields: { type: 'object', additionalProperties: true },
+  },
+  required: ['doc_id', 'table_name', 'fields'],
+};
+
+const writeBitableRecordsOutputSchema: JSONSchemaType<WriteBitableRecordsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string' },
+    record_id: { type: 'string' },
+  },
+  required: ['doc_id', 'table_name', 'record_id'],
+};
+
 const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
   type: 'object',
   additionalProperties: false,
@@ -289,5 +507,49 @@ export const DOCS_ACTIONS: Action[] = [
       'Returns the document id and the target folder id.',
     inputSchema: moveDocInputSchema,
     outputSchema: moveDocOutputSchema,
+  },
+  {
+    name: 'export_doc',
+    description:
+      "Export a document by its opaque doc_id into a portable format: 'md' (markdown) " +
+      'or "docx" (binary). Returns an artifact reference: the exported file token and its ' +
+      "download URL (fetching the artifact requires the connection's Feishu authorization).",
+    inputSchema: exportDocInputSchema,
+    outputSchema: exportDocOutputSchema,
+  },
+  {
+    name: 'read_sheet_cells',
+    description:
+      "Read a range of cells from a spreadsheet by its opaque doc_id. The range uses " +
+      "spreadsheet notation (e.g. 'Data!A1:C3'; a bare 'A1:C3' means the first sheet). " +
+      'Cell values keep their native JSON types (string, number, boolean or null).',
+    inputSchema: readSheetCellsInputSchema,
+    outputSchema: readSheetCellsOutputSchema,
+  },
+  {
+    name: 'write_sheet_cells',
+    description:
+      "Write values into a spreadsheet range by its opaque doc_id. Values is a row-major " +
+      "2-D array whose shape must match the range (e.g. range 'Data!A1:B2' takes two rows of " +
+      'two cells). Returns the number of cells updated.',
+    inputSchema: writeSheetCellsInputSchema,
+    outputSchema: writeSheetCellsOutputSchema,
+  },
+  {
+    name: 'read_bitable_records',
+    description:
+      "Read records from a Bitable table by its app's opaque doc_id and the table's display " +
+      'name. Records come back with their field-name-based values; cap the result count with ' +
+      'limit (1–100, default 100).',
+    inputSchema: readBitableRecordsInputSchema,
+    outputSchema: readBitableRecordsOutputSchema,
+  },
+  {
+    name: 'write_bitable_records',
+    description:
+      "Create one record in a Bitable table by its app's opaque doc_id and the table's display " +
+      "name, with field-name-based values. Returns the new record's opaque id.",
+    inputSchema: writeBitableRecordsInputSchema,
+    outputSchema: writeBitableRecordsOutputSchema,
   },
 ];

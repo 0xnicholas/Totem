@@ -3,6 +3,8 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../admin/util.js';
+import { parseRange, sliceValues, writeValues } from './range.js';
+import type { CellValue } from '../actions.js';
 
 const INVALID_TOKEN_ENVELOPE = { code: 99991672, msg: 'invalid access token' };
 
@@ -58,6 +60,11 @@ export class MockFeishuServer {
   private readonly issuedAccessTokens = new Set<string>();
   private readonly docs: MockFeishuDoc[] = [];
   private readonly lockedDocs = new Set<string>();
+  private readonly sheets = new Map<string, { sheetName: string; values: CellValue[][] }>();
+  private readonly bitables = new Map<string, Array<{ name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> }>>();
+  private readonly exports = new Map<string, { status: number; fileToken: string }>();
+  private holdNextExportArmed = false;
+  private failNextExportArmed = false;
   private scriptedFailure: ScriptedFailure | undefined;
   private scriptedDocsFailure: ScriptedFailure | undefined;
 
@@ -119,6 +126,7 @@ export class MockFeishuServer {
 
     this.docsEndpoints();
     this.writeEndpoints();
+    this.advancedEndpoints();
   }
 
   /**
@@ -161,6 +169,62 @@ export class MockFeishuServer {
 
   unlockDoc(docId: string): void {
     this.lockedDocs.delete(docId);
+  }
+
+  /**
+   * Seeds a spreadsheet (T9): a drive file plus a single named sheet of
+   * values. `sheetName` is the tab name ranges can reference.
+   */
+  seedSheet(docId: string, title: string, sheetName: string, values: CellValue[][]): void {
+    this.docs.push({
+      doc_id: docId,
+      title,
+      content: '',
+      owner_id: 'mock-owner',
+      doc_type: 'sheet',
+      edited_at: new Date().toISOString(),
+    });
+    this.sheets.set(docId, { sheetName, values: values.map((row) => [...row]) });
+  }
+
+  /**
+   * Seeds a Bitable app (T9): a drive file plus tables with optional
+   * records. Records use field-name-based values.
+   */
+  seedBitable(
+    docId: string,
+    title: string,
+    tables: Array<{ name: string; records?: Array<{ record_id: string; fields: Record<string, unknown> }> }>,
+  ): void {
+    this.docs.push({
+      doc_id: docId,
+      title,
+      content: '',
+      owner_id: 'mock-owner',
+      doc_type: 'bitable',
+      edited_at: new Date().toISOString(),
+    });
+    this.bitables.set(
+      docId,
+      tables.map((table) => ({
+        name: table.name,
+        tableId: `tbl_${randomUUID()}`,
+        records: [...(table.records ?? [])].map((record) => ({ ...record })),
+      })),
+    );
+  }
+
+  /**
+   * Holds the next created export task in the running state (job_status 1):
+   * its first poll reports running, later polls complete.
+   */
+  holdNextExport(): void {
+    this.holdNextExportArmed = true;
+  }
+
+  /** Fails the next created export task (job_status 2). */
+  failNextExport(): void {
+    this.failNextExportArmed = true;
   }
 
   /** Scripts one failure for the next docs endpoint call. */
@@ -335,6 +399,164 @@ export class MockFeishuServer {
       doc.edited_at = new Date().toISOString();
       return c.json({ code: 0, msg: 'ok', data: { task_id: `task_${randomUUID()}` } });
     });
+  }
+
+  private advancedEndpoints(): void {
+    this.app.post('/open-apis/drive/v1/export_tasks', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const token = isRecord(body) && typeof body.token === 'string' ? body.token : '';
+      const extension =
+        isRecord(body) && typeof body.file_extension === 'string' ? body.file_extension : '';
+      if (token === '' || extension === '') {
+        return c.json({ code: 10002, msg: 'token and file_extension are required' });
+      }
+      if (!this.requireDoc(token)) return notFound();
+
+      const ticket = `ticket_${randomUUID()}`;
+      const fileToken = `exported_${randomUUID()}`;
+      if (this.failNextExportArmed) {
+        this.failNextExportArmed = false;
+        this.exports.set(ticket, { status: 2, fileToken });
+      } else if (this.holdNextExportArmed) {
+        this.holdNextExportArmed = false;
+        this.exports.set(ticket, { status: 1, fileToken });
+      } else {
+        this.exports.set(ticket, { status: 0, fileToken });
+      }
+      return c.json({ code: 0, msg: 'ok', data: { ticket } });
+    });
+
+    this.app.get('/open-apis/drive/v1/export_tasks/:ticket', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const exportTask = this.exports.get(c.req.param('ticket'));
+      if (!exportTask) return notFound();
+      // A held export completes on its second poll.
+      const status = exportTask.status;
+      if (status === 1) {
+        exportTask.status = 0;
+        return c.json({ code: 0, msg: 'ok', data: { job_status: 1 } });
+      }
+      if (status === 2) {
+        return c.json({ code: 0, msg: 'ok', data: { job_status: 2, msg: 'export failed' } });
+      }
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { job_status: 0, result: { file_token: exportTask.fileToken } },
+      });
+    });
+
+    this.app.get('/open-apis/sheets/v2/spreadsheets/:token/values/:range', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const sheet = this.sheets.get(c.req.param('token'));
+      if (!sheet) return notFound();
+      const range = c.req.param('range');
+      const ref = parseRange(range);
+      if (!ref || (ref.sheet !== undefined && ref.sheet !== sheet.sheetName)) return notFound();
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { valueRange: { range, values: sliceValues(sheet.values, ref) } },
+      });
+    });
+
+    this.app.put('/open-apis/sheets/v2/spreadsheets/:token/values', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const sheet = this.sheets.get(c.req.param('token'));
+      if (!sheet) return notFound();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const valueRange = isRecord(body) && isRecord(body.valueRange) ? body.valueRange : {};
+      const range = typeof valueRange.range === 'string' ? valueRange.range : '';
+      const values = Array.isArray(valueRange.values) ? (valueRange.values as CellValue[][]) : [];
+      const ref = parseRange(range);
+      if (!ref || (ref.sheet !== undefined && ref.sheet !== sheet.sheetName)) return notFound();
+      if (!values.every((row) => Array.isArray(row))) {
+        return c.json({ code: 10002, msg: 'values must be a 2-D array' });
+      }
+      // The written matrix must match the range's shape (height × width);
+      // silent padding would hide agent mistakes (T9 review finding).
+      const height = ref.rowEnd - ref.rowStart + 1;
+      const width = ref.colEnd - ref.colStart + 1;
+      if (values.length !== height || values.some((row) => row.length !== width)) {
+        return c.json({
+          code: 10002,
+          msg: `values shape (${values.length} x ${values[0]?.length ?? 0}) does not match range "${range}" (${height} x ${width})`,
+        });
+      }
+      const updated = writeValues(sheet.values, ref, values);
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          spreadsheetToken: c.req.param('token'),
+          updatedRange: range,
+          updatedRows: updated.updatedRows,
+          updatedColumns: updated.updatedColumns,
+          updatedCells: updated.updatedCells,
+        },
+      });
+    });
+
+    this.app.get('/open-apis/bitable/v1/apps/:app/tables', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const tables = this.bitables.get(c.req.param('app'));
+      if (!tables) return notFound();
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { items: tables.map((table) => ({ table_id: table.tableId, name: table.name })) },
+      });
+    });
+
+    this.app.get('/open-apis/bitable/v1/apps/:app/tables/:tableId/records', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const table = this.requireBitableTable(c.req.param('app'), c.req.param('tableId'));
+      if (!table) return notFound();
+      const pageSize = Number(c.req.query('page_size') ?? 100) || 100;
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          items: table.records.slice(0, pageSize),
+          has_more: false,
+        },
+      });
+    });
+
+    this.app.post('/open-apis/bitable/v1/apps/:app/tables/:tableId/records', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const table = this.requireBitableTable(c.req.param('app'), c.req.param('tableId'));
+      if (!table) return notFound();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const fields = isRecord(body) && isRecord(body.fields) ? body.fields : {};
+      const record = { record_id: `rec_${randomUUID()}`, fields };
+      table.records.push(record);
+      return c.json({ code: 0, msg: 'ok', data: { record } });
+    });
+  }
+
+  private requireBitableTable(
+    appToken: string,
+    tableId: string,
+  ): { name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> } | undefined {
+    return this.bitables.get(appToken)?.find((table) => table.tableId === tableId);
   }
 
   private requireDoc(docId: string): MockFeishuDoc | undefined {

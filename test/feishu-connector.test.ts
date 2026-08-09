@@ -5,7 +5,9 @@ import { createFeishuOAuthClient } from '../src/feishu/oauth.js';
 import { FeishuConnector } from '../src/feishu/connector.js';
 import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
+import { FakeConnector } from '../src/testing/fake-connector.js';
 import { MockFeishuServer } from '../src/testing/mock-feishu-server.js';
+import { CONN_1, TENANT_A, makeHarness } from './fixtures.js';
 
 const APP_ID = 'conn_app_id';
 const APP_SECRET = 'conn_app_secret';
@@ -451,5 +453,508 @@ describe('FeishuConnector write lifecycle through the executor (T8)', () => {
       success: false,
       errorCode: 'forbidden',
     });
+  });
+});
+
+describe('FeishuConnector advanced actions (T9)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let accessToken: string;
+  let connector: FeishuConnector;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    mock.seedDocs([
+      {
+        doc_id: 'adv-doc',
+        title: 'Advanced',
+        content: '# Advanced\n\nExport me.',
+        owner_id: 'user-9',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
+    mock.seedSheet('adv-sheet', 'Budget', 'Data', [
+      ['Region', 'Q1', 'Q2'],
+      ['APAC', 10, 20],
+      ['EMEA', 5, 15],
+    ]);
+    mock.seedBitable('adv-bit', 'Customers', [
+      {
+        name: 'Leads',
+        records: [
+          { record_id: 'rec_lead_1', fields: { name: 'Ada', stage: 'qualified' } },
+          { record_id: 'rec_lead_2', fields: { name: 'Grace', stage: 'new' } },
+        ],
+      },
+      { name: 'Archive', records: [] },
+    ]);
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createFeishuOAuthClient(baseUrl);
+    const pair = await oauth.exchangeCode({
+      creds: { appId: APP_ID, appSecret: APP_SECRET },
+      code: await mock.authorizeCode(REDIRECT_URI, 'st-adv'),
+      redirectUri: REDIRECT_URI,
+    });
+    accessToken = pair.accessToken;
+    connector = new FeishuConnector(baseUrl);
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const ctx = { tenantId: TENANT, connectionId: CONNECTION, token: '' };
+
+  function withToken(): { tenantId: string; connectionId: string; token: string } {
+    return { ...ctx, token: accessToken };
+  }
+
+  it('export_doc exports markdown and returns an artifact reference', async () => {
+    const result = await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-doc', format: 'md' },
+      withToken(),
+    );
+    expect(result).toMatchObject({
+      doc_id: 'adv-doc',
+      format: 'md',
+    });
+    const output = result as { artifact_id: string; url: string };
+    expect(output.artifact_id).toBeTruthy();
+    expect(output.url).toContain('/open-apis/drive/v1/medias/');
+  });
+
+  it('export_doc exports the binary format (docx)', async () => {
+    const result = await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-doc', format: 'docx' },
+      withToken(),
+    );
+    expect(result).toMatchObject({ doc_id: 'adv-doc', format: 'docx' });
+  });
+
+  it('export_doc polls a pending export task until it completes', async () => {
+    mock.holdNextExport();
+    const result = await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-doc', format: 'md' },
+      withToken(),
+    );
+    expect(result).toMatchObject({ doc_id: 'adv-doc', format: 'md' });
+  });
+
+  it('export_doc maps a failed export task to upstream_error', async () => {
+    mock.failNextExport();
+    await expect(
+      connector.execute('export_doc', { doc_id: 'adv-doc', format: 'md' }, withToken()),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+    });
+  });
+
+  it('export_doc maps a missing document to not_found', async () => {
+    await expect(
+      connector.execute('export_doc', { doc_id: 'missing', format: 'md' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('read_sheet_cells preserves cell-value types across a range', async () => {
+    const result = await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'adv-sheet', range: 'Data!A1:C3' },
+      withToken(),
+    );
+    expect(result).toEqual({
+      doc_id: 'adv-sheet',
+      range: 'Data!A1:C3',
+      values: [
+        ['Region', 'Q1', 'Q2'],
+        ['APAC', 10, 20],
+        ['EMEA', 5, 15],
+      ],
+    });
+  });
+
+  it('write_sheet_cells writes a range and reports updated cells', async () => {
+    const result = await connector.execute(
+      'write_sheet_cells',
+      { doc_id: 'adv-sheet', range: 'Data!C3', values: [[30]] },
+      withToken(),
+    );
+    expect(result).toMatchObject({ doc_id: 'adv-sheet', range: 'Data!C3', updated_cells: 1 });
+
+    const read = await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'adv-sheet', range: 'Data!C3' },
+      withToken(),
+    );
+    expect(read).toMatchObject({ values: [[30]] });
+  });
+
+  it('maps a range/shape mismatch on sheet writes to upstream_error', async () => {
+    await expect(
+      connector.execute(
+        'write_sheet_cells',
+        { doc_id: 'adv-sheet', range: 'Data!A1:B2', values: [[1]] },
+        withToken(),
+      ),
+    ).rejects.toMatchObject({ code: 'upstream_error' });
+  });
+
+  it('maps a missing spreadsheet or sheet name to not_found', async () => {
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'missing', range: 'Data!A1' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'adv-sheet', range: 'Nope!A1' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('read_bitable_records returns field-name-based values', async () => {
+    const result = await connector.execute(
+      'read_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads' },
+      withToken(),
+    );
+    expect(result).toMatchObject({
+      doc_id: 'adv-bit',
+      table_name: 'Leads',
+      records: [
+        { record_id: 'rec_lead_1', fields: { name: 'Ada', stage: 'qualified' } },
+        { record_id: 'rec_lead_2', fields: { name: 'Grace', stage: 'new' } },
+      ],
+    });
+  });
+
+  it('read_bitable_records respects the limit', async () => {
+    const result = await connector.execute(
+      'read_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads', limit: 1 },
+      withToken(),
+    );
+    const records = (result as { records: unknown[] }).records;
+    expect(records).toHaveLength(1);
+  });
+
+  it('write_bitable_records creates a record and returns its id', async () => {
+    const result = await connector.execute(
+      'write_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads', fields: { name: 'Katherine', stage: 'new' } },
+      withToken(),
+    );
+    expect(result).toMatchObject({ doc_id: 'adv-bit', table_name: 'Leads' });
+    const recordId = (result as { record_id: string }).record_id;
+    expect(recordId).toBeTruthy();
+
+    const read = await connector.execute(
+      'read_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads' },
+      withToken(),
+    );
+    const records = (read as { records: Array<{ record_id: string }> }).records;
+    expect(records.map((r) => r.record_id)).toContain(recordId);
+  });
+
+  it('maps a missing bitable table to not_found', async () => {
+    await expect(
+      connector.execute('read_bitable_records', { doc_id: 'adv-bit', table_name: 'Nope' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('maps permission denial on advanced endpoints to upstream_error with the original code', async () => {
+    mock.failNextDocs({ code: 91672, msg: 'no permission' });
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'adv-sheet', range: 'Data!A1' }, withToken()),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: '91672' },
+    });
+  });
+});
+
+describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let accessToken: string;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    mock.seedDocs([
+      {
+        doc_id: 'life-doc',
+        title: 'Lifecycle',
+        content: 'Start.',
+        owner_id: 'user-9',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
+    mock.seedSheet('life-sheet', 'Tracker', 'Data', [
+      ['Region', 'Q1'],
+      ['APAC', 10],
+    ]);
+    mock.seedBitable('life-bit', 'Customers', [
+      { name: 'Leads', records: [{ record_id: 'rec_life_1', fields: { name: 'Ada' } }] },
+    ]);
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createFeishuOAuthClient(baseUrl);
+    const pair = await oauth.exchangeCode({
+      creds: { appId: APP_ID, appSecret: APP_SECRET },
+      code: await mock.authorizeCode(REDIRECT_URI, 'st-life9'),
+      redirectUri: REDIRECT_URI,
+    });
+    accessToken = pair.accessToken;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  function makeExecutor(allowlist: string[]) {
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT, CONNECTION, allowlist);
+    const audit = new InMemoryAuditSink();
+    const executor = createActionExecutor({
+      actions: DOCS_ACTIONS,
+      connectors: [new FeishuConnector(baseUrl)],
+      connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
+      allowlists,
+      audit,
+      tokenProvider: { getValidAccessToken: () => Promise.resolve(accessToken) },
+    });
+    return { executor, audit };
+  }
+
+  it('walks export → sheet write/read → bitable write/read with audit rows', async () => {
+    const { executor, audit } = makeExecutor([
+      'export_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
+      'read_bitable_records',
+      'write_bitable_records',
+    ]);
+
+    const exported = await executor.executeAction(TENANT, CONNECTION, 'export_doc', {
+      doc_id: 'life-doc',
+      format: 'md',
+    });
+    expect(exported).toMatchObject({ ok: true, output: { doc_id: 'life-doc', format: 'md' } });
+
+    const sheetWrite = await executor.executeAction(TENANT, CONNECTION, 'write_sheet_cells', {
+      doc_id: 'life-sheet',
+      range: 'Data!B2',
+      values: [[42]],
+    });
+    expect(sheetWrite).toMatchObject({ ok: true, output: { updated_cells: 1 } });
+
+    const sheetRead = await executor.executeAction(TENANT, CONNECTION, 'read_sheet_cells', {
+      doc_id: 'life-sheet',
+      range: 'Data!A1:B2',
+    });
+    expect(sheetRead).toMatchObject({
+      ok: true,
+      output: {
+        values: [
+          ['Region', 'Q1'],
+          ['APAC', 42],
+        ],
+      },
+    });
+
+    const bitableWrite = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'write_bitable_records',
+      { doc_id: 'life-bit', table_name: 'Leads', fields: { name: 'Grace' } },
+    );
+    expect(bitableWrite).toMatchObject({ ok: true });
+    const recordId = (bitableWrite as { ok: true; output: { record_id: string } }).output
+      .record_id;
+
+    const bitableRead = await executor.executeAction(TENANT, CONNECTION, 'read_bitable_records', {
+      doc_id: 'life-bit',
+      table_name: 'Leads',
+    });
+    expect(bitableRead).toMatchObject({
+      ok: true,
+      output: { records: [{ record_id: 'rec_life_1', fields: { name: 'Ada' } }, { record_id: recordId, fields: { name: 'Grace' } }] },
+    });
+
+    const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
+    expect(rows).toEqual([
+      ['export_doc', true, null],
+      ['write_sheet_cells', true, null],
+      ['read_sheet_cells', true, null],
+      ['write_bitable_records', true, null],
+      ['read_bitable_records', true, null],
+    ]);
+  });
+
+  it('rejects disallowed advanced actions with forbidden and audits them', async () => {
+    const { executor, audit } = makeExecutor(['read_sheet_cells']);
+    const denied = await executor.executeAction(TENANT, CONNECTION, 'export_doc', {
+      doc_id: 'life-doc',
+      format: 'md',
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(audit.list().map((r) => [r.actionName, r.success, r.errorCode])).toEqual([
+      ['export_doc', false, 'forbidden'],
+    ]);
+  });
+});
+
+describe('FakeConnector advanced actions through the executor (Seam A)', () => {
+  it('round-trips export, sheet and bitable actions with audit rows', async () => {
+    const fake = new FakeConnector([
+      { doc_id: 'f-doc', title: 'Doc', content: 'x' },
+      {
+        doc_id: 'f-sheet',
+        title: 'Sheet',
+        content: '',
+        sheet: {
+          sheetName: 'Data',
+          values: [
+            [1, 'a'],
+            [2, 'b'],
+          ],
+        },
+      },
+      {
+        doc_id: 'f-bit',
+        title: 'Bitable',
+        content: '',
+        bitable: new Map([
+          ['Leads', [{ record_id: 'rec_1', fields: { name: 'Ada', active: true } }]],
+        ]),
+      },
+    ]);
+    const { executor, audit } = makeHarness({ connectors: [fake] });
+
+    const exported = await executor.executeAction(TENANT_A, CONN_1, 'export_doc', {
+      doc_id: 'f-doc',
+      format: 'md',
+    });
+    expect(exported).toMatchObject({
+      ok: true,
+      output: { doc_id: 'f-doc', format: 'md' },
+    });
+    expect((exported as { ok: true; output: { artifact_id: string } }).output.artifact_id).toBeTruthy();
+
+    const read = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
+      doc_id: 'f-sheet',
+      range: 'A1:B2',
+    });
+    expect(read).toMatchObject({
+      ok: true,
+      output: {
+        values: [
+          [1, 'a'],
+          [2, 'b'],
+        ],
+      },
+    });
+
+    const written = await executor.executeAction(TENANT_A, CONN_1, 'write_sheet_cells', {
+      doc_id: 'f-sheet',
+      range: 'Data!A1:B2',
+      values: [
+        ['x', 'y'],
+        ['z', 'w'],
+      ],
+    });
+    expect(written).toMatchObject({ ok: true, output: { updated_cells: 4 } });
+
+    const reread = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
+      doc_id: 'f-sheet',
+      range: 'A1:B2',
+    });
+    expect(reread).toMatchObject({
+      ok: true,
+      output: {
+        values: [
+          ['x', 'y'],
+          ['z', 'w'],
+        ],
+      },
+    });
+
+    const records = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+      doc_id: 'f-bit',
+      table_name: 'Leads',
+    });
+    expect(records).toMatchObject({
+      ok: true,
+      output: { records: [{ record_id: 'rec_1', fields: { name: 'Ada', active: true } }] },
+    });
+
+    const created = await executor.executeAction(TENANT_A, CONN_1, 'write_bitable_records', {
+      doc_id: 'f-bit',
+      table_name: 'Leads',
+      fields: { name: 'Grace', active: false },
+    });
+    expect(created).toMatchObject({ ok: true });
+    const recordId = (created as { ok: true; output: { record_id: string } }).output.record_id;
+    expect(recordId).toBeTruthy();
+
+    const after = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+      doc_id: 'f-bit',
+      table_name: 'Leads',
+    });
+    expect(after).toMatchObject({
+      ok: true,
+      output: { records: [{ record_id: 'rec_1' }, { record_id: recordId }] },
+    });
+
+    const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
+    expect(rows).toEqual([
+      ['export_doc', true, null],
+      ['read_sheet_cells', true, null],
+      ['write_sheet_cells', true, null],
+      ['read_sheet_cells', true, null],
+      ['read_bitable_records', true, null],
+      ['write_bitable_records', true, null],
+      ['read_bitable_records', true, null],
+    ]);
+  });
+
+  it('maps missing resources to not_found', async () => {
+    const fake = new FakeConnector([
+      { doc_id: 'f-doc', title: 'Doc', content: 'x' },
+      { doc_id: 'f-sheet', title: 'Sheet', content: '', sheet: { sheetName: 'Data', values: [['a']] } },
+    ]);
+    const { executor } = makeHarness({ connectors: [fake] });
+
+    const missingDoc = await executor.executeAction(TENANT_A, CONN_1, 'export_doc', {
+      doc_id: 'nope',
+      format: 'md',
+    });
+    expect(missingDoc).toMatchObject({ ok: false, error: { code: 'not_found' } });
+
+    const missingSheet = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
+      doc_id: 'f-doc',
+      range: 'Data!A1',
+    });
+    expect(missingSheet).toMatchObject({ ok: false, error: { code: 'not_found' } });
+
+    const unknownSheetName = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
+      doc_id: 'f-sheet',
+      range: 'Nope!A1',
+    });
+    expect(unknownSheetName).toMatchObject({ ok: false, error: { code: 'not_found' } });
+
+    const missingTable = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+      doc_id: 'f-sheet',
+      table_name: 'Nope',
+    });
+    expect(missingTable).toMatchObject({ ok: false, error: { code: 'not_found' } });
   });
 });

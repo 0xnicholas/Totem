@@ -4,16 +4,26 @@ import type {
   AppendDocContentOutput,
   CreateDocInput,
   CreateDocOutput,
+  ExportDocInput,
+  ExportDocOutput,
   GetDocContentInput,
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
   MoveDocInput,
   MoveDocOutput,
+  ReadBitableRecordsInput,
+  ReadBitableRecordsOutput,
+  ReadSheetCellsInput,
+  ReadSheetCellsOutput,
   RenameDocInput,
   RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
+  WriteBitableRecordsInput,
+  WriteBitableRecordsOutput,
+  WriteSheetCellsInput,
+  WriteSheetCellsOutput,
 } from '../actions.js';
 import type { IConnector } from '../connector.js';
 import { ActionError, errorMessage } from '../errors.js';
@@ -64,6 +74,13 @@ export function mapFeishuError(err: FeishuApiError): ActionError {
  * token in `ActionContext.token` (ADR-0004) and never touches the
  * database, governance, or config stores.
  */
+export interface FeishuConnectorOptions {
+  /** Delay between export-task polls, in ms (tests pass 0). */
+  exportPollMs?: number;
+  /** Max export-task polls before failing. */
+  exportMaxAttempts?: number;
+}
+
 export class FeishuConnector implements IConnector {
   readonly manifest = {
     id: 'feishu_docs',
@@ -75,12 +92,24 @@ export class FeishuConnector implements IConnector {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'export_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
+      'read_bitable_records',
+      'write_bitable_records',
     ],
   };
 
   private readonly handlers: Record<string, ActionHandler>;
+  private readonly exportPollMs: number;
+  private readonly exportMaxAttempts: number;
 
-  constructor(private readonly baseUrl: string) {
+  constructor(
+    private readonly baseUrl: string,
+    options: FeishuConnectorOptions = {},
+  ) {
+    this.exportPollMs = options.exportPollMs ?? 500;
+    this.exportMaxAttempts = options.exportMaxAttempts ?? 10;
     this.handlers = {
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
@@ -218,6 +247,107 @@ export class FeishuConnector implements IConnector {
         return output;
       },
 
+      export_doc: async (args: ExportDocInput, ctx) => {
+        const input = args;
+        // Feishu exports are async: create a task, then poll the ticket
+        // until the exported drive file exists.
+        const task = await docsRequest<ExportTaskData>(
+          this.baseUrl,
+          '/open-apis/drive/v1/export_tasks',
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: { file_extension: input.format, token: input.doc_id },
+          },
+        );
+        const exported = await this.pollExport(task.data.ticket, ctx.token);
+        const output: ExportDocOutput = {
+          doc_id: input.doc_id,
+          format: input.format,
+          artifact_id: exported.file_token,
+          // The artifact lives in the user's drive; fetching it requires
+          // the connection's Feishu authorization.
+          url: `${this.baseUrl}/open-apis/drive/v1/medias/${encodeURIComponent(exported.file_token)}/download`,
+        };
+        return output;
+      },
+
+      read_sheet_cells: async (args: ReadSheetCellsInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<SheetReadData>(
+          this.baseUrl,
+          `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values/${encodeURIComponent(input.range)}`,
+          { token: ctx.token },
+        );
+        const output: ReadSheetCellsOutput = {
+          doc_id: input.doc_id,
+          range: input.range,
+          values: response.data.valueRange.values,
+        };
+        return output;
+      },
+
+      write_sheet_cells: async (args: WriteSheetCellsInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<SheetWriteData>(
+          this.baseUrl,
+          `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values`,
+          {
+            method: 'PUT',
+            token: ctx.token,
+            body: { valueRange: { range: input.range, values: input.values } },
+          },
+        );
+        const output: WriteSheetCellsOutput = {
+          doc_id: input.doc_id,
+          range: input.range,
+          updated_cells: response.data.updatedCells,
+        };
+        return output;
+      },
+
+      read_bitable_records: async (args: ReadBitableRecordsInput, ctx) => {
+        const input = args;
+        const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
+        const response = await docsRequest<BitableRecordsData>(
+          this.baseUrl,
+          `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
+          {
+            token: ctx.token,
+            query: { page_size: String(input.limit ?? 100) },
+          },
+        );
+        const output: ReadBitableRecordsOutput = {
+          doc_id: input.doc_id,
+          table_name: input.table_name,
+          records: response.data.items.map((record) => ({
+            record_id: record.record_id,
+            fields: record.fields,
+          })),
+        };
+        return output;
+      },
+
+      write_bitable_records: async (args: WriteBitableRecordsInput, ctx) => {
+        const input = args;
+        const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
+        const response = await docsRequest<BitableCreateData>(
+          this.baseUrl,
+          `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: { fields: input.fields },
+          },
+        );
+        const output: WriteBitableRecordsOutput = {
+          doc_id: input.doc_id,
+          table_name: input.table_name,
+          record_id: response.data.record.record_id,
+        };
+        return output;
+      },
+
       get_doc_metadata: async (args: GetDocMetadataInput, ctx) => {
         const input = args;
         // v1 boundary: the docs actions address Feishu docx documents — the
@@ -243,6 +373,37 @@ export class FeishuConnector implements IConnector {
         return output;
       },
     };
+  }
+
+  /**
+   * Polls an export task ticket until it completes (job_status 0), fails
+   * (job_status 2), or the attempt budget runs out.
+   */
+  private async pollExport(
+    ticket: string,
+    token: string | undefined,
+  ): Promise<{ file_token: string }> {
+    for (let attempt = 0; attempt < this.exportMaxAttempts; attempt++) {
+      const poll = await docsRequest<ExportPollData>(
+        this.baseUrl,
+        `/open-apis/drive/v1/export_tasks/${encodeURIComponent(ticket)}`,
+        { token },
+      );
+      if (poll.data.job_status === 0 && poll.data.result?.file_token) {
+        return poll.data.result;
+      }
+      if (poll.data.job_status === 2) {
+        throw new ActionError(
+          'upstream_error',
+          `Feishu export task "${ticket}" failed: ${poll.data.msg ?? 'unknown reason'}`,
+          { upstream: { code: 'export_failed', message: poll.data.msg ?? '' } },
+        );
+      }
+      if (attempt < this.exportMaxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, this.exportPollMs));
+      }
+    }
+    throw new ActionError('upstream_error', `Feishu export task "${ticket}" did not complete`);
   }
 
   execute(action: string, args: unknown, ctx: ActionContext): Promise<unknown> {
@@ -274,6 +435,38 @@ interface UpdateDocData {
   document: { document_id: string; title: string };
 }
 
+interface ExportTaskData {
+  ticket: string;
+}
+
+interface ExportPollData {
+  job_status: number;
+  msg?: string;
+  result?: { file_token: string };
+}
+
+interface SheetReadData {
+  valueRange: { range: string; values: (string | number | boolean | null)[][] };
+}
+
+interface SheetWriteData {
+  spreadsheetToken: string;
+  updatedRange: string;
+  updatedCells: number;
+}
+
+interface BitableTablesData {
+  items: Array<{ table_id: string; name: string }>;
+}
+
+interface BitableRecordsData {
+  items: Array<{ record_id: string; fields: Record<string, unknown> }>;
+}
+
+interface BitableCreateData {
+  record: { record_id: string; fields: Record<string, unknown> };
+}
+
 interface SearchFilesData {
   files: Array<{ token: string; name: string; type: string }>;
 }
@@ -300,7 +493,7 @@ interface MetasData {
 async function docsRequest<T>(
   baseUrl: string,
   path: string,
-  opts: { method?: 'GET' | 'POST' | 'PATCH'; token?: string; query?: Record<string, string>; body?: unknown },
+  opts: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT'; token?: string; query?: Record<string, string>; body?: unknown },
 ): Promise<DocsEnvelope<T>> {
   const url = new URL(`${baseUrl}${path}`);
   for (const [key, value] of Object.entries(opts.query ?? {})) {
@@ -385,4 +578,29 @@ async function appendBlocks(
       },
     },
   );
+}
+
+/**
+ * Resolves a Bitable table's id from its display name via the app's
+ * tables endpoint; throws not_found when the table does not exist.
+ */
+async function resolveBitableTable(
+  baseUrl: string,
+  appToken: string,
+  tableName: string,
+  token: string | undefined,
+): Promise<string> {
+  const tables = await docsRequest<BitableTablesData>(
+    baseUrl,
+    `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables`,
+    { token },
+  );
+  const table = tables.data.items.find((candidate) => candidate.name === tableName);
+  if (!table) {
+    throw new ActionError(
+      'not_found',
+      `Bitable table "${tableName}" not found in app "${appToken}"`,
+    );
+  }
+  return table.table_id;
 }

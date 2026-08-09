@@ -5,14 +5,17 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { McpAdapter } from '../src/mcp/adapter.js';
 import { createMcpApp } from '../src/mcp/server.js';
+import { FakeConnector, type FakeDoc } from '../src/testing/fake-connector.js';
 import { InMemoryMCPKeyStore } from '../src/testing/memory-key-store.js';
 import { CONN_1, TENANT_A, makeHarness } from './fixtures.js';
 
 const ACTION_KEY = 'tt_dev_mcp_test_key';
 
 /** Harness wiring for the MCP HTTP surface: executor + stores + keys. */
-function makeServer() {
-  const harness = makeHarness();
+function makeServer(initialDocs?: FakeDoc[]) {
+  const harness = makeHarness({
+    connectors: [new FakeConnector(initialDocs)],
+  });
   const keys = new InMemoryMCPKeyStore();
   keys.addKey(ACTION_KEY, TENANT_A);
   const adapter = new McpAdapter(harness.executor, harness.allowlists);
@@ -163,6 +166,11 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
           { name: 'append_doc_content' },
           { name: 'rename_doc' },
           { name: 'move_doc' },
+          { name: 'export_doc' },
+          { name: 'read_sheet_cells' },
+          { name: 'write_sheet_cells' },
+          { name: 'read_bitable_records' },
+          { name: 'write_bitable_records' },
         ],
       },
     });
@@ -256,7 +264,20 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
   let harness: ReturnType<typeof makeServer>;
 
   beforeAll(async () => {
-    harness = makeServer();
+    harness = makeServer([
+      {
+        doc_id: 'mcp-sheet',
+        title: 'MCP Sheet',
+        content: '',
+        sheet: { sheetName: 'Data', values: [['Q1', 10]] },
+      },
+      {
+        doc_id: 'mcp-bit',
+        title: 'MCP Bitable',
+        content: '',
+        bitable: new Map([['Leads', [{ record_id: 'rec_1', fields: { name: 'Ada' } }]]]),
+      },
+    ]);
     server = serve({ fetch: harness.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -282,13 +303,18 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
     try {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toEqual([
-        'create_doc',
+      'create_doc',
       'search_docs',
       'get_doc_content',
       'get_doc_metadata',
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'export_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
+      'read_bitable_records',
+      'write_bitable_records',
       ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
 
@@ -322,6 +348,41 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
         arguments: { doc_id: docId, new_title: 'SDK Renamed' },
       });
       expect(renamed.structuredContent).toMatchObject({ doc_id: docId, title: 'SDK Renamed' });
+
+      // Advanced actions (T9) over MCP, non-DB: export, sheet cells, bitable.
+      const exported = await client.callTool({
+        name: 'export_doc',
+        arguments: { doc_id: docId, format: 'md' },
+      });
+      expect(exported.isError).toBeUndefined();
+      expect(exported.structuredContent).toMatchObject({ doc_id: docId, format: 'md' });
+
+      const sheetRead = await client.callTool({
+        name: 'read_sheet_cells',
+        arguments: { doc_id: 'mcp-sheet', range: 'A1:B2' },
+      });
+      expect(sheetRead.structuredContent).toMatchObject({ values: [['Q1', 10], [null, null]] });
+
+      const sheetWrite = await client.callTool({
+        name: 'write_sheet_cells',
+        arguments: { doc_id: 'mcp-sheet', range: 'Data!B2', values: [[42]] },
+      });
+      expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
+
+      const bitableRead = await client.callTool({
+        name: 'read_bitable_records',
+        arguments: { doc_id: 'mcp-bit', table_name: 'Leads' },
+      });
+      expect(bitableRead.structuredContent).toMatchObject({
+        records: [{ record_id: 'rec_1', fields: { name: 'Ada' } }],
+      });
+
+      const bitableWrite = await client.callTool({
+        name: 'write_bitable_records',
+        arguments: { doc_id: 'mcp-bit', table_name: 'Leads', fields: { name: 'Grace' } },
+      });
+      expect(bitableWrite.isError).toBeUndefined();
+      expect((bitableWrite.structuredContent as { record_id: string }).record_id).toBeTruthy();
     } finally {
       await client.close();
     }

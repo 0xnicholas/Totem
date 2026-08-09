@@ -17,11 +17,16 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
     expect(names).toEqual([
       'append_doc_content',
       'create_doc',
+      'export_doc',
       'get_doc_content',
       'get_doc_metadata',
       'move_doc',
+      'read_bitable_records',
+      'read_sheet_cells',
       'rename_doc',
       'search_docs',
+      'write_bitable_records',
+      'write_sheet_cells',
     ]);
   });
 

@@ -221,6 +221,13 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         edited_at: '2026-03-01T10:00:00.000Z',
       },
     ]);
+    mock.seedSheet('e2e-sheet', 'E2E Tracker', 'Data', [
+      ['Region', 'Q1'],
+      ['APAC', 10],
+    ]);
+    mock.seedBitable('e2e-bit', 'E2E Customers', [
+      { name: 'Leads', records: [{ record_id: 'rec_e2e_1', fields: { name: 'Ada' } }] },
+    ]);
     const { authorizationUrl } = await client.startOAuth(tenantId, REDIRECT_URI);
     const authorize = await fetch(authorizationUrl, { redirect: 'manual' });
     const callback = new URL(authorize.headers.get('location')!);
@@ -237,6 +244,11 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'export_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
+      'read_bitable_records',
+      'write_bitable_records',
     ]);
     const issued = await client.createKey(tenantId, 'actions');
 
@@ -261,6 +273,11 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         'append_doc_content',
         'rename_doc',
         'move_doc',
+        'export_doc',
+        'read_sheet_cells',
+        'write_sheet_cells',
+        'read_bitable_records',
+        'write_bitable_records',
       ]);
 
       // The call only succeeds if the TokenManager retrieved a valid token
@@ -323,6 +340,47 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         doc_id: writtenId,
         title: 'E2E Renamed',
       });
+
+      // The advanced set (T9) through MCP: export, sheet cells, bitable.
+      const exported = await mcpClient.callTool({
+        name: 'export_doc',
+        arguments: { doc_id: 'e2e-doc', format: 'md' },
+      });
+      expect(exported.isError).toBeUndefined();
+      expect(exported.structuredContent).toMatchObject({ doc_id: 'e2e-doc', format: 'md' });
+      expect((exported.structuredContent as { artifact_id: string }).artifact_id).toBeTruthy();
+
+      const sheetRead = await mcpClient.callTool({
+        name: 'read_sheet_cells',
+        arguments: { doc_id: 'e2e-sheet', range: 'Data!A1:B2' },
+      });
+      expect(sheetRead.structuredContent).toMatchObject({
+        values: [
+          ['Region', 'Q1'],
+          ['APAC', 10],
+        ],
+      });
+
+      const sheetWrite = await mcpClient.callTool({
+        name: 'write_sheet_cells',
+        arguments: { doc_id: 'e2e-sheet', range: 'Data!B2', values: [[42]] },
+      });
+      expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
+
+      const bitableRead = await mcpClient.callTool({
+        name: 'read_bitable_records',
+        arguments: { doc_id: 'e2e-bit', table_name: 'Leads' },
+      });
+      expect(bitableRead.structuredContent).toMatchObject({
+        records: [{ record_id: 'rec_e2e_1', fields: { name: 'Ada' } }],
+      });
+
+      const bitableWrite = await mcpClient.callTool({
+        name: 'write_bitable_records',
+        arguments: { doc_id: 'e2e-bit', table_name: 'Leads', fields: { name: 'Grace' } },
+      });
+      expect(bitableWrite.isError).toBeUndefined();
+      expect((bitableWrite.structuredContent as { record_id: string }).record_id).toBeTruthy();
     } finally {
       await mcpClient.close();
     }
