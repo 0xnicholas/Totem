@@ -3,6 +3,7 @@ import type { CreateDocOutput } from '../src/index.js';
 import {
   CONN_1,
   CONN_1_A,
+  FAKE_CONNECTOR_ID,
   TENANT_A,
   TENANT_B,
   makeConnector,
@@ -209,5 +210,20 @@ describe('executeAction (Seam A)', () => {
         { path: '/ok', keyword: 'type', message: 'must be boolean' },
       ]);
     });
+  });
+});
+
+describe('read-only lookups for transport adapters (T5)', () => {
+  it('getConnection enforces tenant isolation', () => {
+    const executor = makeExecutor();
+    expect(executor.getConnection(TENANT_A, CONN_1)).toMatchObject({ tenantId: TENANT_A });
+    expect(executor.getConnection(TENANT_B, CONN_1)).toBeUndefined();
+    expect(executor.getConnection(TENANT_A, 'conn-nope')).toBeUndefined();
+  });
+
+  it('getConnector returns the connection\'s registered connector', () => {
+    const executor = makeExecutor();
+    expect(executor.getConnector(FAKE_CONNECTOR_ID)?.manifest.id).toBe(FAKE_CONNECTOR_ID);
+    expect(executor.getConnector('no-such-connector')).toBeUndefined();
   });
 });

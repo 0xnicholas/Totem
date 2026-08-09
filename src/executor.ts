@@ -243,6 +243,20 @@ export class ActionExecutor {
   listActions(): Action[] {
     return this.registry.listActions();
   }
+
+  /**
+   * Read-only connection resolution (tenant-isolated), for transport
+   * adapters that must resolve the caller's connection before listing
+   * tools (ADR-0002).
+   */
+  getConnection(tenantId: string, connectionId: string): ConnectionRecord | undefined {
+    return this.connections.get(tenantId, connectionId);
+  }
+
+  /** Read-only connector lookup, for transport adapters (manifest reads). */
+  getConnector(id: string): IConnector | undefined {
+    return this.registry.getConnector(id);
+  }
 }
 
 /**
