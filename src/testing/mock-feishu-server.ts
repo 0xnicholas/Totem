@@ -29,6 +29,8 @@ export interface MockFeishuDoc {
   owner_id: string;
   doc_type: 'docx' | 'sheet' | 'bitable' | 'wiki';
   edited_at: string;
+  /** Set by the drive move endpoint (T8). */
+  folder_id?: string;
 }
 
 /**
@@ -55,6 +57,7 @@ export class MockFeishuServer {
   private readonly refreshTokens = new Map<string, { active: boolean }>();
   private readonly issuedAccessTokens = new Set<string>();
   private readonly docs: MockFeishuDoc[] = [];
+  private readonly lockedDocs = new Set<string>();
   private scriptedFailure: ScriptedFailure | undefined;
   private scriptedDocsFailure: ScriptedFailure | undefined;
 
@@ -115,6 +118,7 @@ export class MockFeishuServer {
     });
 
     this.docsEndpoints();
+    this.writeEndpoints();
   }
 
   /**
@@ -148,6 +152,15 @@ export class MockFeishuServer {
   seedDocs(docs: MockFeishuDoc[]): void {
     this.docs.length = 0;
     this.docs.push(...docs.map((doc) => ({ ...doc })));
+  }
+
+  /** Locks a document: write endpoints reject it with 10667 (doc locked). */
+  lockDoc(docId: string): void {
+    this.lockedDocs.add(docId);
+  }
+
+  unlockDoc(docId: string): void {
+    this.lockedDocs.delete(docId);
   }
 
   /** Scripts one failure for the next docs endpoint call. */
@@ -219,6 +232,115 @@ export class MockFeishuServer {
     });
   }
 
+  private writeEndpoints(): void {
+    this.app.post('/open-apis/docx/v1/documents', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const title = isRecord(body) && typeof body.title === 'string' ? body.title : '';
+      if (title === '') return c.json({ code: 10002, msg: 'title is required' });
+      const folderToken =
+        isRecord(body) && typeof body.folder_token === 'string' ? body.folder_token : undefined;
+      const docId = `doc_${randomUUID()}`;
+      this.docs.push({
+        doc_id: docId,
+        title,
+        content: '',
+        owner_id: 'mock-owner',
+        doc_type: 'docx',
+        edited_at: new Date().toISOString(),
+        ...(folderToken !== undefined ? { folder_id: folderToken } : {}),
+      });
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          document: {
+            document_id: docId,
+            title,
+            url: `https://fake.feishu.local/docx/${docId}`,
+          },
+        },
+      });
+    });
+
+    this.app.get('/open-apis/docx/v1/documents/:docId/blocks', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('docId'));
+      if (!doc) return c.json({ code: 10662, msg: 'document not found' });
+      // v1 mock model: every document has one root text block.
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          items: [{ block_id: 'root', block_type: 2, has_child: true, parent_id: null }],
+        },
+      });
+    });
+
+    this.app.post('/open-apis/docx/v1/documents/:docId/blocks/:blockId/children', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('docId'));
+      if (!doc) return notFound();
+      if (this.lockedDocs.has(doc.doc_id)) return locked();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const children = isRecord(body) && Array.isArray(body.children) ? body.children : [];
+      const appended = appendText(children);
+      doc.content = doc.content === '' ? appended : `${doc.content}\n${appended}`;
+      doc.edited_at = new Date().toISOString();
+      return c.json({ code: 0, msg: 'ok', data: { children: [] } });
+    });
+
+    this.app.patch('/open-apis/docx/v1/documents/:docId', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('docId'));
+      if (!doc) return notFound();
+      if (this.lockedDocs.has(doc.doc_id)) return locked();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const title = isRecord(body) && typeof body.title === 'string' ? body.title : '';
+      if (title === '') return c.json({ code: 10002, msg: 'title is required' });
+      doc.title = title;
+      doc.edited_at = new Date().toISOString();
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          document: {
+            document_id: doc.doc_id,
+            title: doc.title,
+            url: `https://fake.feishu.local/docx/${doc.doc_id}`,
+          },
+        },
+      });
+    });
+
+    this.app.post('/open-apis/drive/v1/files/:fileToken/move', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('fileToken'));
+      if (!doc) return notFound();
+      if (this.lockedDocs.has(doc.doc_id)) return locked();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const folderToken =
+        isRecord(body) && typeof body.folder_token === 'string' ? body.folder_token : '';
+      if (folderToken === '') return c.json({ code: 10002, msg: 'folder_token is required' });
+      doc.folder_id = folderToken;
+      doc.edited_at = new Date().toISOString();
+      return c.json({ code: 0, msg: 'ok', data: { task_id: `task_${randomUUID()}` } });
+    });
+  }
+
+  private requireDoc(docId: string): MockFeishuDoc | undefined {
+    return this.docs.find((d) => d.doc_id === docId);
+  }
+
   private authorized(c: Context): boolean {
     const header = c.req.header('authorization');
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
@@ -266,8 +388,42 @@ export class MockFeishuServer {
   }
 }
 
+/** 10662 envelope: document not found. */
+function notFound(): Response {
+  return new Response(JSON.stringify({ code: 10662, msg: 'document not found' }), {
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/** 10667 envelope: document locked. */
+function locked(): Response {
+  return new Response(JSON.stringify({ code: 10667, msg: 'document locked' }), {
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 /** FormData field as a string, or '' when absent. */
 function field(form: FormData, name: string): string {
   const value = form.get(name);
   return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Extracts the concatenated text from a docx children payload
+ * (block_type 2 text blocks with text_run elements) — the append contract
+ * the connector sends.
+ */
+function appendText(children: unknown[]): string {
+  return children
+    .map((child) => {
+      if (!isRecord(child) || !isRecord(child.text)) return '';
+      const elements = Array.isArray(child.text.elements) ? child.text.elements : [];
+      return elements
+        .map((element) => {
+          if (!isRecord(element) || !isRecord(element.text_run)) return '';
+          return typeof element.text_run.content === 'string' ? element.text_run.content : '';
+        })
+        .join('');
+    })
+    .join('');
 }

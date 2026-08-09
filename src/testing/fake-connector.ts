@@ -1,11 +1,17 @@
 import type { ActionContext, ActionHandler } from '../action.js';
 import type {
+  AppendDocContentInput,
+  AppendDocContentOutput,
   CreateDocInput,
   CreateDocOutput,
   GetDocContentInput,
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  MoveDocInput,
+  MoveDocOutput,
+  RenameDocInput,
+  RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
 } from '../actions.js';
@@ -33,7 +39,15 @@ export interface FakeDoc {
 export class FakeConnector implements IConnector {
   readonly manifest: ConnectorManifest = {
     id: FAKE_CONNECTOR_ID,
-    implements: ['create_doc', 'search_docs', 'get_doc_content', 'get_doc_metadata'],
+    implements: [
+      'create_doc',
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
+    ],
   };
 
   private readonly docs = new Map<string, FakeDoc>();
@@ -46,6 +60,9 @@ export class FakeConnector implements IConnector {
       search_docs: (args: SearchDocsInput) => this.searchDocs(args),
       get_doc_content: (args: GetDocContentInput) => this.getDocContent(args),
       get_doc_metadata: (args: GetDocMetadataInput) => this.getDocMetadata(args),
+      append_doc_content: (args: AppendDocContentInput) => this.appendDocContent(args),
+      rename_doc: (args: RenameDocInput) => this.renameDoc(args),
+      move_doc: (args: MoveDocInput) => this.moveDoc(args),
     };
   }
 
@@ -103,5 +120,32 @@ export class FakeConnector implements IConnector {
       doc_type: 'docx',
       edited_at: '2026-01-01T00:00:00.000Z',
     };
+  }
+
+  private appendDocContent(args: AppendDocContentInput): AppendDocContentOutput {
+    const doc = this.docs.get(args.doc_id);
+    if (!doc) {
+      throw new ActionError('not_found', `Document "${args.doc_id}" not found`);
+    }
+    doc.content = doc.content === '' ? args.content : `${doc.content}\n${args.content}`;
+    return { doc_id: doc.doc_id, content: doc.content };
+  }
+
+  private renameDoc(args: RenameDocInput): RenameDocOutput {
+    const doc = this.docs.get(args.doc_id);
+    if (!doc) {
+      throw new ActionError('not_found', `Document "${args.doc_id}" not found`);
+    }
+    doc.title = args.new_title;
+    return { doc_id: doc.doc_id, title: doc.title };
+  }
+
+  private moveDoc(args: MoveDocInput): MoveDocOutput {
+    const doc = this.docs.get(args.doc_id);
+    if (!doc) {
+      throw new ActionError('not_found', `Document "${args.doc_id}" not found`);
+    }
+    doc.folder_id = args.folder_id;
+    return { doc_id: doc.doc_id, folder_id: doc.folder_id };
   }
 }

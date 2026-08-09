@@ -47,6 +47,39 @@ export interface GetDocMetadataOutput {
   edited_at: string;
 }
 
+export interface AppendDocContentInput {
+  doc_id: string;
+  /** Text to append to the end of the document. */
+  content: string;
+}
+
+export interface AppendDocContentOutput {
+  doc_id: string;
+  /** The document's full content after the append. */
+  content: string;
+}
+
+export interface RenameDocInput {
+  doc_id: string;
+  new_title: string;
+}
+
+export interface RenameDocOutput {
+  doc_id: string;
+  title: string;
+}
+
+export interface MoveDocInput {
+  doc_id: string;
+  /** Opaque target folder id. */
+  folder_id: string;
+}
+
+export interface MoveDocOutput {
+  doc_id: string;
+  folder_id: string;
+}
+
 const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
   type: 'object',
   additionalProperties: false,
@@ -119,6 +152,66 @@ const getDocContentOutputSchema: JSONSchemaType<GetDocContentOutput> = {
   required: ['doc_id', 'content'],
 };
 
+const appendDocContentInputSchema: JSONSchemaType<AppendDocContentInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    content: { type: 'string', minLength: 1 },
+  },
+  required: ['doc_id', 'content'],
+};
+
+const appendDocContentOutputSchema: JSONSchemaType<AppendDocContentOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    content: { type: 'string' },
+  },
+  required: ['doc_id', 'content'],
+};
+
+const renameDocInputSchema: JSONSchemaType<RenameDocInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    new_title: { type: 'string', minLength: 1 },
+  },
+  required: ['doc_id', 'new_title'],
+};
+
+const renameDocOutputSchema: JSONSchemaType<RenameDocOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    title: { type: 'string' },
+  },
+  required: ['doc_id', 'title'],
+};
+
+const moveDocInputSchema: JSONSchemaType<MoveDocInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    folder_id: { type: 'string', minLength: 1 },
+  },
+  required: ['doc_id', 'folder_id'],
+};
+
+const moveDocOutputSchema: JSONSchemaType<MoveDocOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    folder_id: { type: 'string' },
+  },
+  required: ['doc_id', 'folder_id'],
+};
+
 const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
   type: 'object',
   additionalProperties: false,
@@ -173,5 +266,28 @@ export const DOCS_ACTIONS: Action[] = [
       '(docx, sheet, bitable, wiki) and last edit time.',
     inputSchema: docIdInputSchema,
     outputSchema: getDocMetadataOutputSchema,
+  },
+  {
+    name: 'append_doc_content',
+    description:
+      "Append text to the end of an existing document by its opaque doc_id and return the " +
+      "document's full updated content. Use create_doc to create a document first.",
+    inputSchema: appendDocContentInputSchema,
+    outputSchema: appendDocContentOutputSchema,
+  },
+  {
+    name: 'rename_doc',
+    description:
+      "Rename an existing document by its opaque doc_id. Returns the document's id and new title.",
+    inputSchema: renameDocInputSchema,
+    outputSchema: renameDocOutputSchema,
+  },
+  {
+    name: 'move_doc',
+    description:
+      "Move an existing document by its opaque doc_id into a folder (folder_id). " +
+      'Returns the document id and the target folder id.',
+    inputSchema: moveDocInputSchema,
+    outputSchema: moveDocOutputSchema,
   },
 ];

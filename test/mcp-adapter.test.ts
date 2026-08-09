@@ -30,6 +30,9 @@ describe('McpAdapter', () => {
       'search_docs',
       'get_doc_content',
       'get_doc_metadata',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
     ]);
     const createDoc = all.find((t) => t.name === 'create_doc');
     expect(createDoc?.description).toBeTruthy();

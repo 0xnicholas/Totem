@@ -1,12 +1,18 @@
 export type { Action, ActionContext, ActionHandler } from './action.js';
 export { DOCS_ACTIONS } from './actions.js';
 export type {
+  AppendDocContentInput,
+  AppendDocContentOutput,
   CreateDocInput,
   CreateDocOutput,
   GetDocContentInput,
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  MoveDocInput,
+  MoveDocOutput,
+  RenameDocInput,
+  RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
 } from './actions.js';

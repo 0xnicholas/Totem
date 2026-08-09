@@ -1,14 +1,22 @@
 import type { ActionContext, ActionHandler } from '../action.js';
 import type {
+  AppendDocContentInput,
+  AppendDocContentOutput,
+  CreateDocInput,
+  CreateDocOutput,
   GetDocContentInput,
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  MoveDocInput,
+  MoveDocOutput,
+  RenameDocInput,
+  RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
 } from '../actions.js';
 import type { IConnector } from '../connector.js';
-import { ActionError } from '../errors.js';
+import { ActionError, errorMessage } from '../errors.js';
 import { FeishuApiError } from './oauth.js';
 
 /**
@@ -59,7 +67,15 @@ export function mapFeishuError(err: FeishuApiError): ActionError {
 export class FeishuConnector implements IConnector {
   readonly manifest = {
     id: 'feishu_docs',
-    implements: ['search_docs', 'get_doc_content', 'get_doc_metadata'],
+    implements: [
+      'create_doc',
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
+    ],
   };
 
   private readonly handlers: Record<string, ActionHandler>;
@@ -99,6 +115,106 @@ export class FeishuConnector implements IConnector {
           doc_id: input.doc_id,
           content: response.data.content,
         };
+        return output;
+      },
+
+      create_doc: async (args: CreateDocInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<CreateDocData>(
+          this.baseUrl,
+          '/open-apis/docx/v1/documents',
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: {
+              title: input.title,
+              // folder_id is nullable in the schema; null means "no folder"
+              // and must not be sent as folder_token: null.
+              ...(input.folder_id !== undefined && input.folder_id !== null
+                ? { folder_token: input.folder_id }
+                : {}),
+            },
+          },
+        );
+        const docId = response.data.document.document_id;
+        // Feishu creates documents empty; seeded initial content goes
+        // through the same blocks-append path as append_doc_content. If
+        // seeding fails the document exists upstream — the error message
+        // says so, so the agent does not blindly retry the create.
+        if (input.content !== undefined && input.content !== '') {
+          try {
+            await appendBlocks(this.baseUrl, docId, input.content, ctx.token);
+          } catch (err) {
+            throw new ActionError(
+              'upstream_error',
+              `Document "${docId}" was created but its initial content failed to append: ${errorMessage(err)}`,
+            );
+          }
+        }
+        const output: CreateDocOutput = {
+          doc_id: docId,
+          title: response.data.document.title,
+          url: response.data.document.url,
+        };
+        return output;
+      },
+
+      append_doc_content: async (args: AppendDocContentInput, ctx) => {
+        const input = args;
+        await appendBlocks(this.baseUrl, input.doc_id, input.content, ctx.token);
+        // The AC promises the updated state: re-read the full content. The
+        // append itself has landed by now, so a re-read failure says so —
+        // a retry would duplicate the append.
+        let content: RawContentData;
+        try {
+          content = (
+            await docsRequest<RawContentData>(
+              this.baseUrl,
+              `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/raw_content`,
+              { token: ctx.token },
+            )
+          ).data;
+        } catch (err) {
+          throw new ActionError(
+            'upstream_error',
+            `Content was appended to "${input.doc_id}" but re-reading it failed: ${errorMessage(err)}`,
+          );
+        }
+        const output: AppendDocContentOutput = {
+          doc_id: input.doc_id,
+          content: content.content,
+        };
+        return output;
+      },
+
+      rename_doc: async (args: RenameDocInput, ctx) => {
+        const input = args;
+        const response = await docsRequest<UpdateDocData>(
+          this.baseUrl,
+          `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}`,
+          { method: 'PATCH', token: ctx.token, body: { title: input.new_title } },
+        );
+        const output: RenameDocOutput = {
+          doc_id: response.data.document.document_id,
+          title: response.data.document.title,
+        };
+        return output;
+      },
+
+      move_doc: async (args: MoveDocInput, ctx) => {
+        const input = args;
+        // Feishu's move is async (returns a task id); the platform contract
+        // confirms the target, which is all the agent needs.
+        await docsRequest(
+          this.baseUrl,
+          `/open-apis/drive/v1/files/${encodeURIComponent(input.doc_id)}/move`,
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: { folder_token: input.folder_id, type: 'docx' },
+          },
+        );
+        const output: MoveDocOutput = { doc_id: input.doc_id, folder_id: input.folder_id };
         return output;
       },
 
@@ -146,6 +262,18 @@ interface DocsEnvelope<T> {
   data: T;
 }
 
+interface CreateDocData {
+  document: { document_id: string; title: string; url: string };
+}
+
+interface BlocksData {
+  items: Array<{ block_id: string; block_type: number; parent_id: string | null }>;
+}
+
+interface UpdateDocData {
+  document: { document_id: string; title: string };
+}
+
 interface SearchFilesData {
   files: Array<{ token: string; name: string; type: string }>;
 }
@@ -172,7 +300,7 @@ interface MetasData {
 async function docsRequest<T>(
   baseUrl: string,
   path: string,
-  opts: { method?: 'GET' | 'POST'; token?: string; query?: Record<string, string>; body?: unknown },
+  opts: { method?: 'GET' | 'POST' | 'PATCH'; token?: string; query?: Record<string, string>; body?: unknown },
 ): Promise<DocsEnvelope<T>> {
   const url = new URL(`${baseUrl}${path}`);
   for (const [key, value] of Object.entries(opts.query ?? {})) {
@@ -217,4 +345,44 @@ async function docsRequest<T>(
     );
   }
   return envelope;
+}
+
+/**
+ * Appends one text block to a document via Feishu's blocks API: resolves
+ * the document's root block, then posts a text block (block_type 2) as its
+ * child. Shared by create_doc's initial content and append_doc_content.
+ */
+async function appendBlocks(
+  baseUrl: string,
+  docId: string,
+  content: string,
+  token: string | undefined,
+): Promise<void> {
+  const blocks = await docsRequest<BlocksData>(
+    baseUrl,
+    `/open-apis/docx/v1/documents/${encodeURIComponent(docId)}/blocks`,
+    { token },
+  );
+  const root = blocks.data.items.find((block) => block.parent_id === null);
+  if (!root) {
+    throw new ActionError('upstream_error', `Feishu document "${docId}" has no root block`);
+  }
+  await docsRequest(
+    baseUrl,
+    `/open-apis/docx/v1/documents/${encodeURIComponent(docId)}/blocks/${encodeURIComponent(root.block_id)}/children`,
+    {
+      method: 'POST',
+      token,
+      body: {
+        children: [
+          {
+            block_type: 2,
+            text: {
+              elements: [{ text_run: { content } }],
+            },
+          },
+        ],
+      },
+    },
+  );
 }

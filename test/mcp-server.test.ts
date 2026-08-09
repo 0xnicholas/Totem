@@ -160,6 +160,9 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
           { name: 'search_docs' },
           { name: 'get_doc_content' },
           { name: 'get_doc_metadata' },
+          { name: 'append_doc_content' },
+          { name: 'rename_doc' },
+          { name: 'move_doc' },
         ],
       },
     });
@@ -280,9 +283,12 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toEqual([
         'create_doc',
-        'search_docs',
-        'get_doc_content',
-        'get_doc_metadata',
+      'search_docs',
+      'get_doc_content',
+      'get_doc_metadata',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
       ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
 
@@ -299,6 +305,23 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
         doc_id: docId,
         content: 'Body from the SDK client.',
       });
+
+      // Writes flow through MCP too (T8): append and rename on the doc.
+      const appended = await client.callTool({
+        name: 'append_doc_content',
+        arguments: { doc_id: docId, content: 'Appended line.' },
+      });
+      expect(appended.isError).toBeUndefined();
+      expect(appended.structuredContent).toMatchObject({
+        doc_id: docId,
+        content: 'Body from the SDK client.\nAppended line.',
+      });
+
+      const renamed = await client.callTool({
+        name: 'rename_doc',
+        arguments: { doc_id: docId, new_title: 'SDK Renamed' },
+      });
+      expect(renamed.structuredContent).toMatchObject({ doc_id: docId, title: 'SDK Renamed' });
     } finally {
       await client.close();
     }

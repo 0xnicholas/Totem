@@ -230,9 +230,13 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     const { connections } = await client.listConnections(tenantId);
     const connection = connections.find((c) => c.status === 'active')!;
     await client.setAllowlist(connection.id, [
+      'create_doc',
       'search_docs',
       'get_doc_content',
       'get_doc_metadata',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
     ]);
     const issued = await client.createKey(tenantId, 'actions');
 
@@ -247,13 +251,16 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     });
     await mcpClient.connect(transport);
     try {
-      // The real Feishu connector exposes only its read actions; create_doc
-      // is hidden (not implemented until T8).
+      // The real Feishu connector exposes its full v1 action set.
       const { tools } = await mcpClient.listTools();
       expect(tools.map((t) => t.name)).toEqual([
+        'create_doc',
         'search_docs',
         'get_doc_content',
         'get_doc_metadata',
+        'append_doc_content',
+        'rename_doc',
+        'move_doc',
       ]);
 
       // The call only succeeds if the TokenManager retrieved a valid token
@@ -273,6 +280,49 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         arguments: { doc_id: 'e2e-doc' },
       });
       expect(content.structuredContent).toMatchObject({ doc_id: 'e2e-doc' });
+
+      // The write lifecycle (T8) through MCP: create → append → rename →
+      // move, each routed through the connector against the mock.
+      const created = await mcpClient.callTool({
+        name: 'create_doc',
+        arguments: { title: 'E2E Written', content: 'Opening line.' },
+      });
+      expect(created.isError).toBeUndefined();
+      const writtenId = (created.structuredContent as { doc_id: string }).doc_id;
+      expect((created.structuredContent as { url: string }).url).toContain(writtenId);
+
+      const appended = await mcpClient.callTool({
+        name: 'append_doc_content',
+        arguments: { doc_id: writtenId, content: 'Closing line.' },
+      });
+      expect(appended.structuredContent).toMatchObject({
+        doc_id: writtenId,
+        content: 'Opening line.\nClosing line.',
+      });
+
+      const renamed = await mcpClient.callTool({
+        name: 'rename_doc',
+        arguments: { doc_id: writtenId, new_title: 'E2E Renamed' },
+      });
+      expect(renamed.structuredContent).toMatchObject({ doc_id: writtenId, title: 'E2E Renamed' });
+
+      const moved = await mcpClient.callTool({
+        name: 'move_doc',
+        arguments: { doc_id: writtenId, folder_id: 'e2e-folder' },
+      });
+      expect(moved.structuredContent).toMatchObject({
+        doc_id: writtenId,
+        folder_id: 'e2e-folder',
+      });
+
+      const finalRead = await mcpClient.callTool({
+        name: 'get_doc_metadata',
+        arguments: { doc_id: writtenId },
+      });
+      expect(finalRead.structuredContent).toMatchObject({
+        doc_id: writtenId,
+        title: 'E2E Renamed',
+      });
     } finally {
       await mcpClient.close();
     }

@@ -227,3 +227,229 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
     expect(missing).toMatchObject({ ok: false, error: { code: 'not_found' } });
   });
 });
+
+/**
+ * The write side of the real connector (T8): create, append (via Feishu's
+ * blocks API), rename and move, with the same error mapping as reads.
+ */
+describe('FeishuConnector write actions (T8)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let accessToken: string;
+  let connector: FeishuConnector;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    mock.seedDocs([
+      {
+        doc_id: 'w-1',
+        title: 'Write Target',
+        content: 'First line.',
+        owner_id: 'user-9',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createFeishuOAuthClient(baseUrl);
+    const pair = await oauth.exchangeCode({
+      creds: { appId: APP_ID, appSecret: APP_SECRET },
+      code: await mock.authorizeCode(REDIRECT_URI, 'st-write'),
+      redirectUri: REDIRECT_URI,
+    });
+    accessToken = pair.accessToken;
+    connector = new FeishuConnector(baseUrl);
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const ctx = { tenantId: TENANT, connectionId: CONNECTION, token: '' };
+
+  it('create_doc creates a document and returns id + url', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute(
+      'create_doc',
+      { title: 'Fresh Doc', folder_id: 'folder-1', content: 'Seed.' },
+      ctx,
+    );
+    expect(output).toMatchObject({ title: 'Fresh Doc' });
+    const created = output as { doc_id: string; url: string };
+    expect(created.doc_id).toBeTruthy();
+    expect(created.url).toContain(created.doc_id);
+
+    // The created doc is readable back through the connector.
+    const content = await connector.execute('get_doc_content', { doc_id: created.doc_id }, ctx);
+    expect(content).toEqual({ doc_id: created.doc_id, content: 'Seed.' });
+  });
+
+  it('append_doc_content appends and returns the full updated content', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute(
+      'append_doc_content',
+      { doc_id: 'w-1', content: 'Second line.' },
+      ctx,
+    );
+    expect(output).toEqual({ doc_id: 'w-1', content: 'First line.\nSecond line.' });
+  });
+
+  it('rename_doc renames and returns the new title', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute('rename_doc', { doc_id: 'w-1', new_title: 'Renamed' }, ctx);
+    expect(output).toEqual({ doc_id: 'w-1', title: 'Renamed' });
+
+    const metadata = await connector.execute('get_doc_metadata', { doc_id: 'w-1' }, ctx);
+    expect(metadata).toMatchObject({ doc_id: 'w-1', title: 'Renamed' });
+  });
+
+  it('move_doc moves and returns the target folder', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute('move_doc', { doc_id: 'w-1', folder_id: 'folder-9' }, ctx);
+    expect(output).toEqual({ doc_id: 'w-1', folder_id: 'folder-9' });
+  });
+
+  it('maps a locked document to upstream_error with the lock code in diagnostics', async () => {
+    mock.lockDoc('w-1');
+    ctx.token = accessToken;
+    const err = await connector
+      .execute('rename_doc', { doc_id: 'w-1', new_title: 'Nope' }, ctx)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: '10667', message: 'document locked' },
+    });
+    mock.unlockDoc('w-1');
+  });
+
+  it('maps missing documents on writes to not_found', async () => {
+    ctx.token = accessToken;
+    const err = await connector
+      .execute('append_doc_content', { doc_id: 'w-nope', content: 'x' }, ctx)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({ code: 'not_found' });
+  });
+
+  it('maps permission denied on writes to upstream_error', async () => {
+    mock.failNextDocs({ code: 91672, msg: 'permission denied' });
+    ctx.token = accessToken;
+    const err = await connector
+      .execute('move_doc', { doc_id: 'w-1', folder_id: 'folder-x' }, ctx)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({ code: 'upstream_error', upstream: { code: '91672' } });
+  });
+});
+
+/**
+ * The full write lifecycle through the executor (Seam A + B): create →
+ * append → rename → move, each audited, and disallowed writes rejected.
+ */
+describe('FeishuConnector write lifecycle through the executor (T8)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let accessToken: string;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createFeishuOAuthClient(baseUrl);
+    const pair = await oauth.exchangeCode({
+      creds: { appId: APP_ID, appSecret: APP_SECRET },
+      code: await mock.authorizeCode(REDIRECT_URI, 'st-life'),
+      redirectUri: REDIRECT_URI,
+    });
+    accessToken = pair.accessToken;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  function makeExecutor(allowlist: string[]) {
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT, CONNECTION, allowlist);
+    const audit = new InMemoryAuditSink();
+    const executor = createActionExecutor({
+      actions: DOCS_ACTIONS,
+      connectors: [new FeishuConnector(baseUrl)],
+      connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
+      allowlists,
+      audit,
+      tokenProvider: { getValidAccessToken: () => Promise.resolve(accessToken) },
+    });
+    return { executor, audit };
+  }
+
+  it('walks create → append → rename → move with audit rows per write', async () => {
+    const { executor, audit } = makeExecutor([
+      'create_doc',
+      'append_doc_content',
+      'rename_doc',
+      'move_doc',
+      'get_doc_content',
+      'get_doc_metadata',
+    ]);
+
+    const created = await executor.executeAction(TENANT, CONNECTION, 'create_doc', {
+      title: 'Lifecycle',
+      content: 'Start.',
+    });
+    expect(created).toMatchObject({ ok: true });
+    const docId = (created as { ok: true; output: { doc_id: string } }).output.doc_id;
+
+    const appended = await executor.executeAction(TENANT, CONNECTION, 'append_doc_content', {
+      doc_id: docId,
+      content: 'Middle.',
+    });
+    expect(appended).toMatchObject({ ok: true, output: { content: 'Start.\nMiddle.' } });
+
+    const renamed = await executor.executeAction(TENANT, CONNECTION, 'rename_doc', {
+      doc_id: docId,
+      new_title: 'Lifecycle V2',
+    });
+    expect(renamed).toMatchObject({ ok: true, output: { title: 'Lifecycle V2' } });
+
+    const moved = await executor.executeAction(TENANT, CONNECTION, 'move_doc', {
+      doc_id: docId,
+      folder_id: 'folder-final',
+    });
+    expect(moved).toMatchObject({ ok: true, output: { folder_id: 'folder-final' } });
+
+    const verified = await executor.executeAction(TENANT, CONNECTION, 'get_doc_metadata', {
+      doc_id: docId,
+    });
+    expect(verified).toMatchObject({
+      ok: true,
+      output: { doc_id: docId, title: 'Lifecycle V2' },
+    });
+
+    const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
+    expect(rows).toEqual([
+      ['create_doc', true, null],
+      ['append_doc_content', true, null],
+      ['rename_doc', true, null],
+      ['move_doc', true, null],
+      ['get_doc_metadata', true, null],
+    ]);
+  });
+
+  it('rejects disallowed writes with forbidden and audits them', async () => {
+    const { executor, audit } = makeExecutor(['get_doc_content']);
+    const denied = await executor.executeAction(TENANT, CONNECTION, 'create_doc', {
+      title: 'Nope',
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'create_doc',
+      success: false,
+      errorCode: 'forbidden',
+    });
+  });
+});
