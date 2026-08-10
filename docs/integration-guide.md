@@ -74,9 +74,18 @@ token 获取 → 执行 → 审计 这条执行边界(Seam A)。
 开通命令(`totemctl`,需要 `TOTEM_ADMIN_URL` + `TOTEM_ADMIN_KEY`;
 `TOTEM_ADMIN_KEY` 可以放平台 admin key,或本项目的 admin-scope key):
 
+> **totemctl 从哪来?** totemctl 是 totem 仓库自带的 CLI(未发布到 npm),
+> 只在本仓库内运行。两种方式任选:
+> - **A(自助)**:clone totem 仓库(`git clone` + `npm ci`),在仓库内执行下面的
+>   `npm run totemctl -- ...` 命令;`TOTEM_ADMIN_URL` 指向平台部署地址
+>   (不是 localhost);
+> - **B(代跑)**:把下面这些命令和参数发给平台负责人,让他执行并把输出发回。
+
 ```sh
-export TOTEM_ADMIN_URL=http://localhost:3000
+export TOTEM_ADMIN_URL=https://totem.internal:3000   # 平台部署地址,不是 localhost
 export TOTEM_ADMIN_KEY=tt_admin_xxx        # 平台 admin key 或本项目的 admin-scope key
+# 可选:oauth-start 的默认回调地址(不设则下面第 4 步必须带 redirect-uri 参数)
+export TOTEM_OAUTH_REDIRECT_URI=https://your-project.example.com/oauth/callback
 
 # 1. 创建 tenant(如果平台负责人已建好可跳过)
 npm run totemctl -- create-tenant my-project
@@ -88,8 +97,10 @@ npm run totemctl -- create-key <tenant-id> --scope actions
 #    不要提交进任何代码库)
 npm run totemctl -- set-feishu-creds <tenant-id> <app-id> <app-secret>
 
-# 4. 跑 Authorize Flow:打开输出的 URL,用项目想绑定的飞书账号授权(需要真人点一次)
-npm run totemctl -- oauth-start <tenant-id>
+# 4. ⏸ 人工交接点:跑 Authorize Flow 会打印一个 URL,必须由真人用浏览器打开并
+#    授权(agent 不要自己尝试)。把 URL 交给项目负责人 → 等他说「已授权」→ 再继续。
+#    (若上面没设 TOTEM_OAUTH_REDIRECT_URI,这里必须带回调地址参数)
+npm run totemctl -- oauth-start <tenant-id> <redirect-uri>
 #    → 授权完成后用 list-connections 拿到 connection id
 npm run totemctl -- list-connections <tenant-id>
 
@@ -97,7 +108,7 @@ npm run totemctl -- list-connections <tenant-id>
 npm run totemctl -- set-allowlist <connection-id> create_doc search_docs get_doc_content
 ```
 
-完成后你会拿到 4 项**交付物**:
+完成后你会拿到 **5 项交付物**(第 5 项只在自助开通时需要,代跑则由负责人持有):
 
 | 交付物 | 环境变量 | 说明 |
 |---|---|---|
@@ -105,6 +116,7 @@ npm run totemctl -- set-allowlist <connection-id> create_doc search_docs get_doc
 | Tenant API key(actions scope) | `TOTEM_API_KEY` | **只显示一次**,务必保密 |
 | Connection ID | `TOTEM_CONNECTION_ID` | 形如 uuid,对应某个已授权的 Feishu 账号 |
 | 已开通的动作清单 | — | 例如 `create_doc read_doc ...`,见 §7 |
+| Admin 凭据(仅自助开通) | `TOTEM_ADMIN_URL` + `TOTEM_ADMIN_KEY` | 平台 admin key 或本项目的 admin-scope key;⚠️ 等价平台管理员,见上方信任边界 |
 
 > **re-auth**:连接 token 失效(`auth_expired`)时,重新执行
 > `totemctl oauth-start <tenant-id> --connection <connection-id>` 即可,不用重建连接。
