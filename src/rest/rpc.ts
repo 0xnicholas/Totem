@@ -75,6 +75,7 @@ export function createRpcApp(config: RpcAppConfig): Hono {
       connectionId,
       envelope.action,
       envelope.args,
+      'rpc',
     );
     if (result.ok) return c.json(result.output);
 

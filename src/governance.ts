@@ -1,5 +1,8 @@
 import type { ActionErrorCode } from './errors.js';
 
+/** Which consumption surface produced an audit row (mcp, admin_api, rpc). */
+export type AuditSource = 'mcp' | 'admin_api' | 'cli' | 'rpc';
+
 /**
  * Per-connection action allowlists (CONTEXT.md): the list of unified action
  * names that may execute on a connection. An empty list is fail-closed —
@@ -19,8 +22,8 @@ export interface ExecutionAudit {
   actionName: string;
   /** SHA-256 hex of canonicalized params. */
   paramHash: string;
-  /** v1's only action-execution transport; revisit if others call executeAction. */
-  source: 'mcp';
+  /** The consumption surface that produced this execution. */
+  source: AuditSource;
   success: boolean;
   /** ADR-0005 error code when the attempt failed. */
   errorCode: ActionErrorCode | null;

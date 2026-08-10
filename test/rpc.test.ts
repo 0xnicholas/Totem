@@ -112,6 +112,20 @@ describe('REST Actions RPC (T14, HTTP boundary)', () => {
     expect(payload.title).toBe('Q3 planning');
   });
 
+  it('records RPC executions in the audit trail with source rpc', async () => {
+    const response = await rpcCall({
+      action: 'create_doc',
+      args: { title: 'rpc-audit', content: 'audit source check' },
+    });
+    expect(response.status).toBe(200);
+    const rows = harness.audit.list();
+    expect(rows[rows.length - 1]).toMatchObject({
+      actionName: 'create_doc',
+      success: true,
+      source: 'rpc',
+    });
+  });
+
   it('defaults missing args to an empty object', async () => {
     const response = await rpcCall({ action: 'test_connection' });
     expect(response.status).toBe(200);

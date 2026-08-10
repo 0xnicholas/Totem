@@ -10,6 +10,7 @@ import {
   type AllowlistStore,
   type AuditPolicyProvider,
   type AuditSink,
+  type AuditSource,
   type DefenderPolicyProvider,
 } from './governance.js';
 import { DEFAULT_RATE_LIMIT_PER_MINUTE, RateLimiter } from './rate-limit.js';
@@ -124,6 +125,7 @@ export class ActionExecutor {
     connectionId: string,
     actionName: string,
     args: unknown,
+    source: AuditSource = 'mcp',
   ): Promise<ActionResult> {
     const startedAt = Date.now();
     const connection = await this.connections.get(tenantId, connectionId);
@@ -145,7 +147,7 @@ export class ActionExecutor {
     const connector = this.registry.getConnector(connection.connectorId);
     // Guaranteed by the constructor wiring check; defensive for direct misuse.
     if (!connector) {
-      await this.recordAudit(connection, actionName, args, 'not_found', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'not_found', startedAt);
       return {
         ok: false,
         error: new ActionError(
@@ -157,7 +159,7 @@ export class ActionExecutor {
 
     const action = this.registry.getAction(actionName);
     if (!action) {
-      await this.recordAudit(connection, actionName, args, 'action_not_found', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'action_not_found', startedAt);
       return {
         ok: false,
         error: new ActionError('action_not_found', `Unknown action "${actionName}"`),
@@ -168,7 +170,7 @@ export class ActionExecutor {
     // action set; calling the rest is a capability miss, not an upstream
     // failure (mirrors ADR-0002's hide-don't-reject stance).
     if (!connector.manifest.implements.includes(actionName)) {
-      await this.recordAudit(connection, actionName, args, 'action_not_found', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'action_not_found', startedAt);
       return {
         ok: false,
         error: new ActionError(
@@ -183,7 +185,7 @@ export class ActionExecutor {
     // masked by a validation error.
     const allowed = await this.allowlists.getAllowedActions(tenantId, connectionId);
     if (!allowed.includes(actionName)) {
-      await this.recordAudit(connection, actionName, args, 'forbidden', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'forbidden', startedAt);
       return {
         ok: false,
         error: new ActionError(
@@ -203,7 +205,7 @@ export class ActionExecutor {
       connector.manifest.rateLimit?.requestsPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
     const gate = this.rateLimiter.check(connectionKey(tenantId, connectionId), requestsPerMinute);
     if (!gate.allowed) {
-      await this.recordAudit(connection, actionName, args, 'rate_limited', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'rate_limited', startedAt);
       return {
         ok: false,
         error: new ActionError(
@@ -216,7 +218,7 @@ export class ActionExecutor {
 
     const inputIssues = this.registry.validateInput(actionName, args);
     if (inputIssues.length > 0) {
-      await this.recordAudit(connection, actionName, args, 'validation_error', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'validation_error', startedAt);
       return {
         ok: false,
         error: new ActionError('validation_error', `Invalid arguments for action "${actionName}"`, {
@@ -236,11 +238,11 @@ export class ActionExecutor {
         token = await this.tokenProvider.getValidAccessToken(connection.connectionId);
       } catch (err) {
         if (isActionError(err)) {
-          await this.recordAudit(connection, actionName, args, err.code, startedAt);
+          await this.recordAudit(connection, actionName, args, source, err.code, startedAt);
           return { ok: false, error: err };
         }
         const cause = errorMessage(err);
-        await this.recordAudit(connection, actionName, args, 'upstream_error', startedAt);
+        await this.recordAudit(connection, actionName, args, source, 'upstream_error', startedAt);
         return {
           ok: false,
           error: new ActionError('upstream_error', `Token acquisition failed: ${cause}`),
@@ -255,11 +257,11 @@ export class ActionExecutor {
     } catch (err) {
       // Connector-mapped vocabulary errors pass through untouched (ADR-0005).
       if (isActionError(err)) {
-        await this.recordAudit(connection, actionName, args, err.code, startedAt);
+        await this.recordAudit(connection, actionName, args, source, err.code, startedAt);
         return { ok: false, error: err };
       }
       const cause = errorMessage(err);
-      await this.recordAudit(connection, actionName, args, 'upstream_error', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'upstream_error', startedAt);
       return {
         ok: false,
         error: new ActionError('upstream_error', `Action "${actionName}" failed: ${cause}`, {
@@ -272,7 +274,7 @@ export class ActionExecutor {
     if (outputIssues.length > 0) {
       // A connector producing output outside the platform vocabulary is an
       // upstream failure from the caller's perspective (ADR-0005).
-      await this.recordAudit(connection, actionName, args, 'upstream_error', startedAt);
+      await this.recordAudit(connection, actionName, args, source, 'upstream_error', startedAt);
       return {
         ok: false,
         error: new ActionError('upstream_error', `Invalid output from action "${actionName}"`, {
@@ -299,7 +301,7 @@ export class ActionExecutor {
         defender = scanDefender(output);
         if (defender && policy.blockHighRisk && defender.riskLevel === 'high') {
           const blockInfo = { reason: 'defender_block', ...defender };
-          await this.recordAudit(connection, actionName, args, 'forbidden', startedAt, blockInfo);
+          await this.recordAudit(connection, actionName, args, source, 'forbidden', startedAt, blockInfo);
           return {
             ok: false,
             error: new ActionError(
@@ -312,7 +314,7 @@ export class ActionExecutor {
       }
     }
 
-    await this.recordAudit(connection, actionName, args, null, startedAt, defender);
+    await this.recordAudit(connection, actionName, args, source, null, startedAt, defender);
     return { ok: true, output, ...(defender !== undefined ? { defender } : {}) };
   }
 
@@ -326,6 +328,7 @@ export class ActionExecutor {
     connection: ConnectionRecord,
     actionName: string,
     args: unknown,
+    source: AuditSource,
     errorCode: ActionErrorCode | null,
     startedAt: number,
     metadata?: unknown,
@@ -347,7 +350,7 @@ export class ActionExecutor {
         userId: null,
         actionName,
         paramHash: auditParamHash(args),
-        source: 'mcp',
+        source,
         success: errorCode === null,
         errorCode,
         durationMs: Date.now() - startedAt,

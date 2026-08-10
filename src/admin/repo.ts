@@ -17,7 +17,9 @@ export interface ApiKeyRecord {
   createdAt: string;
 }
 
-export type AuditSource = 'mcp' | 'admin_api' | 'cli';
+import type { AuditSource } from '../governance.js';
+
+export type { AuditSource };
 
 export type ConnectionStatus = 'active' | 'suspended' | 'auth_expired';
 

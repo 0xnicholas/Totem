@@ -274,6 +274,16 @@ describe('token acquisition at the execution boundary (T6, ADR-0004)', () => {
     expect(audit.list()[0]).toMatchObject({ success: true, errorCode: null });
   });
 
+  it('records the calling surface as the audit source', async () => {
+    const { executor, audit } = captureHarness(undefined);
+    await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'x' }, 'rpc');
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'create_doc',
+      success: true,
+      source: 'rpc',
+    });
+  });
+
   it('maps provider auth_expired to a vocabulary error, audited, handler never runs', async () => {
     const provider: TokenProvider = {
       getValidAccessToken: () =>
