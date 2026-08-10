@@ -1,8 +1,8 @@
 import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createFeishuOAuthClient } from '../src/feishu/oauth.js';
-import { FeishuConnector } from '../src/feishu/connector.js';
+import { createFeishuOAuthClient, FeishuApiError } from '../src/feishu/oauth.js';
+import { FeishuConnector, mapFeishuError } from '../src/feishu/connector.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
@@ -1010,5 +1010,19 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       table_name: 'Nope',
     });
     expect(missingTable).toMatchObject({ ok: false, error: { code: 'not_found' } });
+  });
+});
+
+describe('mapFeishuError (error translation)', () => {
+  it('maps both token-rejection codes to auth_expired', () => {
+    for (const code of [99991668, 99991672]) {
+      const err = mapFeishuError(new FeishuApiError(code, 'invalid access token', 200, false));
+      expect(err).toMatchObject({ code: 'auth_expired', retryable: false });
+    }
+  });
+
+  it('maps rate-limit codes to rate_limited', () => {
+    const err = mapFeishuError(new FeishuApiError(99991400, 'too many requests', 200, false));
+    expect(err).toMatchObject({ code: 'rate_limited', retryable: true });
   });
 });

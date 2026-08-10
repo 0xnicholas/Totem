@@ -32,10 +32,10 @@ import { FeishuApiError } from './oauth.js';
 /**
  * Feishu error-code families (T7, live-verified in the T9 demo pass):
  * 10662 document-not-found, 91402 sheets NOTEXIST, 90215 unknown sheetId,
- * 99991672 invalid token, 99991400 rate limit.
+ * 99991668/99991672 invalid access token, 99991400 rate limit.
  */
 const NOT_FOUND_CODES = new Set([10662, 91402, 90215]);
-const TOKEN_REJECTED_CODES = new Set([99991672]);
+const TOKEN_REJECTED_CODES = new Set([99991668, 99991672]);
 const RATE_LIMIT_CODES = new Set([99991400]);
 
 /**
