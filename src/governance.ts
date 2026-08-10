@@ -26,6 +26,8 @@ export interface ExecutionAudit {
   errorCode: ActionErrorCode | null;
   durationMs: number;
   createdAt: string;
+  /** Free-form enrichment (T15: Defender scan metadata rides here — the observation path). */
+  metadata?: unknown;
 }
 
 /**
@@ -55,3 +57,25 @@ export interface AuditPolicy {
 export interface AuditPolicyProvider {
   getPolicy(tenantId: string): Promise<AuditPolicy>;
 }
+
+/**
+ * Defender policy (T15, ADR-0009): per-tenant response-screening controls.
+ * Observe-first defaults — scanning on, blocking off — match the contract's
+ * "flag in metadata, don't block" stance.
+ */
+export interface DefenderPolicy {
+  /** Scan tool responses for injection signatures. */
+  enabled: boolean;
+  /** Turn high-risk responses into a `forbidden` error instead of returning them. */
+  blockHighRisk: boolean;
+}
+
+export interface DefenderPolicyProvider {
+  getPolicy(tenantId: string): Promise<DefenderPolicy>;
+}
+
+/** Fail-safe defaults: policy lookup failures never disable the tripwire. */
+export const DEFAULT_DEFENDER_POLICY: DefenderPolicy = {
+  enabled: true,
+  blockHighRisk: false,
+};

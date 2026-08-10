@@ -6,6 +6,8 @@ import type {
   Tenant,
   TenantAuditPolicy,
   TenantAuditPolicyPatch,
+  TenantDefenderPolicy,
+  TenantDefenderPolicyPatch,
 } from './repo.js';
 import { isRecord } from './util.js';
 
@@ -128,6 +130,24 @@ export class AdminApiClient {
     return this.request(
       'PUT',
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit-policy`,
+      patch,
+    );
+  }
+
+  getDefenderPolicy(tenantId: string): Promise<TenantDefenderPolicy> {
+    return this.request(
+      'GET',
+      `/admin/tenants/${encodeURIComponent(tenantId)}/defender-policy`,
+    );
+  }
+
+  setDefenderPolicy(
+    tenantId: string,
+    patch: TenantDefenderPolicyPatch,
+  ): Promise<TenantDefenderPolicy> {
+    return this.request(
+      'PUT',
+      `/admin/tenants/${encodeURIComponent(tenantId)}/defender-policy`,
       patch,
     );
   }

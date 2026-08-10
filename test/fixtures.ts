@@ -1,6 +1,6 @@
 import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector } from '../src/index.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
-import type { AllowlistStore, AuditPolicyProvider, AuditSink } from '../src/governance.js';
+import type { AllowlistStore, AuditPolicyProvider, AuditSink, DefenderPolicyProvider } from '../src/governance.js';
 import type { TokenProvider } from '../src/feishu/token-manager.js';
 import type { RateLimiter } from '../src/rate-limit.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
@@ -44,6 +44,7 @@ export function makeHarness(config: {
   tokenProvider?: TokenProvider;
   auditPolicy?: AuditPolicyProvider;
   rateLimiter?: RateLimiter;
+  defenderPolicy?: DefenderPolicyProvider;
 } = {}): {
   executor: ActionExecutor;
   allowlists: InMemoryAllowlistStore;
@@ -73,6 +74,7 @@ export function makeHarness(config: {
     ...(config.tokenProvider !== undefined ? { tokenProvider: config.tokenProvider } : {}),
     ...(config.auditPolicy !== undefined ? { auditPolicy: config.auditPolicy } : {}),
     ...(config.rateLimiter !== undefined ? { rateLimiter: config.rateLimiter } : {}),
+    ...(config.defenderPolicy !== undefined ? { defenderPolicy: config.defenderPolicy } : {}),
   });
   return { executor, allowlists: allowlists as InMemoryAllowlistStore, audit: audit as InMemoryAuditSink };
 }

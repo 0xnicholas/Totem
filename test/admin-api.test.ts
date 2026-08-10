@@ -281,6 +281,42 @@ describe('admin API (HTTP boundary)', () => {
     expect(unknown.status).toBe(404);
   });
 
+  it('reads and updates a tenant defender policy, auditing the change (T15)', async () => {
+    const tenant = await repo.createTenant('defender-tenant');
+
+    // Observe-first defaults: scanning on, blocking off.
+    const defaults = await adminFetch(`/admin/tenants/${tenant.id}/defender-policy`);
+    expect(defaults.status).toBe(200);
+    expect(await defaults.json()).toEqual({ enabled: true, blockHighRisk: false });
+
+    const updated = await adminFetch(`/admin/tenants/${tenant.id}/defender-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ blockHighRisk: true }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toEqual({ enabled: true, blockHighRisk: true });
+
+    const audits = (await (
+      await adminFetch(`/admin/tenants/${tenant.id}/audit?action=admin.defender_policy_updated`)
+    ).json()) as { rows: unknown[] };
+    expect(audits.rows).toHaveLength(1);
+  });
+
+  it('validates defender-policy patches and 404s unknown tenants (T15)', async () => {
+    const tenant = await repo.createTenant('defender-bad-tenant');
+
+    for (const body of [{ enabled: 'yes' }, { blockHighRisk: 1 }, { surprise: true }]) {
+      const response = await adminFetch(`/admin/tenants/${tenant.id}/defender-policy`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+
+    const unknown = await adminFetch('/admin/tenants/00000000-0000-0000-0000-000000000000/defender-policy');
+    expect(unknown.status).toBe(404);
+  });
+
   it('purges expired audit rows per the tenant retention window (T11)', async () => {
     const tenant = await repo.createTenant('purge-tenant');
     const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();

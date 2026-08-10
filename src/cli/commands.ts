@@ -39,6 +39,9 @@ commands:
                   [--capture-body true|false]           (omitted fields are kept)
   purge-audit <tenant-id>                               (deletes audit rows older than
                                                          the tenant's retention window)
+  get-defender-policy <tenant-id>                       (enabled, block-high-risk)
+  set-defender-policy <tenant-id> [--enabled true|false]
+                  [--block-high-risk true|false]        (omitted fields are kept)
   help
 
 environment:
@@ -203,6 +206,26 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         return 0;
       }
 
+      case 'get-defender-policy': {
+        const [tenantId] = rest;
+        if (!tenantId) throw new UsageError('get-defender-policy <tenant-id>');
+        const policy = await io.client.getDefenderPolicy(tenantId);
+        io.stdout(formatDefenderPolicy(policy));
+        return 0;
+      }
+
+      case 'set-defender-policy': {
+        const { positionals, flags } = parseFlags(rest);
+        const [tenantId] = positionals;
+        if (!tenantId) {
+          throw new UsageError('set-defender-policy <tenant-id> [--enabled --block-high-risk]');
+        }
+        const patch = defenderPolicyPatchFromFlags(flags);
+        const policy = await io.client.setDefenderPolicy(tenantId, patch);
+        io.stdout(formatDefenderPolicy(policy));
+        return 0;
+      }
+
       default:
         throw new UsageError(`unknown command "${command}" (try "totemctl help")`);
     }
@@ -272,6 +295,7 @@ function isApiError(err: unknown): err is ApiError {
 }
 
 const AUDIT_POLICY_FLAGS = ['retention-days', 'error-only', 'capture-body'] as const;
+const DEFENDER_POLICY_FLAGS = ['enabled', 'block-high-risk'] as const;
 
 function auditPolicyPatchFromFlags(flags: Record<string, string>): {
   retentionDays?: number;
@@ -310,6 +334,28 @@ function formatAuditPolicy(policy: {
     `errorOnly=${policy.errorOnly}`,
     `captureBody=${policy.captureBody}`,
   ].join('\t');
+}
+
+function defenderPolicyPatchFromFlags(flags: Record<string, string>): {
+  enabled?: boolean;
+  blockHighRisk?: boolean;
+} {
+  const patch: { enabled?: boolean; blockHighRisk?: boolean } = {};
+  for (const [name, value] of Object.entries(flags)) {
+    if (!(DEFENDER_POLICY_FLAGS as readonly string[]).includes(name)) {
+      throw new UsageError(`unknown flag --${name} for set-defender-policy`);
+    }
+    if (value !== 'true' && value !== 'false') {
+      throw new UsageError(`--${name} must be "true" or "false"`);
+    }
+    if (name === 'enabled') patch.enabled = value === 'true';
+    else patch.blockHighRisk = value === 'true';
+  }
+  return patch;
+}
+
+function formatDefenderPolicy(policy: { enabled: boolean; blockHighRisk: boolean }): string {
+  return [`enabled=${policy.enabled}`, `blockHighRisk=${policy.blockHighRisk}`].join('\t');
 }
 
 function formatConnection(connection: ConnectionView): string {

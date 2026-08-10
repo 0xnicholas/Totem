@@ -123,6 +123,20 @@ sits after the allowlist (a forbidden call never burns the bucket) and
 before validation/dispatch. No queueing, no platform-side auto-retry; the
 HTTP 429 + `Retry-After` mapping lands with the REST RPC surface (T14).
 
+## Defender tripwire (T15)
+
+Tool responses are scanned for prompt-injection directives at the execution
+boundary's return path (ADR-0009, Tier 1 slice): the curated signature set
+in `src/defender.ts` runs over the unified output before it reaches the
+agent, and the metadata (`{tier: 'pattern', riskLevel, detections}`) rides
+the action result and the audit row — the observation path is
+`totemctl query-audit`, no dashboard needed. Responses over 1MB are
+skipped without a claim. Observe-first: scanning is on by default,
+blocking is opt-in per tenant (`set-defender-policy --block-high-risk
+true`); when blocking, high-risk content becomes a `forbidden` error with
+`details.reason = defender_block` (vocabulary stays at seven codes). The
+ML tier is T16; `tier: 'pattern'` keeps the two distinguishable.
+
 ## Layout
 
 - `src/action.ts` — the platform `Action` shape (`name`, `description`,
@@ -142,6 +156,7 @@ HTTP 429 + `Retry-After` mapping lands with the REST RPC surface (T14).
 - `src/server/` — service entry point (env wiring)
 - `src/errors.ts` — the unified error vocabulary (ADR-0005: seven codes)
 - `src/rate-limit.ts` — per-(tenant, connection) token bucket (T13)
+- `src/defender.ts` — prompt-injection signature scan + metadata (T15)
 - `src/testing/` — Seam A and HTTP-boundary test doubles
   (`FakeConnector`, `InMemoryAdminRepository`)
 - `test/` — behavior tests through Seam A / HTTP boundary only

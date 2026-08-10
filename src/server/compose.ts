@@ -14,7 +14,7 @@ import { createDiscoveryApp } from '../rest/discovery.js';
 import { createRpcApp } from '../rest/rpc.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
-import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink } from '../pg-governance.js';
+import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../pg-governance.js';
 
 export interface ServerEnv {
   /** Master key for per-tenant secret encryption (TOTEM_TOKEN_ENC_KEY). */
@@ -67,6 +67,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     auditPolicy: new PostgresAuditPolicyStore(pool),
     tokenProvider: tokenManager,
     connectionLookup: new PostgresConnectionStore(pool),
+    defenderPolicy: new PostgresDefenderPolicyStore(pool),
   });
 
   const adminApp = createAdminApp({

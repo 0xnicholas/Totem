@@ -47,6 +47,8 @@ export interface AuditRow {
   errorCode: string | null;
   durationMs: number;
   createdAt: string;
+  /** Free-form enrichment (T15: Defender scan metadata). */
+  metadata?: unknown;
 }
 
 export interface AuditFilters {
@@ -82,6 +84,23 @@ export interface TenantAuditPolicyPatch {
   retentionDays?: number;
   errorOnly?: boolean;
   captureBody?: boolean;
+}
+
+/**
+ * A tenant's Defender policy (T15, ADR-0009): observe-first defaults —
+ * scanning on, blocking off.
+ */
+export interface TenantDefenderPolicy {
+  /** Scan tool responses for injection signatures. */
+  enabled: boolean;
+  /** Turn high-risk responses into a `forbidden` error instead of returning them. */
+  blockHighRisk: boolean;
+}
+
+/** Partial update for a tenant's Defender policy; omitted fields are kept. */
+export interface TenantDefenderPolicyPatch {
+  enabled?: boolean;
+  blockHighRisk?: boolean;
 }
 
 /** Raised when a referenced row (tenant, connection, key) does not exist. */
@@ -148,6 +167,16 @@ export interface AdminRepository {
    * NotFoundError when the tenant does not exist.
    */
   setAuditPolicy(tenantId: string, patch: TenantAuditPolicyPatch): Promise<TenantAuditPolicy>;
+  /** Reads the tenant's Defender policy (T15). @throws NotFoundError when the tenant does not exist. */
+  getDefenderPolicy(tenantId: string): Promise<TenantDefenderPolicy>;
+  /**
+   * Patches the tenant's Defender policy (omitted fields kept), auditing the
+   * change. @throws NotFoundError when the tenant does not exist.
+   */
+  setDefenderPolicy(
+    tenantId: string,
+    patch: TenantDefenderPolicyPatch,
+  ): Promise<TenantDefenderPolicy>;
   /**
    * Deletes the tenant's audit rows older than its retention window.
    * @throws NotFoundError when the tenant does not exist.
@@ -167,4 +196,5 @@ export const ADMIN_AUDIT_ACTIONS = {
   connectionCreated: 'admin.connection_created',
   auditPolicyUpdated: 'admin.audit_policy_updated',
   auditPurged: 'admin.audit_purged',
+  defenderPolicyUpdated: 'admin.defender_policy_updated',
 } as const;

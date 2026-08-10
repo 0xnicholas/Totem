@@ -12,6 +12,8 @@ import {
   type Tenant,
   type TenantAuditPolicy,
   type TenantAuditPolicyPatch,
+  type TenantDefenderPolicy,
+  type TenantDefenderPolicyPatch,
 } from '../admin/repo.js';
 import { auditParamHash } from '../audit.js';
 
@@ -40,6 +42,7 @@ export class InMemoryAdminRepository implements AdminRepository {
   private readonly allowlists = new Map<string, Set<string>>();
   private readonly connections = new Map<string, MemoryConnection>();
   private readonly policies = new Map<string, TenantAuditPolicy>();
+  private readonly defenderPolicies = new Map<string, TenantDefenderPolicy>();
   private readonly audit: AuditRow[] = [];
 
   /** Seeds a connection (connections are created by the OAuth flow, T6). */
@@ -257,6 +260,30 @@ export class InMemoryAdminRepository implements AdminRepository {
     return this.policyFor(tenantId);
   }
 
+  async getDefenderPolicy(tenantId: string): Promise<TenantDefenderPolicy> {
+    this.requireTenant(tenantId);
+    return this.defenderPolicyFor(tenantId);
+  }
+
+  async setDefenderPolicy(
+    tenantId: string,
+    patch: TenantDefenderPolicyPatch,
+  ): Promise<TenantDefenderPolicy> {
+    this.requireTenant(tenantId);
+    const current = this.defenderPolicyFor(tenantId);
+    const updated: TenantDefenderPolicy = {
+      enabled: patch.enabled ?? current.enabled,
+      blockHighRisk: patch.blockHighRisk ?? current.blockHighRisk,
+    };
+    this.defenderPolicies.set(tenantId, updated);
+    this.writeAudit({
+      tenantId,
+      actionName: ADMIN_AUDIT_ACTIONS.defenderPolicyUpdated,
+      params: patch,
+    });
+    return { ...updated };
+  }
+
   async setAuditPolicy(
     tenantId: string,
     patch: TenantAuditPolicyPatch,
@@ -297,6 +324,11 @@ export class InMemoryAdminRepository implements AdminRepository {
 
   private policyFor(tenantId: string): TenantAuditPolicy {
     return this.policies.get(tenantId) ?? { retentionDays: 90, errorOnly: false, captureBody: false };
+  }
+
+  private defenderPolicyFor(tenantId: string): TenantDefenderPolicy {
+    // Observe-first defaults, mirroring the SQL column defaults (T15).
+    return this.defenderPolicies.get(tenantId) ?? { enabled: true, blockHighRisk: false };
   }
 
   private writeAudit(input: {

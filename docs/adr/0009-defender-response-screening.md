@@ -14,6 +14,8 @@ v1 deliberately deferred screening (spec issue #1 out-of-scope list). Research (
 
 Response screening lives at the **execution boundary's return path** (Seam A — before the MCP server or REST layer returns tool results to the agent). It is a platform cross-cutting concern; connectors stay pure translators (ADR-0003) and never scan.
 
+**Implementation status (2026-08-10):** implemented in two slices. T15 ships Tier 1 — the signature scan, `{tier: 'pattern'}` metadata on results and audit rows, per-tenant policy (scan on / block opt-in), 1MB size guard, blocking via the `forbidden` code with `details.reason = defender_block`. T16 ships Tier 2 (local ML classification, thresholds, larger guards) against this contract.
+
 1. **Two-tier pipeline:** Tier-1 fast pattern scan (known injection signatures) runs on every response; Tier-2 local ML classification (no external API, no data leaves the platform) runs in parallel on every response.
 2. **Observe-first default:** scan metadata (`riskLevel`, `tier2Score`, `detections`) attaches to action results; nothing is blocked until an operator enables blocking. Per-tenant override.
 3. **Blocking, when enabled:** high-risk responses return a unified error the agent handles like any other tool error.

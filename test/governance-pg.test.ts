@@ -3,7 +3,7 @@ import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
 import { auditParamHash } from '../src/audit.js';
 import { PostgresAdminRepository } from '../src/admin/pg-repo.js';
-import { PostgresAllowlistStore, PostgresAuditSink } from '../src/pg-governance.js';
+import { PostgresAllowlistStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../src/pg-governance.js';
 import { createActionExecutor } from '../src/index.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
 import { CONNECTION_ACTIONS } from '../src/index.js';
@@ -98,5 +98,60 @@ describe.runIf(hasDb)('governance stores (Postgres)', () => {
     ]);
     expect(rows[0]?.success).toBe(true);
     expect(rows[1]?.success).toBe(false);
+  });
+
+  it('writes defender scan metadata into audit rows and exposes it via queryAudit (T15)', async () => {
+    const sink = new PostgresAuditSink(pool);
+    const repo = new PostgresAdminRepository(pool);
+    const { tenantId, connectionId } = await seedTenantAndConnection('defender-audit');
+
+    const metadata = {
+      reason: 'defender_block',
+      tier: 'pattern',
+      riskLevel: 'high',
+      detections: ['instruction-override'],
+    };
+    await sink.writeAudit({
+      tenantId,
+      connectionId,
+      userId: null,
+      actionName: 'get_doc_content',
+      paramHash: auditParamHash({ doc_id: 'doc_1' }),
+      source: 'mcp',
+      success: false,
+      errorCode: 'forbidden',
+      durationMs: 5,
+      createdAt: new Date().toISOString(),
+      metadata,
+    });
+
+    const rows = await repo.queryAudit(tenantId, {});
+    expect(rows[0]?.metadata).toEqual(metadata);
+  });
+
+  it('resolves defender policy from the tenants row, defaulting to observe-first (T15)', async () => {
+    const store = new PostgresDefenderPolicyStore(pool);
+    const { tenantId } = await seedTenantAndConnection('defender-store');
+
+    // Column defaults: scanning on, blocking off.
+    await expect(store.getPolicy(tenantId)).resolves.toEqual({
+      enabled: true,
+      blockHighRisk: false,
+    });
+
+    await pool.query('UPDATE tenants SET defender_block_high_risk = true WHERE id = $1', [
+      tenantId,
+    ]);
+    await expect(store.getPolicy(tenantId)).resolves.toEqual({
+      enabled: true,
+      blockHighRisk: true,
+    });
+
+    // Unknown tenant: safe defaults, never a throw (the boundary must not
+    // break scanning on a lookup miss).
+    await expect(store.getPolicy('00000000-0000-0000-0000-000000000000')).resolves.toEqual({
+      enabled: true,
+      blockHighRisk: false,
+    });
   });
 });

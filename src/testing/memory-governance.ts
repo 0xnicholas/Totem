@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/require-await -- test doubles: implement async interfaces synchronously */
-import type { AllowlistStore, AuditSink, ExecutionAudit } from '../governance.js';
+import type { AllowlistStore, AuditSink, ExecutionAudit, DefenderPolicy, DefenderPolicyProvider } from '../governance.js';
+import { DEFAULT_DEFENDER_POLICY } from '../governance.js';
 
 function allowlistKey(tenantId: string, connectionId: string): string {
   return `${tenantId}\u0000${connectionId}`;
@@ -29,5 +30,18 @@ export class InMemoryAuditSink implements AuditSink {
   /** All written rows, oldest first. */
   list(): ExecutionAudit[] {
     return [...this.rows];
+  }
+}
+
+/** In-memory `DefenderPolicyProvider` test double (T15). */
+export class InMemoryDefenderPolicyStore implements DefenderPolicyProvider {
+  private readonly policies = new Map<string, DefenderPolicy>();
+
+  setPolicy(tenantId: string, policy: DefenderPolicy): void {
+    this.policies.set(tenantId, { ...policy });
+  }
+
+  async getPolicy(tenantId: string): Promise<DefenderPolicy> {
+    return this.policies.get(tenantId) ?? { ...DEFAULT_DEFENDER_POLICY };
   }
 }

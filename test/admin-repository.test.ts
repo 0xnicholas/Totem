@@ -164,6 +164,33 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
     );
   });
 
+  it('reads, updates and audits the tenant defender policy (T15)', async () => {
+    const tenant = await repo.createTenant('defender-pg-tenant');
+
+    // Observe-first defaults, from the column defaults.
+    expect(await repo.getDefenderPolicy(tenant.id)).toEqual({
+      enabled: true,
+      blockHighRisk: false,
+    });
+
+    const updated = await repo.setDefenderPolicy(tenant.id, { blockHighRisk: true });
+    expect(updated).toEqual({ enabled: true, blockHighRisk: true });
+
+    // Partial updates keep omitted fields.
+    const again = await repo.setDefenderPolicy(tenant.id, { enabled: false });
+    expect(again).toEqual({ enabled: false, blockHighRisk: true });
+
+    const audits = await repo.queryAudit(tenant.id, { action: 'admin.defender_policy_updated' });
+    expect(audits).toHaveLength(2);
+
+    await expect(repo.getDefenderPolicy('00000000-0000-0000-0000-000000000000')).rejects.toThrow(
+      NotFoundError,
+    );
+    await expect(
+      repo.setDefenderPolicy('00000000-0000-0000-0000-000000000000', { enabled: false }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
   it('reads, updates and audits the tenant audit policy (T11)', async () => {
     const tenant = await repo.createTenant('policy-tenant');
 

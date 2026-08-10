@@ -3,8 +3,15 @@ import { auditParamHash } from './audit.js';
 import type { IConnector } from './connector.js';
 import type { ActionErrorCode } from './errors.js';
 import { ActionError, errorMessage, isActionError } from './errors.js';
+import { scanDefender, type DefenderMetadata } from './defender.js';
 import type { TokenProvider } from './feishu/token-manager.js';
-import type { AllowlistStore, AuditPolicyProvider, AuditSink } from './governance.js';
+import {
+  DEFAULT_DEFENDER_POLICY,
+  type AllowlistStore,
+  type AuditPolicyProvider,
+  type AuditSink,
+  type DefenderPolicyProvider,
+} from './governance.js';
 import { DEFAULT_RATE_LIMIT_PER_MINUTE, RateLimiter } from './rate-limit.js';
 import { ActionRegistry } from './registry.js';
 
@@ -57,7 +64,9 @@ export class ConnectionStore implements ConnectionLookup {
  * (validated against the action's output schema) or a structured
  * `ActionError` from the unified error vocabulary (ADR-0005).
  */
-export type ActionResult = { ok: true; output: unknown } | { ok: false; error: ActionError };
+export type ActionResult =
+  | { ok: true; output: unknown; defender?: DefenderMetadata }
+  | { ok: false; error: ActionError };
 
 /**
  * The action execution boundary (Seam A). All action calls — from MCP, the
@@ -86,6 +95,7 @@ export class ActionExecutor {
   private readonly tokenProvider?: TokenProvider;
   private readonly auditPolicy?: AuditPolicyProvider;
   private readonly rateLimiter: RateLimiter;
+  private readonly defenderPolicy?: DefenderPolicyProvider;
 
   constructor(
     registry: ActionRegistry,
@@ -95,6 +105,7 @@ export class ActionExecutor {
     tokenProvider?: TokenProvider,
     auditPolicy?: AuditPolicyProvider,
     rateLimiter?: RateLimiter,
+    defenderPolicy?: DefenderPolicyProvider,
   ) {
     this.registry = registry;
     this.connections = connections;
@@ -105,6 +116,7 @@ export class ActionExecutor {
     // Always-on by default: the throttle is the platform's fair-share
     // primitive, not an opt-in feature.
     this.rateLimiter = rateLimiter ?? new RateLimiter();
+    this.defenderPolicy = defenderPolicy;
   }
 
   async executeAction(
@@ -269,8 +281,39 @@ export class ActionExecutor {
       };
     }
 
-    await this.recordAudit(connection, actionName, args, null, startedAt);
-    return { ok: true, output };
+    // Defender tripwire (T15, ADR-0009): scan the unified output at the
+    // return path, before it reaches the agent. Observe-first — scanning is
+    // on by default (a policy lookup failure keeps the safe defaults), and
+    // blocking is opt-in per tenant. Metadata rides the result and the
+    // audit row (the observation path). Connectors stay pure translators:
+    // the scan is a boundary concern, never inside a connector.
+    let defender: DefenderMetadata | undefined;
+    if (this.defenderPolicy) {
+      let policy = DEFAULT_DEFENDER_POLICY;
+      try {
+        policy = await this.defenderPolicy.getPolicy(connection.tenantId);
+      } catch (err) {
+        console.error(`defender policy lookup failed: ${errorMessage(err)}`);
+      }
+      if (policy.enabled) {
+        defender = scanDefender(output);
+        if (defender && policy.blockHighRisk && defender.riskLevel === 'high') {
+          const blockInfo = { reason: 'defender_block', ...defender };
+          await this.recordAudit(connection, actionName, args, 'forbidden', startedAt, blockInfo);
+          return {
+            ok: false,
+            error: new ActionError(
+              'forbidden',
+              'Response blocked: possible prompt injection detected',
+              { details: blockInfo },
+            ),
+          };
+        }
+      }
+    }
+
+    await this.recordAudit(connection, actionName, args, null, startedAt, defender);
+    return { ok: true, output, ...(defender !== undefined ? { defender } : {}) };
   }
 
   /**
@@ -285,6 +328,7 @@ export class ActionExecutor {
     args: unknown,
     errorCode: ActionErrorCode | null,
     startedAt: number,
+    metadata?: unknown,
   ): Promise<void> {
     if (errorCode === null && this.auditPolicy) {
       try {
@@ -308,6 +352,7 @@ export class ActionExecutor {
         errorCode,
         durationMs: Date.now() - startedAt,
         createdAt: new Date().toISOString(),
+        ...(metadata !== undefined ? { metadata } : {}),
       });
     } catch (err) {
       console.error(`audit write failed: ${errorMessage(err)}`);
@@ -354,6 +399,8 @@ export function createActionExecutor(config: {
   connectionLookup?: ConnectionLookup;
   /** Per-(tenant, connection) token buckets (T13); defaults to a real-clock limiter. */
   rateLimiter?: RateLimiter;
+  /** Defender response screening (T15); optional — no provider, no scanning. */
+  defenderPolicy?: DefenderPolicyProvider;
 }): ActionExecutor {
   const registry = new ActionRegistry();
   for (const action of config.actions) registry.registerAction(action);
@@ -374,6 +421,7 @@ export function createActionExecutor(config: {
     config.tokenProvider,
     config.auditPolicy,
     config.rateLimiter,
+    config.defenderPolicy,
   );
 }
 

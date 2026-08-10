@@ -10,6 +10,7 @@ import {
   type AuditFilters,
   type AuditSource,
   type TenantAuditPolicyPatch,
+  type TenantDefenderPolicyPatch,
 } from './repo.js';
 import { isRecord } from './util.js';
 
@@ -181,6 +182,23 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json(policy);
   });
 
+  app.get('/admin/tenants/:tenantId/defender-policy', async (c) => {
+    const policy = await repo.getDefenderPolicy(c.req.param('tenantId'));
+    return c.json(policy);
+  });
+
+  app.put('/admin/tenants/:tenantId/defender-policy', async (c) => {
+    const body = await readJson(c);
+    if (!isRecord(body) || !isDefenderPolicyPatch(body)) {
+      return badRequest(
+        c,
+        'body must be an object with optional "enabled" and "blockHighRisk" (booleans)',
+      );
+    }
+    const policy = await repo.setDefenderPolicy(c.req.param('tenantId'), body);
+    return c.json(policy);
+  });
+
   app.post('/admin/tenants/:tenantId/audit/purge', async (c) => {
     const { deleted } = await repo.purgeAudit(c.req.param('tenantId'));
     return c.json({ deleted });
@@ -274,6 +292,17 @@ function isAuditPolicyPatch(value: unknown): value is TenantAuditPolicyPatch {
   if (captureBody !== undefined && typeof captureBody !== 'boolean') return false;
   for (const key of Object.keys(value)) {
     if (key !== 'retentionDays' && key !== 'errorOnly' && key !== 'captureBody') return false;
+  }
+  return true;
+}
+
+function isDefenderPolicyPatch(value: unknown): value is TenantDefenderPolicyPatch {
+  if (!isRecord(value)) return false;
+  const { enabled, blockHighRisk } = value;
+  if (enabled !== undefined && typeof enabled !== 'boolean') return false;
+  if (blockHighRisk !== undefined && typeof blockHighRisk !== 'boolean') return false;
+  for (const key of Object.keys(value)) {
+    if (key !== 'enabled' && key !== 'blockHighRisk') return false;
   }
   return true;
 }

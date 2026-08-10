@@ -14,6 +14,8 @@ import {
   type Tenant,
   type TenantAuditPolicy,
   type TenantAuditPolicyPatch,
+  type TenantDefenderPolicy,
+  type TenantDefenderPolicyPatch,
 } from './repo.js';
 import { auditParamHash } from '../audit.js';
 
@@ -35,6 +37,11 @@ interface TenantPolicyRow {
   audit_retention_days: number;
   audit_error_only: boolean;
   capture_body: boolean;
+}
+
+interface TenantDefenderPolicyRow {
+  defender_enabled: boolean;
+  defender_block_high_risk: boolean;
 }
 
 interface ApiKeyRow {
@@ -71,6 +78,7 @@ interface AuditLogRow {
   error_code: string | null;
   duration_ms: number;
   created_at: Date;
+  metadata: unknown;
 }
 
 /**
@@ -301,7 +309,7 @@ export class PostgresAdminRepository implements AdminRepository {
     const rows = (
       await this.pool.query<AuditLogRow>(
         `SELECT id, tenant_id, connection_id, user_id, action_name, param_hash, source,
-                success, error_code, duration_ms, created_at
+                success, error_code, duration_ms, created_at, metadata
          FROM audit_logs WHERE ${conditions.join(' AND ')}
          ORDER BY created_at DESC LIMIT 1000`,
         params,
@@ -346,6 +354,50 @@ export class PostgresAdminRepository implements AdminRepository {
         durationMs: 0,
       });
       return mapAuditPolicy(row);
+    });
+  }
+
+  async getDefenderPolicy(tenantId: string): Promise<TenantDefenderPolicy> {
+    const row = (
+      await this.pool.query<TenantDefenderPolicyRow>(
+        `SELECT defender_enabled, defender_block_high_risk
+         FROM tenants WHERE id = $1`,
+        [tenantId],
+      )
+    ).rows[0];
+    if (!row) throw new NotFoundError(`Tenant "${tenantId}" not found`);
+    return {
+      enabled: row.defender_enabled,
+      blockHighRisk: row.defender_block_high_risk,
+    };
+  }
+
+  async setDefenderPolicy(
+    tenantId: string,
+    patch: TenantDefenderPolicyPatch,
+  ): Promise<TenantDefenderPolicy> {
+    return this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      const row = (
+        await client.query<TenantDefenderPolicyRow>(
+          `UPDATE tenants SET
+             defender_enabled         = COALESCE($2, defender_enabled),
+             defender_block_high_risk = COALESCE($3, defender_block_high_risk)
+           WHERE id = $1
+           RETURNING defender_enabled, defender_block_high_risk`,
+          [tenantId, patch.enabled ?? null, patch.blockHighRisk ?? null],
+        )
+      ).rows[0]!;
+      await this.writeAudit(client, {
+        tenantId,
+        actionName: ADMIN_AUDIT_ACTIONS.defenderPolicyUpdated,
+        params: patch,
+        durationMs: 0,
+      });
+      return {
+        enabled: row.defender_enabled,
+        blockHighRisk: row.defender_block_high_risk,
+      };
     });
   }
 
@@ -477,6 +529,7 @@ function mapAuditRow(row: {
   error_code: string | null;
   duration_ms: number;
   created_at: Date;
+  metadata: unknown;
 }): AuditRow {
   return {
     id: String(row.id),
@@ -490,5 +543,8 @@ function mapAuditRow(row: {
     errorCode: row.error_code,
     durationMs: row.duration_ms,
     createdAt: row.created_at.toISOString(),
+    ...(row.metadata !== null && row.metadata !== undefined
+      ? { metadata: row.metadata }
+      : {}),
   };
 }
