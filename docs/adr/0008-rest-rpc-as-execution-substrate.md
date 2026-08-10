@@ -14,9 +14,9 @@ The failure mode to avoid: a REST surface that drifts from the MCP tool schemas 
 
 v2 adds `POST /actions/rpc` as a thin HTTP projection of `executeAction` (Seam A):
 
-- **Envelope:** `{ action, path, query, body, headers }` (StackOne-compatible shape). Auth: tenant API key (Bearer, actions scope). Connection addressing: `x-connection-id` header — the same per-request resolution the MCP adapter already performs.
+- **Envelope:** `{ action, args }` — `args` is the same flat object MCP `tools/call` receives for the action (the registry's input schema). StackOne's `{action, path, query, body, headers}` splitting reflects *its* registry's parameter positions; totem's registry has none, so splitting would create exactly the two-surface parameter divergence this ADR prohibits. Auth: tenant API key (Bearer, actions scope). Connection addressing: `x-connection-id` header — the same per-request resolution the MCP adapter already performs.
 - **Zero logic of its own:** allowlist check, schema validation, token acquisition, dispatch, audit write all remain in the execution boundary. The REST route is an adapter and nothing else.
-- **Identical contracts:** unified error vocabulary with `retryable` (ADR-0005), 429 + `Retry-After` (T13 throttle), the ADR-0006 list envelope, cursor pagination when it lands.
+- **Identical contracts:** unified error vocabulary with `retryable` (ADR-0005), HTTP status per code (400/401/403/404/429/502), 429 + `Retry-After` (T13), the ADR-0006 list envelope, cursor pagination when it lands.
 - **The registry is canonical; REST and MCP are both projections.** No second schema, no second error vocabulary, no divergent parameter naming. Changes land in the registry/executor and both surfaces inherit.
 - A2A and SDK toolset surfaces remain out of scope (internal consumers use MCP or REST directly).
 

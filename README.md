@@ -137,6 +137,7 @@ HTTP 429 + `Retry-After` mapping lands with the REST RPC surface (T14).
 - `src/pg-governance.ts` — Postgres implementations of both
 - `src/audit.ts` — canonical param hashing for audit rows
 - `src/admin/` — admin API (hono), Postgres repository, HTTP client, keys
+- `src/rest/` — REST surface: discovery (T12) + Actions RPC (T14)
 - `src/cli/` — `totemctl` commands
 - `src/server/` — service entry point (env wiring)
 - `src/errors.ts` — the unified error vocabulary (ADR-0005: seven codes)

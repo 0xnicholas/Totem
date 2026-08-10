@@ -11,6 +11,7 @@ import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
 import { PostgresTokenStore } from '../feishu/pg-token-store.js';
 import { TokenManager } from '../feishu/token-manager.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
+import { createRpcApp } from '../rest/rpc.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink } from '../pg-governance.js';
@@ -85,11 +86,16 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     actions: executor.listActions(),
     keys: new PostgresMCPKeyStore(pool),
   });
+  const rpcApp = createRpcApp({
+    executor,
+    keys: new PostgresMCPKeyStore(pool),
+  });
 
   const app = new Hono();
   app.route('/', adminApp);
   app.route('/mcp', mcpApp);
   app.route('/', discoveryApp);
+  app.route('/', rpcApp);
   app.notFound((c) => c.json({ error: 'route not found' }, 404));
   app.onError((err, c) => {
     console.error(err);

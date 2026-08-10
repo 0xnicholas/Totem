@@ -46,6 +46,8 @@ export { createMcpApp } from './mcp/server.js';
 export type { McpAppConfig } from './mcp/server.js';
 export { createDiscoveryApp } from './rest/discovery.js';
 export type { DiscoveryAppConfig } from './rest/discovery.js';
+export { createRpcApp, STATUS_BY_ERROR_CODE } from './rest/rpc.js';
+export type { RpcAppConfig } from './rest/rpc.js';
 export { InMemoryMCPKeyStore } from './testing/memory-key-store.js';
 export { decryptValue, deriveTenantKey, encryptValue, isCiphertext } from './feishu/crypto.js';
 export type { FeishuAppCredentials, FeishuCredsStore } from './feishu/creds-store.js';
