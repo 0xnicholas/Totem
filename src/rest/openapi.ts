@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AnySchemaObject } from 'ajv';
 import type { Action } from '../action.js';
 import { ACTION_ERROR_CODES, type ActionErrorCode } from '../errors.js';
+import { TOTEM_VERSION } from '../version.js';
 import { STATUS_BY_ERROR_CODE } from './rpc.js';
 
 /** The document-level metadata injected by the composition root (T24). */
@@ -22,6 +23,18 @@ export interface OpenApiAppConfig {
   actions: Action[];
   meta: OpenApiMeta;
 }
+
+/**
+ * The platform's canonical document meta (T26): the composition root serves
+ * this by default, and the committed snapshot (`openapi.json`) is generated
+ * from it — so the snapshot and the default-served document can never
+ * disagree. An operator overriding TOTEM_URL changes only `serverUrl`.
+ */
+export const DEFAULT_OPENAPI_META: OpenApiMeta = {
+  version: TOTEM_VERSION,
+  title: 'Totem API',
+  serverUrl: 'http://localhost:3000',
+};
 
 export interface Parameter {
   name: string;
@@ -329,6 +342,17 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
       schemas,
     },
   };
+}
+
+/**
+ * The platform contract as served and committed (T26): `buildOpenApiDocument`
+ * over the v1 platform action set with the canonical `DEFAULT_OPENAPI_META`.
+ * The snapshot generator (`scripts/generate-openapi.mts`) and the CI drift
+ * gate use exactly this, so a registry change that forgets to update
+ * `openapi.json` turns the build red.
+ */
+export function buildPlatformOpenApiDocument(actions: Action[]): OpenApiDocument {
+  return buildOpenApiDocument(actions, DEFAULT_OPENAPI_META);
 }
 
 /**

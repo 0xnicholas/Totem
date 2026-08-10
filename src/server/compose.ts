@@ -11,9 +11,8 @@ import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
 import { PostgresTokenStore } from '../feishu/pg-token-store.js';
 import { TokenManager } from '../feishu/token-manager.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
-import { createOpenApiApp } from '../rest/openapi.js';
+import { createOpenApiApp, DEFAULT_OPENAPI_META } from '../rest/openapi.js';
 import { createRpcApp } from '../rest/rpc.js';
-import { TOTEM_VERSION } from '../version.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../pg-governance.js';
@@ -98,9 +97,8 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   const openApiApp = createOpenApiApp({
     actions: executor.listActions(),
     meta: {
-      version: TOTEM_VERSION,
-      title: 'Totem API',
-      serverUrl: env.serverUrl ?? 'http://localhost:3000',
+      ...DEFAULT_OPENAPI_META,
+      serverUrl: env.serverUrl ?? DEFAULT_OPENAPI_META.serverUrl,
     },
   });
 

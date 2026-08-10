@@ -34,3 +34,11 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      # OpenAPI drift gate (T26): regenerate the committed snapshot and fail
+      # on any difference, so a registry change that forgets to update
+      # openapi.json turns the PR red — the diff is visible in this step's
+      # output and reviewable in the PR.
+      - name: OpenAPI snapshot drift gate
+        run: |
+          npm run generate:openapi
+          git diff --exit-code openapi.json

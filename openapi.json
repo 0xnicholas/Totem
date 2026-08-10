@@ -1,0 +1,936 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Totem API",
+    "version": "0.1.0",
+    "description": "Totem action layer: schema-first actions over MCP and REST. The registry is the single source of truth; every surface is a projection of it (ADR-0008)."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000"
+    }
+  ],
+  "paths": {
+    "/actions": {
+      "get": {
+        "operationId": "list_actions",
+        "description": "List the platform action set as metadata (name, description, effects); hidden actions are excluded.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The platform action set as metadata (hidden excluded).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "effects": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "effects"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "actions"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/actions/search": {
+      "post": {
+        "operationId": "search_actions",
+        "description": "Case-insensitive text search across action names and descriptions (semantic search is v2; substring matching is the documented v1 contract).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "query"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The matching actions plus the query they matched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "query": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "effects": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "effects"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "query",
+                    "actions"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/actions/rpc": {
+      "post": {
+        "operationId": "actions_rpc",
+        "description": "Execute any registered action — the REST projection of the execution boundary (same governance, same error vocabulary, same audit as MCP). Envelope: {action, args}. Each action's input and output schemas are published verbatim in components.schemas as <action>_input and <action>_output. Action-level failures return the ActionError body (components.schemas.ActionError) with the HTTP status per the ADR-0005 mapping; rate_limited responses carry a Retry-After header.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-connection-id",
+            "in": "header",
+            "required": true,
+            "description": "The connection to execute the action against — the same per-request connection addressing the MCP surface performs.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The action's output — see the matching <action>_output component in components.schemas.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ActionError (ADR-0005): validation_error — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "ActionError (ADR-0005): auth_expired — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ActionError (ADR-0005): forbidden — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "ActionError (ADR-0005): action_not_found, not_found — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "ActionError (ADR-0005): rate_limited — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before retrying (T13) — present on rate_limited errors.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "ActionError (ADR-0005): upstream_error — see components.schemas.ActionError.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Tenant API key (actions scope) — the same key the MCP surface accepts."
+      }
+    },
+    "schemas": {
+      "ActionError": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The unified error vocabulary (ADR-0005): seven codes, each with a retryable flag — agents retry when retryable, stop otherwise.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "One of the seven ADR-0005 codes.",
+            "enum": [
+              "validation_error",
+              "action_not_found",
+              "forbidden",
+              "auth_expired",
+              "not_found",
+              "rate_limited",
+              "upstream_error"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable failure description."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Whether an agent should retry this action (false for validation and permission errors)."
+          },
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Whole seconds to wait before retrying; present on platform-issued rate_limited (T13)."
+          },
+          "upstream": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The original upstream error, for diagnostics.",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "details": {
+            "description": "Extra context — e.g. the ValidationIssue[] list on validation_error."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ]
+      },
+      "append_doc_content_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "append_doc_content_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "create_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "folder_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "create_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "title"
+        ]
+      },
+      "export_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "docx",
+              "pdf"
+            ]
+          }
+        },
+        "required": [
+          "doc_id",
+          "format"
+        ]
+      },
+      "export_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "docx",
+              "pdf"
+            ]
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "format",
+          "artifact_id",
+          "url"
+        ]
+      },
+      "get_doc_content_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
+      "get_doc_content_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "get_doc_metadata_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
+      "get_doc_metadata_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "doc_type": {
+            "type": "string"
+          },
+          "edited_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "title",
+          "owner_id",
+          "doc_type",
+          "edited_at"
+        ]
+      },
+      "move_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "folder_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "folder_id"
+        ]
+      },
+      "move_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "folder_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "folder_id"
+        ]
+      },
+      "read_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name"
+        ]
+      },
+      "read_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "record_id": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "record_id",
+                "fields"
+              ]
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "data",
+          "next"
+        ]
+      },
+      "read_sheet_cells_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "sheet_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "range"
+        ]
+      },
+      "read_sheet_cells_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "data",
+          "next"
+        ]
+      },
+      "rename_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "new_title": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "new_title"
+        ]
+      },
+      "rename_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "title"
+        ]
+      },
+      "search_docs_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "search_docs_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "doc_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "doc_type": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "doc_id",
+                "title",
+                "doc_type"
+              ]
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
+        ]
+      },
+      "test_connection_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "test_connection_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          }
+        },
+        "required": [
+          "connection_id",
+          "status"
+        ]
+      },
+      "write_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "fields"
+        ]
+      },
+      "write_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "record_id"
+        ]
+      },
+      "write_sheet_cells_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "sheet_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "values"
+        ]
+      },
+      "write_sheet_cells_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "updated_cells": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "updated_cells"
+        ]
+      }
+    }
+  }
+}
