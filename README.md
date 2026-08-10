@@ -111,6 +111,18 @@ hidden actions. This is the read-only first step of the v2 REST surface;
 the RPC envelope (`POST /actions/rpc`) lands when the MCP adapter proves
 it.
 
+## Rate limiting (T13)
+
+A token bucket at the execution boundary (`executeAction`, Seam A) limits
+each (tenant, connection) to its per-minute budget: the connector's manifest
+`rateLimit` (requests per minute per connected account), falling back to a
+platform default of 600/min. A denied call returns the `rate_limited`
+vocabulary error with `retryAfterSeconds` — the agent's retry signal
+(ADR-0005 `retryable`) — and is audited like any other failure. The gate
+sits after the allowlist (a forbidden call never burns the bucket) and
+before validation/dispatch. No queueing, no platform-side auto-retry; the
+HTTP 429 + `Retry-After` mapping lands with the REST RPC surface (T14).
+
 ## Layout
 
 - `src/action.ts` — the platform `Action` shape (`name`, `description`,
@@ -128,6 +140,7 @@ it.
 - `src/cli/` — `totemctl` commands
 - `src/server/` — service entry point (env wiring)
 - `src/errors.ts` — the unified error vocabulary (ADR-0005: seven codes)
+- `src/rate-limit.ts` — per-(tenant, connection) token bucket (T13)
 - `src/testing/` — Seam A and HTTP-boundary test doubles
   (`FakeConnector`, `InMemoryAdminRepository`)
 - `test/` — behavior tests through Seam A / HTTP boundary only

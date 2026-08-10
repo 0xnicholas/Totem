@@ -2,6 +2,7 @@ import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnecto
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink } from '../src/governance.js';
 import type { TokenProvider } from '../src/feishu/token-manager.js';
+import type { RateLimiter } from '../src/rate-limit.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 
@@ -16,6 +17,13 @@ export const PLATFORM_ACTIONS: Action[] = [...DOCS_ACTIONS, ...CONNECTION_ACTION
 
 export const CONN_1_A: ConnectionRecord = {
   tenantId: TENANT_A,
+  connectionId: CONN_1,
+  connectorId: FAKE_CONNECTOR_ID,
+};
+
+/** Tenant B's own connection to the same connector (isolation tests). */
+export const CONN_1_B: ConnectionRecord = {
+  tenantId: TENANT_B,
   connectionId: CONN_1,
   connectorId: FAKE_CONNECTOR_ID,
 };
@@ -35,6 +43,7 @@ export function makeHarness(config: {
   audit?: AuditSink;
   tokenProvider?: TokenProvider;
   auditPolicy?: AuditPolicyProvider;
+  rateLimiter?: RateLimiter;
 } = {}): {
   executor: ActionExecutor;
   allowlists: InMemoryAllowlistStore;
@@ -63,6 +72,7 @@ export function makeHarness(config: {
     audit,
     ...(config.tokenProvider !== undefined ? { tokenProvider: config.tokenProvider } : {}),
     ...(config.auditPolicy !== undefined ? { auditPolicy: config.auditPolicy } : {}),
+    ...(config.rateLimiter !== undefined ? { rateLimiter: config.rateLimiter } : {}),
   });
   return { executor, allowlists: allowlists as InMemoryAllowlistStore, audit: audit as InMemoryAuditSink };
 }

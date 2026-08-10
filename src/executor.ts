@@ -5,6 +5,7 @@ import type { ActionErrorCode } from './errors.js';
 import { ActionError, errorMessage, isActionError } from './errors.js';
 import type { TokenProvider } from './feishu/token-manager.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink } from './governance.js';
+import { DEFAULT_RATE_LIMIT_PER_MINUTE, RateLimiter } from './rate-limit.js';
 import { ActionRegistry } from './registry.js';
 
 /** A connection binds a tenant to a connector; identity is (tenantId, connectionId). */
@@ -65,9 +66,13 @@ export type ActionResult = { ok: true; output: unknown } | { ok: false; error: A
  * 1. resolve the connection (tenant isolation enforced by the store)
  * 2. resolve the platform action definition in the registry
  * 3. check the connection's allowlist (fail-closed; `forbidden`)
- * 4. validate `args` against the action's input schema
- * 5. dispatch through the connection's connector (`execute`)
- * 6. validate the handler output against the action's output schema
+ * 4. throttle against the connection's per-minute budget (T13; `rate_limited`
+ *    with `retryAfterSeconds` — after the allowlist gate, so a forbidden call
+ *    can never burn the bucket, and before validation/dispatch, which are the
+ *    expensive parts)
+ * 5. validate `args` against the action's input schema
+ * 6. dispatch through the connection's connector (`execute`)
+ * 7. validate the handler output against the action's output schema
  *
  * Every attempt on a resolvable connection writes an audit row (best
  * effort). Governance lives here per ADR-0003 — the connector only
@@ -80,6 +85,7 @@ export class ActionExecutor {
   private readonly audit: AuditSink;
   private readonly tokenProvider?: TokenProvider;
   private readonly auditPolicy?: AuditPolicyProvider;
+  private readonly rateLimiter: RateLimiter;
 
   constructor(
     registry: ActionRegistry,
@@ -88,6 +94,7 @@ export class ActionExecutor {
     audit: AuditSink,
     tokenProvider?: TokenProvider,
     auditPolicy?: AuditPolicyProvider,
+    rateLimiter?: RateLimiter,
   ) {
     this.registry = registry;
     this.connections = connections;
@@ -95,6 +102,9 @@ export class ActionExecutor {
     this.audit = audit;
     this.tokenProvider = tokenProvider;
     this.auditPolicy = auditPolicy;
+    // Always-on by default: the throttle is the platform's fair-share
+    // primitive, not an opt-in feature.
+    this.rateLimiter = rateLimiter ?? new RateLimiter();
   }
 
   async executeAction(
@@ -167,6 +177,27 @@ export class ActionExecutor {
         error: new ActionError(
           'forbidden',
           `Action "${actionName}" is not allowed on connection "${connectionId}"`,
+        ),
+      };
+    }
+
+    // Throttle gate (T13): one token bucket per (tenant, connection), budget
+    // from the connector manifest (platform default when undeclared). A
+    // denied attempt is a vocabulary error with the wait time the agent
+    // should honor — the same signal shape a connector-mapped upstream 429
+    // produces. Placed after the allowlist (a forbidden call must not burn
+    // the bucket) and before validation/dispatch (the expensive parts).
+    const requestsPerMinute =
+      connector.manifest.rateLimit?.requestsPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
+    const gate = this.rateLimiter.check(connectionKey(tenantId, connectionId), requestsPerMinute);
+    if (!gate.allowed) {
+      await this.recordAudit(connection, actionName, args, 'rate_limited', startedAt);
+      return {
+        ok: false,
+        error: new ActionError(
+          'rate_limited',
+          `Rate limit exceeded for connection "${connectionId}" (${requestsPerMinute}/min)`,
+          { retryAfterSeconds: gate.retryAfterSeconds },
         ),
       };
     }
@@ -321,6 +352,8 @@ export function createActionExecutor(config: {
   auditPolicy?: AuditPolicyProvider;
   /** Live connection lookup (Postgres); defaults to an in-memory store over `connections`. */
   connectionLookup?: ConnectionLookup;
+  /** Per-(tenant, connection) token buckets (T13); defaults to a real-clock limiter. */
+  rateLimiter?: RateLimiter;
 }): ActionExecutor {
   const registry = new ActionRegistry();
   for (const action of config.actions) registry.registerAction(action);
@@ -340,6 +373,7 @@ export function createActionExecutor(config: {
     config.audit,
     config.tokenProvider,
     config.auditPolicy,
+    config.rateLimiter,
   );
 }
 

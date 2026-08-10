@@ -12,9 +12,9 @@ import { CONN_1, TENANT_A, makeHarness } from './fixtures.js';
 const ACTION_KEY = 'tt_dev_mcp_test_key';
 
 /** Harness wiring for the MCP HTTP surface: executor + stores + keys. */
-function makeServer(initialDocs?: FakeDoc[]) {
+function makeServer(initialDocs?: FakeDoc[], connector?: FakeConnector) {
   const harness = makeHarness({
-    connectors: [new FakeConnector(initialDocs)],
+    connectors: [connector ?? new FakeConnector(initialDocs)],
   });
   const keys = new InMemoryMCPKeyStore();
   keys.addKey(ACTION_KEY, TENANT_A);
@@ -184,6 +184,46 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
     const result = rpcResult(called.payload as never).result as { content: [{ text: string }]; structuredContent?: unknown };
     expect(result.content[0].text).toContain('raw rpc');
     expect(result.structuredContent).toMatchObject({ title: 'raw rpc' });
+  });
+
+  it('projects a throttled call as an isError result carrying rate_limited and retryAfterSeconds (T13)', async () => {
+    // Budget of one: the second call in the same instant must be throttled.
+    const { app } = makeServer(undefined, new FakeConnector([], { rateLimit: { requestsPerMinute: 1 } }));
+    const authHeaders = { authorization: `Bearer ${ACTION_KEY}`, 'x-connection-id': CONN_1 };
+
+    const init = await rpc(app, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '0' } },
+    }, authHeaders);
+    const sessionHeaders = { ...authHeaders, 'mcp-session-id': init.sessionId! };
+    const call = (id: number) =>
+      rpc(
+        app,
+        { jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'create_doc', arguments: { title: 'burst' } } },
+        sessionHeaders,
+      );
+
+    const first = await call(2);
+    const firstResult = rpcResult(first.payload as never).result as {
+      isError?: boolean;
+      content: [{ text: string }];
+    };
+    // Success responses carry no isError flag (it is only set on failures).
+    expect(firstResult.isError).toBeUndefined();
+    expect(firstResult.content[0].text).toContain('"doc_id"');
+
+    const second = await call(3);
+    const result = rpcResult(second.payload as never).result as {
+      isError: boolean;
+      content: [{ text: string }];
+    };
+    // Tool-level failures are results, not JSON-RPC errors; the ADR-0005
+    // vocabulary rides in the message with the new T13 field.
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('"code":"rate_limited"');
+    expect(result.content[0].text).toContain('"retryAfterSeconds":60');
   });
 
   it('hides allowlisted-out tools from tools/list (ADR-0002)', async () => {

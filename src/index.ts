@@ -31,6 +31,8 @@ export type {
 export type { ConnectorManifest, IConnector } from './connector.js';
 export { ACTION_ERROR_CODES, ActionError, isActionError } from './errors.js';
 export type { ActionErrorCode, ValidationIssue } from './errors.js';
+export { DEFAULT_RATE_LIMIT_PER_MINUTE, RateLimiter } from './rate-limit.js';
+export type { RateLimitDeclaration } from './rate-limit.js';
 export { ActionRegistry } from './registry.js';
 export { ActionExecutor, ConnectionStore, createActionExecutor } from './executor.js';
 export type { ActionResult, ConnectionLookup, ConnectionRecord } from './executor.js';

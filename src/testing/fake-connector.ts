@@ -28,6 +28,7 @@ import type {
 } from '../actions.js';
 import type { ConnectorManifest, IConnector } from '../connector.js';
 import { ActionError } from '../errors.js';
+import type { RateLimitDeclaration } from '../rate-limit.js';
 import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js';
 
 export const FAKE_CONNECTOR_ID = 'fake';
@@ -63,29 +64,34 @@ export interface FakeDoc {
  * which ADR-0001 permits for v1.
  */
 export class FakeConnector implements IConnector {
-  readonly manifest: ConnectorManifest = {
-    id: FAKE_CONNECTOR_ID,
-    implements: [
-      'test_connection',
-      'create_doc',
-      'search_docs',
-      'get_doc_content',
-      'get_doc_metadata',
-      'append_doc_content',
-      'rename_doc',
-      'move_doc',
-      'export_doc',
-      'read_sheet_cells',
-      'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
-    ],
-  };
+  readonly manifest: ConnectorManifest;
 
   private readonly docs = new Map<string, FakeDoc>();
   private readonly handlers: Record<string, ActionHandler>;
 
-  constructor(initialDocs: FakeDoc[] = []) {
+  constructor(
+    initialDocs: FakeDoc[] = [],
+    opts: { rateLimit?: RateLimitDeclaration } = {},
+  ) {
+    this.manifest = {
+      id: FAKE_CONNECTOR_ID,
+      implements: [
+        'test_connection',
+        'create_doc',
+        'search_docs',
+        'get_doc_content',
+        'get_doc_metadata',
+        'append_doc_content',
+        'rename_doc',
+        'move_doc',
+        'export_doc',
+        'read_sheet_cells',
+        'write_sheet_cells',
+        'read_bitable_records',
+        'write_bitable_records',
+      ],
+      ...(opts.rateLimit !== undefined ? { rateLimit: opts.rateLimit } : {}),
+    };
     for (const doc of initialDocs) this.docs.set(doc.doc_id, { ...doc });
     this.handlers = {
       test_connection: (_args, ctx) => ({ connection_id: ctx.connectionId, status: 'ok' }),

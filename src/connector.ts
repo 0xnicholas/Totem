@@ -1,4 +1,5 @@
 import type { ActionContext } from './action.js';
+import type { RateLimitDeclaration } from './rate-limit.js';
 
 /**
  * Connector manifest (ADR-0001): the connector declares its identity and the
@@ -10,6 +11,13 @@ export interface ConnectorManifest {
   id: string;
   /** Names of platform actions this connector implements. */
   implements: string[];
+  /**
+   * Requests per minute for one connected account (T13) — the connector
+   * author's declared comfort level against the upstream. The execution
+   * boundary throttles to this instead of each connector re-implementing
+   * rate limiting; the platform default applies when undeclared.
+   */
+  rateLimit?: RateLimitDeclaration;
 }
 
 /**

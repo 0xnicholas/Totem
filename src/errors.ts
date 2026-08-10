@@ -47,6 +47,8 @@ export interface ActionErrorJson {
   code: ActionErrorCode;
   message: string;
   retryable: boolean;
+  /** Whole seconds to wait before retrying (T13: present on platform-issued `rate_limited`). */
+  retryAfterSeconds?: number;
   upstream?: { code: string; message: string };
   details?: unknown;
 }
@@ -66,11 +68,17 @@ export class ActionError extends Error {
   /** Original upstream error, for diagnostics. */
   readonly upstream?: { code: string; message: string };
   readonly details?: unknown;
+  /** Whole seconds to wait before retrying (T13). */
+  readonly retryAfterSeconds?: number;
 
   constructor(
     code: ActionErrorCode,
     message: string,
-    opts?: { details?: unknown; upstream?: { code: string; message: string } },
+    opts?: {
+      details?: unknown;
+      upstream?: { code: string; message: string };
+      retryAfterSeconds?: number;
+    },
   ) {
     super(message);
     this.name = 'ActionError';
@@ -78,6 +86,7 @@ export class ActionError extends Error {
     this.retryable = RETRYABLE[code];
     if (opts?.details !== undefined) this.details = opts.details;
     if (opts?.upstream !== undefined) this.upstream = opts.upstream;
+    if (opts?.retryAfterSeconds !== undefined) this.retryAfterSeconds = opts.retryAfterSeconds;
   }
 
   toJSON(): ActionErrorJson {
@@ -88,6 +97,7 @@ export class ActionError extends Error {
     };
     if (this.details !== undefined) out.details = this.details;
     if (this.upstream !== undefined) out.upstream = this.upstream;
+    if (this.retryAfterSeconds !== undefined) out.retryAfterSeconds = this.retryAfterSeconds;
     return out;
   }
 }
