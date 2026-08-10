@@ -140,7 +140,7 @@ export class FakeConnector implements IConnector {
       .reverse()
       .slice(0, limit)
       .map((doc) => ({ doc_id: doc.doc_id, title: doc.title, doc_type: 'docx' }));
-    return { docs };
+    return { data: docs, next: null };
   }
 
   private getDocContent(args: GetDocContentInput): GetDocContentOutput {
@@ -206,7 +206,7 @@ export class FakeConnector implements IConnector {
   private readSheetCells(args: ReadSheetCellsInput): ReadSheetCellsOutput {
     const doc = this.requireSheet(args.doc_id);
     const ref = this.parseSheetRange(doc, args);
-    return { doc_id: doc.doc_id, range: args.range, values: sliceValues(doc.sheet.values, ref) };
+    return { doc_id: doc.doc_id, range: args.range, data: sliceValues(doc.sheet.values, ref), next: null };
   }
 
   private writeSheetCells(args: WriteSheetCellsInput): WriteSheetCellsOutput {
@@ -254,7 +254,8 @@ export class FakeConnector implements IConnector {
     return {
       doc_id: doc.doc_id,
       table_name: args.table_name,
-      records: records.slice(0, args.limit ?? 100),
+      data: records.slice(0, args.limit ?? 100),
+      next: null,
     };
   }
 

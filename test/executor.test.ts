@@ -49,7 +49,7 @@ describe('executeAction (Seam A)', () => {
     });
     expect(searched).toMatchObject({ ok: true });
     if (searched.ok) {
-      expect(searched.output).toMatchObject({ docs: [{ doc_id, title: 'Q3 planning' }] });
+      expect(searched.output).toMatchObject({ data: [{ doc_id, title: 'Q3 planning' }], next: null });
     }
   });
 

@@ -141,11 +141,12 @@ export class FeishuConnector implements IConnector {
         const output: SearchDocsOutput = {
           // Live shape (T9 demo pass): data.docs_entities with docs_token /
           // docs_type — not the files/token/type shape the mock modelled.
-          docs: response.data.docs_entities.map((file) => ({
+          data: response.data.docs_entities.map((file) => ({
             doc_id: file.docs_token,
             title: file.title,
             doc_type: file.docs_type,
           })),
+          next: null,
         };
         return output;
       },
@@ -314,7 +315,8 @@ export class FeishuConnector implements IConnector {
         const output: ReadSheetCellsOutput = {
           doc_id: input.doc_id,
           range: input.range,
-          values: response.data.valueRange.values,
+          data: response.data.valueRange.values,
+          next: null,
         };
         return output;
       },
@@ -354,10 +356,11 @@ export class FeishuConnector implements IConnector {
         const output: ReadBitableRecordsOutput = {
           doc_id: input.doc_id,
           table_name: input.table_name,
-          records: response.data.items.map((record) => ({
+          data: response.data.items.map((record) => ({
             record_id: record.record_id,
             fields: record.fields,
           })),
+          next: null,
         };
         return output;
       },

@@ -20,7 +20,10 @@ export interface SearchDocsInput {
 }
 
 export interface SearchDocsOutput {
-  docs: Array<{ doc_id: string; title: string; doc_type: string }>;
+  /** Matching documents. */
+  data: Array<{ doc_id: string; title: string; doc_type: string }>;
+  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  next: string | null;
 }
 
 export interface GetDocContentInput {
@@ -114,7 +117,9 @@ export interface ReadSheetCellsOutput {
   doc_id: string;
   range: string;
   /** The range's cells, row-major, with native value types preserved. */
-  values: CellValue[][];
+  data: CellValue[][];
+  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  next: string | null;
 }
 
 export interface WriteSheetCellsInput {
@@ -148,7 +153,9 @@ export interface ReadBitableRecordsOutput {
   doc_id: string;
   table_name: string;
   /** Records with their field-name-based values. */
-  records: Array<{ record_id: string; fields: Record<string, unknown> }>;
+  data: Array<{ record_id: string; fields: Record<string, unknown> }>;
+  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  next: string | null;
 }
 
 export interface WriteBitableRecordsInput {
@@ -198,11 +205,25 @@ const searchDocsInputSchema: JSONSchemaType<SearchDocsInput> = {
   required: ['query'],
 };
 
+/**
+ * Schema for a required nullable string (the pagination cursor).
+ *
+ * ajv's JSONSchemaType cannot express a required `string | null` property:
+ * `nullable: true` is only permitted for optional properties (Nullable<T>
+ * keys off `undefined extends T`), so this is the standard workaround —
+ * defined once, referenced by every list output schema.
+ */
+const nullableStringSchema = {
+  anyOf: [{ type: 'string' }, { type: 'null' }],
+  // ajv does not export the single-property schema type; `never` is
+  // assignable to every property-schema position (lint-safe, unlike any).
+} as unknown as never;
+
 const searchDocsOutputSchema: JSONSchemaType<SearchDocsOutput> = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    docs: {
+    data: {
       type: 'array',
       items: {
         type: 'object',
@@ -215,8 +236,9 @@ const searchDocsOutputSchema: JSONSchemaType<SearchDocsOutput> = {
         required: ['doc_id', 'title', 'doc_type'],
       },
     },
+    next: nullableStringSchema,
   },
-  required: ['docs'],
+  required: ['data', 'next'],
 };
 
 const docIdInputSchema: JSONSchemaType<{ doc_id: string }> = {
@@ -351,9 +373,10 @@ const readSheetCellsOutputSchema: JSONSchemaType<ReadSheetCellsOutput> = {
   properties: {
     doc_id: { type: 'string' },
     range: { type: 'string' },
-    values: cellMatrixSchema,
+    data: cellMatrixSchema,
+    next: nullableStringSchema,
   },
-  required: ['doc_id', 'range', 'values'],
+  required: ['doc_id', 'range', 'data', 'next'],
 };
 
 const writeSheetCellsInputSchema: JSONSchemaType<WriteSheetCellsInput> = {
@@ -411,9 +434,10 @@ const readBitableRecordsOutputSchema: JSONSchemaType<ReadBitableRecordsOutput> =
   properties: {
     doc_id: { type: 'string' },
     table_name: { type: 'string' },
-    records: bitableRecordListSchema,
+    data: bitableRecordListSchema,
+    next: nullableStringSchema,
   },
-  required: ['doc_id', 'table_name', 'records'],
+  required: ['doc_id', 'table_name', 'data', 'next'],
 };
 
 const writeBitableRecordsInputSchema: JSONSchemaType<WriteBitableRecordsInput> = {

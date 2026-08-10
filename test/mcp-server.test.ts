@@ -403,7 +403,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
         name: 'read_sheet_cells',
         arguments: { doc_id: 'mcp-sheet', range: 'A1:B2' },
       });
-      expect(sheetRead.structuredContent).toMatchObject({ values: [['Q1', 10], [null, null]] });
+      expect(sheetRead.structuredContent).toMatchObject({ data: [['Q1', 10], [null, null]], next: null });
 
       const sheetWrite = await client.callTool({
         name: 'write_sheet_cells',
@@ -416,7 +416,8 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
         arguments: { doc_id: 'mcp-bit', table_name: 'Leads' },
       });
       expect(bitableRead.structuredContent).toMatchObject({
-        records: [{ record_id: 'rec_1', fields: { name: 'Ada' } }],
+        data: [{ record_id: 'rec_1', fields: { name: 'Ada' } }],
+        next: null,
       });
 
       const bitableWrite = await client.callTool({

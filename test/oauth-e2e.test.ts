@@ -289,7 +289,8 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       });
       expect(searched.isError).toBeUndefined();
       expect(searched.structuredContent).toMatchObject({
-        docs: [{ doc_id: 'e2e-doc', title: 'E2E Strategy' }],
+        data: [{ doc_id: 'e2e-doc', title: 'E2E Strategy' }],
+        next: null,
       });
 
       const content = await mcpClient.callTool({
@@ -355,10 +356,11 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         arguments: { doc_id: 'e2e-sheet', sheet_name: 'Data', range: 'A1:B2' },
       });
       expect(sheetRead.structuredContent).toMatchObject({
-        values: [
+        data: [
           ['Region', 'Q1'],
           ['APAC', 10],
         ],
+        next: null,
       });
 
       const sheetWrite = await mcpClient.callTool({
@@ -372,7 +374,8 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         arguments: { doc_id: 'e2e-bit', table_name: 'Leads' },
       });
       expect(bitableRead.structuredContent).toMatchObject({
-        records: [{ record_id: 'rec_e2e_1', fields: { name: 'Ada' } }],
+        data: [{ record_id: 'rec_e2e_1', fields: { name: 'Ada' } }],
+        next: null,
       });
 
       const bitableWrite = await mcpClient.callTool({

@@ -72,10 +72,10 @@ describe('FeishuConnector (Seam B)', () => {
   it('search_docs maps query + page size to the Feishu request and unifies the output', async () => {
     ctx.token = accessToken;
     const output = await connector.execute('search_docs', { query: 'strategy' }, ctx);
-    expect(output).toEqual({ docs: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }] });
+    expect(output).toEqual({ data: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }], next: null });
 
     const limited = await connector.execute('search_docs', { query: '', limit: 1 }, ctx);
-    expect(limited).toEqual({ docs: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }] });
+    expect(limited).toEqual({ data: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }], next: null });
   });
 
   it('get_doc_content returns the raw content in a stable structure', async () => {
@@ -222,7 +222,7 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
     const { executor, audit } = makeExecutor(['search_docs']);
 
     const ok = await executor.executeAction(TENANT, CONNECTION, 'search_docs', { query: 'governed' });
-    expect(ok).toMatchObject({ ok: true, output: { docs: [{ doc_id: 'doc-x', title: 'Governed Doc' }] } });
+    expect(ok).toMatchObject({ ok: true, output: { data: [{ doc_id: 'doc-x', title: 'Governed Doc' }], next: null } });
 
     const denied = await executor.executeAction(TENANT, CONNECTION, 'get_doc_metadata', {
       doc_id: 'doc-x',
@@ -602,11 +602,12 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(result).toEqual({
       doc_id: 'adv-sheet',
       range: 'A1:C3',
-      values: [
+      data: [
         ['Region', 'Q1', 'Q2'],
         ['APAC', 10, 20],
         ['EMEA', 5, 15],
       ],
+      next: null,
     });
   });
 
@@ -623,7 +624,7 @@ describe('FeishuConnector advanced actions (T9)', () => {
       { doc_id: 'adv-sheet', sheet_name: 'Data', range: 'C3' },
       withToken(),
     );
-    expect(read).toMatchObject({ values: [[30]] });
+    expect(read).toMatchObject({ data: [[30]], next: null });
   });
 
   it('maps a range/shape mismatch on sheet writes to upstream_error', async () => {
@@ -658,10 +659,11 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(result).toMatchObject({
       doc_id: 'adv-bit',
       table_name: 'Leads',
-      records: [
+      data: [
         { record_id: 'rec_lead_1', fields: { name: 'Ada', stage: 'qualified' } },
         { record_id: 'rec_lead_2', fields: { name: 'Grace', stage: 'new' } },
       ],
+      next: null,
     });
   });
 
@@ -671,8 +673,8 @@ describe('FeishuConnector advanced actions (T9)', () => {
       { doc_id: 'adv-bit', table_name: 'Leads', limit: 1 },
       withToken(),
     );
-    const records = (result as { records: unknown[] }).records;
-    expect(records).toHaveLength(1);
+    const items = (result as { data: unknown[] }).data;
+    expect(items).toHaveLength(1);
   });
 
   it('write_bitable_records creates a record and returns its id', async () => {
@@ -690,8 +692,8 @@ describe('FeishuConnector advanced actions (T9)', () => {
       { doc_id: 'adv-bit', table_name: 'Leads' },
       withToken(),
     );
-    const records = (read as { records: Array<{ record_id: string }> }).records;
-    expect(records.map((r) => r.record_id)).toContain(recordId);
+    const items = (read as { data: Array<{ record_id: string }> }).data;
+    expect(items.map((r) => r.record_id)).toContain(recordId);
   });
 
   it('maps a missing bitable table to not_found', async () => {
@@ -803,10 +805,11 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     expect(sheetRead).toMatchObject({
       ok: true,
       output: {
-        values: [
+        data: [
           ['Region', 'Q1'],
           ['APAC', 42],
         ],
+        next: null,
       },
     });
 
@@ -826,7 +829,13 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     });
     expect(bitableRead).toMatchObject({
       ok: true,
-      output: { records: [{ record_id: 'rec_life_1', fields: { name: 'Ada' } }, { record_id: recordId, fields: { name: 'Grace' } }] },
+      output: {
+        data: [
+          { record_id: 'rec_life_1', fields: { name: 'Ada' } },
+          { record_id: recordId, fields: { name: 'Grace' } },
+        ],
+        next: null,
+      },
     });
 
     const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
@@ -897,10 +906,11 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     expect(read).toMatchObject({
       ok: true,
       output: {
-        values: [
+        data: [
           [1, 'a'],
           [2, 'b'],
         ],
+        next: null,
       },
     });
 
@@ -922,10 +932,11 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     expect(reread).toMatchObject({
       ok: true,
       output: {
-        values: [
+        data: [
           ['x', 'y'],
           ['z', 'w'],
         ],
+        next: null,
       },
     });
 
@@ -935,7 +946,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     });
     expect(records).toMatchObject({
       ok: true,
-      output: { records: [{ record_id: 'rec_1', fields: { name: 'Ada', active: true } }] },
+      output: { data: [{ record_id: 'rec_1', fields: { name: 'Ada', active: true } }], next: null },
     });
 
     const created = await executor.executeAction(TENANT_A, CONN_1, 'write_bitable_records', {
@@ -953,7 +964,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     });
     expect(after).toMatchObject({
       ok: true,
-      output: { records: [{ record_id: 'rec_1' }, { record_id: recordId }] },
+      output: { data: [{ record_id: 'rec_1' }, { record_id: recordId }], next: null },
     });
 
     const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);

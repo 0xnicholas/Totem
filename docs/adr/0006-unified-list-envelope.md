@@ -1,6 +1,6 @@
 # ADR-0006: Unified list envelope
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-0012](0012-list-envelope-data-next.md)
 
 **Date:** 2025-08-10
 
