@@ -43,6 +43,7 @@ const app = composeServer(pool, {
   adminKey,
   production,
   feishuBaseUrl: process.env.FEISHU_BASE_URL,
+  serverUrl: process.env.TOTEM_URL,
 });
 
 serve({ fetch: app.fetch, port }, (info) => {

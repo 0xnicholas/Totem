@@ -11,7 +11,9 @@ import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
 import { PostgresTokenStore } from '../feishu/pg-token-store.js';
 import { TokenManager } from '../feishu/token-manager.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
+import { createOpenApiApp } from '../rest/openapi.js';
 import { createRpcApp } from '../rest/rpc.js';
+import { TOTEM_VERSION } from '../version.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../pg-governance.js';
@@ -25,6 +27,8 @@ export interface ServerEnv {
   production?: boolean;
   /** Feishu Open Platform base URL (FEISHU_BASE_URL); defaults to open.feishu.cn. */
   feishuBaseUrl?: string;
+  /** Public base URL of this deployment (TOTEM_URL); mirrored into the OpenAPI document. */
+  serverUrl?: string;
 }
 
 /**
@@ -91,12 +95,21 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     executor,
     keys: new PostgresMCPKeyStore(pool),
   });
+  const openApiApp = createOpenApiApp({
+    actions: executor.listActions(),
+    meta: {
+      version: TOTEM_VERSION,
+      title: 'Totem API',
+      serverUrl: env.serverUrl ?? 'http://localhost:3000',
+    },
+  });
 
   const app = new Hono();
   app.route('/', adminApp);
   app.route('/mcp', mcpApp);
   app.route('/', discoveryApp);
   app.route('/', rpcApp);
+  app.route('/', openApiApp);
   app.notFound((c) => c.json({ error: 'route not found' }, 404));
   app.onError((err, c) => {
     console.error(err);

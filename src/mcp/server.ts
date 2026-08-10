@@ -12,6 +12,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { Hono } from 'hono';
 import { hashApiKey } from '../admin/keys.js';
 import { isRecord } from '../admin/util.js';
+import { TOTEM_VERSION } from '../version.js';
 import type { McpAdapter } from './adapter.js';
 import type { MCPKeyStore } from './key-store.js';
 
@@ -89,7 +90,10 @@ export function createMcpApp(config: McpAppConfig): Hono {
  * (tenant, connection) of the request that carried the message.
  */
 function createSessionServer(adapter: McpAdapter): Server {
-  const server = new Server({ name: 'totem', version: '0.1.0' }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: 'totem', version: TOTEM_VERSION },
+    { capabilities: { tools: {} } },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
     const ctx = callerContext(extra);

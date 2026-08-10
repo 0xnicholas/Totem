@@ -48,6 +48,8 @@ export { createDiscoveryApp } from './rest/discovery.js';
 export type { DiscoveryAppConfig } from './rest/discovery.js';
 export { createRpcApp, STATUS_BY_ERROR_CODE } from './rest/rpc.js';
 export type { RpcAppConfig } from './rest/rpc.js';
+export { buildOpenApiDocument, createOpenApiApp } from './rest/openapi.js';
+export type { OpenApiAppConfig, OpenApiDocument, OpenApiMeta } from './rest/openapi.js';
 export { InMemoryMCPKeyStore } from './testing/memory-key-store.js';
 export { InMemoryDefenderPolicyStore } from './testing/memory-governance.js';
 export { scanDefender, DEFENDER_MAX_RESPONSE_BYTES } from './defender.js';
