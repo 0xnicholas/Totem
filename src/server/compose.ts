@@ -12,7 +12,7 @@ import { PostgresTokenStore } from '../feishu/pg-token-store.js';
 import { TokenManager } from '../feishu/token-manager.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
-import { PostgresAllowlistStore, PostgresAuditSink } from '../pg-governance.js';
+import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink } from '../pg-governance.js';
 
 export interface ServerEnv {
   /** Master key for per-tenant secret encryption (TOTEM_TOKEN_ENC_KEY). */
@@ -62,6 +62,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     connections: [],
     allowlists,
     audit: new PostgresAuditSink(pool),
+    auditPolicy: new PostgresAuditPolicyStore(pool),
     tokenProvider: tokenManager,
     connectionLookup: new PostgresConnectionStore(pool),
   });

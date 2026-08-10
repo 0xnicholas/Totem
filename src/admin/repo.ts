@@ -63,6 +63,27 @@ export interface FeishuCreds {
   appSecret: string;
 }
 
+/**
+ * A tenant's audit policy (T11): the tenants-row config the schema has
+ * carried since T2 but nothing read or set. `captureBody` is the opt-in
+ * request/response capture flag; body storage itself is v2.
+ */
+export interface TenantAuditPolicy {
+  /** Audit rows older than this many days are purged (enforcement: T11). */
+  retentionDays: number;
+  /** Error-only mode: successful executions write no audit row. */
+  errorOnly: boolean;
+  /** Opt-in body capture (flag only; storage v2). */
+  captureBody: boolean;
+}
+
+/** Partial update for a tenant's audit policy; omitted fields are kept. */
+export interface TenantAuditPolicyPatch {
+  retentionDays?: number;
+  errorOnly?: boolean;
+  captureBody?: boolean;
+}
+
 /** Raised when a referenced row (tenant, connection, key) does not exist. */
 export class NotFoundError extends Error {
   constructor(message: string) {
@@ -117,6 +138,21 @@ export interface AdminRepository {
   activateConnection(connectionId: string): Promise<void>;
   /** @throws NotFoundError when the tenant does not exist. */
   queryAudit(tenantId: string, filters: AuditFilters): Promise<AuditRow[]>;
+  /**
+   * Reads the tenant's audit policy. @throws NotFoundError when the tenant
+   * does not exist.
+   */
+  getAuditPolicy(tenantId: string): Promise<TenantAuditPolicy>;
+  /**
+   * Partially updates the tenant's audit policy (T11). @throws
+   * NotFoundError when the tenant does not exist.
+   */
+  setAuditPolicy(tenantId: string, patch: TenantAuditPolicyPatch): Promise<TenantAuditPolicy>;
+  /**
+   * Deletes the tenant's audit rows older than its retention window.
+   * @throws NotFoundError when the tenant does not exist.
+   */
+  purgeAudit(tenantId: string): Promise<{ deleted: number }>;
 }
 
 /** Admin audit action names, in the audit_logs.action_name vocabulary. */
@@ -129,4 +165,6 @@ export const ADMIN_AUDIT_ACTIONS = {
   connectionSuspended: 'admin.connection_suspended',
   connectionResumed: 'admin.connection_resumed',
   connectionCreated: 'admin.connection_created',
+  auditPolicyUpdated: 'admin.audit_policy_updated',
+  auditPurged: 'admin.audit_purged',
 } as const;

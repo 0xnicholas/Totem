@@ -10,6 +10,8 @@ import {
   type ConnectionView,
   type FeishuCreds,
   type Tenant,
+  type TenantAuditPolicy,
+  type TenantAuditPolicyPatch,
 } from '../admin/repo.js';
 import { auditParamHash } from '../audit.js';
 
@@ -37,6 +39,7 @@ export class InMemoryAdminRepository implements AdminRepository {
   private readonly creds = new Map<string, FeishuCreds>();
   private readonly allowlists = new Map<string, Set<string>>();
   private readonly connections = new Map<string, MemoryConnection>();
+  private readonly policies = new Map<string, TenantAuditPolicy>();
   private readonly audit: AuditRow[] = [];
 
   /** Seeds a connection (connections are created by the OAuth flow, T6). */
@@ -74,6 +77,23 @@ export class InMemoryAdminRepository implements AdminRepository {
 
   listAudit(): AuditRow[] {
     return [...this.audit];
+  }
+
+  /** Seeds an audit row with a controlled createdAt (purge tests, T11). */
+  seedAuditRow(input: { tenantId: string; actionName: string; createdAt: string }): void {
+    this.audit.push({
+      id: crypto.randomUUID(),
+      tenantId: input.tenantId,
+      connectionId: null,
+      userId: 'admin',
+      actionName: input.actionName,
+      paramHash: auditParamHash({ seeded: input.createdAt }),
+      source: 'admin_api',
+      success: true,
+      errorCode: null,
+      durationMs: 0,
+      createdAt: input.createdAt,
+    });
   }
 
   async createTenant(name: string): Promise<Tenant> {
@@ -230,6 +250,53 @@ export class InMemoryAdminRepository implements AdminRepository {
     // Insertion order is chronological; newest first (matches the SQL's
     // ORDER BY created_at DESC, without sub-millisecond tie hazards).
     return rows.reverse().slice(0, 1000);
+  }
+
+  async getAuditPolicy(tenantId: string): Promise<TenantAuditPolicy> {
+    this.requireTenant(tenantId);
+    return this.policyFor(tenantId);
+  }
+
+  async setAuditPolicy(
+    tenantId: string,
+    patch: TenantAuditPolicyPatch,
+  ): Promise<TenantAuditPolicy> {
+    this.requireTenant(tenantId);
+    const current = this.policyFor(tenantId);
+    const updated: TenantAuditPolicy = {
+      retentionDays: patch.retentionDays ?? current.retentionDays,
+      errorOnly: patch.errorOnly ?? current.errorOnly,
+      captureBody: patch.captureBody ?? current.captureBody,
+    };
+    this.policies.set(tenantId, updated);
+    this.writeAudit({
+      tenantId,
+      actionName: ADMIN_AUDIT_ACTIONS.auditPolicyUpdated,
+      params: patch,
+    });
+    return { ...updated };
+  }
+
+  async purgeAudit(tenantId: string): Promise<{ deleted: number }> {
+    this.requireTenant(tenantId);
+    const cutoff = Date.now() - this.policyFor(tenantId).retentionDays * 24 * 60 * 60 * 1000;
+    const before = this.audit.length;
+    for (let i = this.audit.length - 1; i >= 0; i--) {
+      if (this.audit[i]!.tenantId === tenantId && Date.parse(this.audit[i]!.createdAt) < cutoff) {
+        this.audit.splice(i, 1);
+      }
+    }
+    const deleted = before - this.audit.length;
+    this.writeAudit({
+      tenantId,
+      actionName: ADMIN_AUDIT_ACTIONS.auditPurged,
+      params: { deleted },
+    });
+    return { deleted };
+  }
+
+  private policyFor(tenantId: string): TenantAuditPolicy {
+    return this.policies.get(tenantId) ?? { retentionDays: 90, errorOnly: false, captureBody: false };
   }
 
   private writeAudit(input: {

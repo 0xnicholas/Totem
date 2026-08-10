@@ -34,6 +34,11 @@ commands:
   list-connections <tenant-id>                          (id, name, connector, auth state)
   query-audit <tenant-id> [--user <id>] [--action <name>] [--since <iso-timestamp>]
               [--source mcp|admin_api|cli] [--success true|false]
+  get-audit-policy <tenant-id>                          (retention days, error-only, capture-body)
+  set-audit-policy <tenant-id> [--retention-days N] [--error-only true|false]
+                  [--capture-body true|false]           (omitted fields are kept)
+  purge-audit <tenant-id>                               (deletes audit rows older than
+                                                         the tenant's retention window)
   help
 
 environment:
@@ -172,6 +177,32 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         return 0;
       }
 
+      case 'get-audit-policy': {
+        const [tenantId] = rest;
+        if (!tenantId) throw new UsageError('get-audit-policy <tenant-id>');
+        const policy = await io.client.getAuditPolicy(tenantId);
+        io.stdout(formatAuditPolicy(policy));
+        return 0;
+      }
+
+      case 'set-audit-policy': {
+        const { positionals, flags } = parseFlags(rest);
+        const [tenantId] = positionals;
+        if (!tenantId) throw new UsageError('set-audit-policy <tenant-id> [--retention-days --error-only --capture-body]');
+        const patch = auditPolicyPatchFromFlags(flags);
+        const policy = await io.client.setAuditPolicy(tenantId, patch);
+        io.stdout(formatAuditPolicy(policy));
+        return 0;
+      }
+
+      case 'purge-audit': {
+        const [tenantId] = rest;
+        if (!tenantId) throw new UsageError('purge-audit <tenant-id>');
+        const { deleted } = await io.client.purgeAudit(tenantId);
+        io.stdout(`Deleted ${deleted} expired audit rows for tenant ${tenantId}`);
+        return 0;
+      }
+
       default:
         throw new UsageError(`unknown command "${command}" (try "totemctl help")`);
     }
@@ -238,6 +269,47 @@ function flagsToAuditFilters(flags: Record<string, string>): AuditFilters {
 
 function isApiError(err: unknown): err is ApiError {
   return err instanceof Error && err.name === 'ApiError';
+}
+
+const AUDIT_POLICY_FLAGS = ['retention-days', 'error-only', 'capture-body'] as const;
+
+function auditPolicyPatchFromFlags(flags: Record<string, string>): {
+  retentionDays?: number;
+  errorOnly?: boolean;
+  captureBody?: boolean;
+} {
+  const patch: { retentionDays?: number; errorOnly?: boolean; captureBody?: boolean } = {};
+  for (const [name, value] of Object.entries(flags)) {
+    if (!(AUDIT_POLICY_FLAGS as readonly string[]).includes(name)) {
+      throw new UsageError(`unknown flag --${name} for set-audit-policy`);
+    }
+    if (name === 'retention-days') {
+      const days = Number(value);
+      if (!Number.isInteger(days) || days < 1 || days > 3650) {
+        throw new UsageError('--retention-days must be an integer between 1 and 3650');
+      }
+      patch.retentionDays = days;
+    } else {
+      if (value !== 'true' && value !== 'false') {
+        throw new UsageError(`--${name} must be "true" or "false"`);
+      }
+      if (name === 'error-only') patch.errorOnly = value === 'true';
+      else patch.captureBody = value === 'true';
+    }
+  }
+  return patch;
+}
+
+function formatAuditPolicy(policy: {
+  retentionDays: number;
+  errorOnly: boolean;
+  captureBody: boolean;
+}): string {
+  return [
+    `retentionDays=${policy.retentionDays}`,
+    `errorOnly=${policy.errorOnly}`,
+    `captureBody=${policy.captureBody}`,
+  ].join('\t');
 }
 
 function formatConnection(connection: ConnectionView): string {

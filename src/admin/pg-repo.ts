@@ -12,6 +12,8 @@ import {
   type ConnectionView,
   type FeishuCreds,
   type Tenant,
+  type TenantAuditPolicy,
+  type TenantAuditPolicyPatch,
 } from './repo.js';
 import { auditParamHash } from '../audit.js';
 
@@ -27,6 +29,12 @@ interface TenantRow {
   id: string;
   name: string;
   created_at: Date;
+}
+
+interface TenantPolicyRow {
+  audit_retention_days: number;
+  audit_error_only: boolean;
+  capture_body: boolean;
 }
 
 interface ApiKeyRow {
@@ -302,6 +310,66 @@ export class PostgresAdminRepository implements AdminRepository {
     return rows.map(mapAuditRow);
   }
 
+  async getAuditPolicy(tenantId: string): Promise<TenantAuditPolicy> {
+    const row = (
+      await this.pool.query<TenantPolicyRow>(
+        `SELECT audit_retention_days, audit_error_only, capture_body
+         FROM tenants WHERE id = $1`,
+        [tenantId],
+      )
+    ).rows[0];
+    if (!row) throw new NotFoundError(`Tenant "${tenantId}" not found`);
+    return mapAuditPolicy(row);
+  }
+
+  async setAuditPolicy(
+    tenantId: string,
+    patch: TenantAuditPolicyPatch,
+  ): Promise<TenantAuditPolicy> {
+    return this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      const row = (
+        await client.query<TenantPolicyRow>(
+          `UPDATE tenants SET
+             audit_retention_days = COALESCE($2, audit_retention_days),
+             audit_error_only     = COALESCE($3, audit_error_only),
+             capture_body         = COALESCE($4, capture_body)
+           WHERE id = $1
+           RETURNING audit_retention_days, audit_error_only, capture_body`,
+          [tenantId, patch.retentionDays ?? null, patch.errorOnly ?? null, patch.captureBody ?? null],
+        )
+      ).rows[0]!;
+      await this.writeAudit(client, {
+        tenantId,
+        actionName: ADMIN_AUDIT_ACTIONS.auditPolicyUpdated,
+        params: patch,
+        durationMs: 0,
+      });
+      return mapAuditPolicy(row);
+    });
+  }
+
+  async purgeAudit(tenantId: string): Promise<{ deleted: number }> {
+    return this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      const deleted = await client.query(
+        `DELETE FROM audit_logs
+         WHERE tenant_id = $1
+           AND created_at < now() - make_interval(days => (
+             SELECT audit_retention_days FROM tenants WHERE id = $1
+           ))`,
+        [tenantId],
+      );
+      await this.writeAudit(client, {
+        tenantId,
+        actionName: ADMIN_AUDIT_ACTIONS.auditPurged,
+        params: { deleted: deleted.rowCount ?? 0 },
+        durationMs: 0,
+      });
+      return { deleted: deleted.rowCount ?? 0 };
+    });
+  }
+
   private async mutate<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try {
@@ -352,6 +420,14 @@ export class PostgresAdminRepository implements AdminRepository {
 
 function mapTenant(row: { id: string; name: string; created_at: Date }): Tenant {
   return { id: row.id, name: row.name, createdAt: row.created_at.toISOString() };
+}
+
+function mapAuditPolicy(row: TenantPolicyRow): TenantAuditPolicy {
+  return {
+    retentionDays: row.audit_retention_days,
+    errorOnly: row.audit_error_only,
+    captureBody: row.capture_body,
+  };
 }
 
 function mapConnection(row: ConnectionRow): ConnectionView {

@@ -4,7 +4,7 @@ import type { IConnector } from './connector.js';
 import type { ActionErrorCode } from './errors.js';
 import { ActionError, errorMessage, isActionError } from './errors.js';
 import type { TokenProvider } from './feishu/token-manager.js';
-import type { AllowlistStore, AuditSink } from './governance.js';
+import type { AllowlistStore, AuditPolicyProvider, AuditSink } from './governance.js';
 import { ActionRegistry } from './registry.js';
 
 /** A connection binds a tenant to a connector; identity is (tenantId, connectionId). */
@@ -79,6 +79,7 @@ export class ActionExecutor {
   private readonly allowlists: AllowlistStore;
   private readonly audit: AuditSink;
   private readonly tokenProvider?: TokenProvider;
+  private readonly auditPolicy?: AuditPolicyProvider;
 
   constructor(
     registry: ActionRegistry,
@@ -86,12 +87,14 @@ export class ActionExecutor {
     allowlists: AllowlistStore,
     audit: AuditSink,
     tokenProvider?: TokenProvider,
+    auditPolicy?: AuditPolicyProvider,
   ) {
     this.registry = registry;
     this.connections = connections;
     this.allowlists = allowlists;
     this.audit = audit;
     this.tokenProvider = tokenProvider;
+    this.auditPolicy = auditPolicy;
   }
 
   async executeAction(
@@ -242,7 +245,8 @@ export class ActionExecutor {
   /**
    * Writes the audit row for an attempt on a resolved connection. Best
    * effort: a failing sink is logged and swallowed so an audit outage never
-   * breaks the action layer.
+   * breaks the action layer. Tenants with an error-only policy (T11) skip
+   * success rows; failures are always recorded.
    */
   private async recordAudit(
     connection: ConnectionRecord,
@@ -251,6 +255,16 @@ export class ActionExecutor {
     errorCode: ActionErrorCode | null,
     startedAt: number,
   ): Promise<void> {
+    if (errorCode === null && this.auditPolicy) {
+      try {
+        const policy = await this.auditPolicy.getPolicy(connection.tenantId);
+        if (policy.errorOnly) return;
+      } catch (err) {
+        // Policy lookup failure keeps the default (record everything): the
+        // audit trail must never silently shrink on a store error.
+        console.error(`audit policy lookup failed: ${errorMessage(err)}`);
+      }
+    }
     try {
       await this.audit.writeAudit({
         tenantId: connection.tenantId,
@@ -303,6 +317,8 @@ export function createActionExecutor(config: {
   allowlists: AllowlistStore;
   audit: AuditSink;
   tokenProvider?: TokenProvider;
+  /** Tenant audit policies (T11): error-only mode. Optional — record everything. */
+  auditPolicy?: AuditPolicyProvider;
   /** Live connection lookup (Postgres); defaults to an in-memory store over `connections`. */
   connectionLookup?: ConnectionLookup;
 }): ActionExecutor {
@@ -323,6 +339,7 @@ export function createActionExecutor(config: {
     config.allowlists,
     config.audit,
     config.tokenProvider,
+    config.auditPolicy,
   );
 }
 

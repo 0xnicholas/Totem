@@ -163,6 +163,75 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
       NotFoundError,
     );
   });
+
+  it('reads, updates and audits the tenant audit policy (T11)', async () => {
+    const tenant = await repo.createTenant('policy-tenant');
+
+    expect(await repo.getAuditPolicy(tenant.id)).toEqual({
+      retentionDays: 90,
+      errorOnly: false,
+      captureBody: false,
+    });
+
+    const updated = await repo.setAuditPolicy(tenant.id, { retentionDays: 7, errorOnly: true });
+    expect(updated).toEqual({ retentionDays: 7, errorOnly: true, captureBody: false });
+
+    // Partial updates keep omitted fields.
+    const again = await repo.setAuditPolicy(tenant.id, { captureBody: true });
+    expect(again).toEqual({ retentionDays: 7, errorOnly: true, captureBody: true });
+
+    const audits = await repo.queryAudit(tenant.id, { action: 'admin.audit_policy_updated' });
+    expect(audits).toHaveLength(2);
+
+    await expect(repo.getAuditPolicy('00000000-0000-0000-0000-000000000000')).rejects.toThrow(
+      NotFoundError,
+    );
+    await expect(
+      repo.setAuditPolicy('00000000-0000-0000-0000-000000000000', { errorOnly: true }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it('purges only the tenant\'s rows past its retention window, audited (T11)', async () => {
+    const tenant = await repo.createTenant('purge-tenant');
+    const other = await repo.createTenant('purge-other');
+    await pool.query(
+      `INSERT INTO audit_logs (tenant_id, action_name, param_hash, source, success, duration_ms, created_at)
+       VALUES ($1, 'admin.key_issued', 'h', 'admin_api', true, 0, now() - interval '30 days'),
+              ($1, 'admin.key_issued', 'h', 'admin_api', true, 0, now() - interval '2 days'),
+              ($2, 'admin.key_issued', 'h', 'admin_api', true, 0, now() - interval '30 days')`,
+      [tenant.id, other.id],
+    );
+    await repo.setAuditPolicy(tenant.id, { retentionDays: 7 });
+
+    // Only the tenant's 30-day-old row is past a 7-day window.
+    const { deleted } = await repo.purgeAudit(tenant.id);
+    expect(deleted).toBe(1);
+
+    const remaining = await pool.query<{ tenant_id: string; action_name: string }>(
+      'SELECT tenant_id, action_name FROM audit_logs WHERE tenant_id = ANY($1)',
+      [[tenant.id, other.id]],
+    );
+    // The tenant's 30-day key_issued row is gone; its 2-day row, the
+    // policy-update and purge rows, and the other tenant's untouched rows
+    // all survive.
+    expect(remaining.rows.map((r) => `${r.tenant_id}:${r.action_name}`).sort()).toEqual(
+      [
+        `${tenant.id}:admin.audit_policy_updated`,
+        `${tenant.id}:admin.audit_purged`,
+        `${tenant.id}:admin.key_issued`,
+        `${tenant.id}:admin.tenant_created`,
+        `${other.id}:admin.key_issued`,
+        `${other.id}:admin.tenant_created`,
+      ].sort(),
+    );
+
+    const purges = await repo.queryAudit(tenant.id, { action: 'admin.audit_purged' });
+    expect(purges).toHaveLength(1);
+
+    await expect(
+      repo.purgeAudit('00000000-0000-0000-0000-000000000000'),
+    ).rejects.toThrow(NotFoundError);
+  });
 });
 
 async function seedConnection(

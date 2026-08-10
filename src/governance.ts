@@ -36,3 +36,22 @@ export interface ExecutionAudit {
 export interface AuditSink {
   writeAudit(row: ExecutionAudit): Promise<void>;
 }
+
+/**
+ * A tenant's audit policy (T11): the schema fields (tenants.audit_error_only
+ * etc.) as the executor sees them. `errorOnly` tenants skip success rows —
+ * the audit trail then answers "what failed, when" at a fraction of the
+ * volume. Failures are always recorded.
+ */
+export interface AuditPolicy {
+  errorOnly: boolean;
+}
+
+/**
+ * The executor's audit-policy seam (T11): how `executeAction` learns
+ * whether a tenant wants error-only logging. Optional — without a provider
+ * every attempt is recorded (the v1 default).
+ */
+export interface AuditPolicyProvider {
+  getPolicy(tenantId: string): Promise<AuditPolicy>;
+}

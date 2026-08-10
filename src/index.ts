@@ -35,6 +35,7 @@ export { ActionRegistry } from './registry.js';
 export { ActionExecutor, ConnectionStore, createActionExecutor } from './executor.js';
 export type { ActionResult, ConnectionLookup, ConnectionRecord } from './executor.js';
 export { PostgresConnectionStore } from './pg-connections.js';
+export { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink } from './pg-governance.js';
 export { McpAdapter } from './mcp/adapter.js';
 export type { McpToolDefinition } from './mcp/adapter.js';
 export { PostgresMCPKeyStore, loadConnections } from './mcp/pg-key-store.js';

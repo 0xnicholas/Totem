@@ -1,5 +1,11 @@
 import pg from 'pg';
-import type { AllowlistStore, AuditSink, ExecutionAudit } from './governance.js';
+import type {
+  AllowlistStore,
+  AuditPolicy,
+  AuditPolicyProvider,
+  AuditSink,
+  ExecutionAudit,
+} from './governance.js';
 
 /** Reads allowlist rows from Postgres (written by the T3 admin API). */
 export class PostgresAllowlistStore implements AllowlistStore {
@@ -35,5 +41,22 @@ export class PostgresAuditSink implements AuditSink {
         row.durationMs,
       ],
     );
+  }
+}
+
+/**
+ * Reads a tenant's audit policy from the tenants row (T11). Unknown
+ * tenants resolve to the default policy — the audit write for them would
+ * fail the FK anyway, so error-only is moot.
+ */
+export class PostgresAuditPolicyStore implements AuditPolicyProvider {
+  constructor(private readonly pool: pg.Pool) {}
+
+  async getPolicy(tenantId: string): Promise<AuditPolicy> {
+    const row = await this.pool.query<{ audit_error_only: boolean }>(
+      'SELECT audit_error_only FROM tenants WHERE id = $1',
+      [tenantId],
+    );
+    return { errorOnly: row.rows[0]?.audit_error_only ?? false };
   }
 }

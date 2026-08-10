@@ -4,7 +4,13 @@ import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { FlowError, type OAuthFlow } from '../feishu/flow.js';
 import { generateApiKey, hashApiKey, keyPrefixForEnv } from './keys.js';
-import { NotFoundError, type AdminRepository, type AuditFilters, type AuditSource } from './repo.js';
+import {
+  NotFoundError,
+  type AdminRepository,
+  type AuditFilters,
+  type AuditSource,
+  type TenantAuditPolicyPatch,
+} from './repo.js';
 import { isRecord } from './util.js';
 
 export interface AdminAppConfig {
@@ -158,6 +164,28 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json({ rows });
   });
 
+  app.get('/admin/tenants/:tenantId/audit-policy', async (c) => {
+    const policy = await repo.getAuditPolicy(c.req.param('tenantId'));
+    return c.json(policy);
+  });
+
+  app.put('/admin/tenants/:tenantId/audit-policy', async (c) => {
+    const body = await readJson(c);
+    if (!isRecord(body) || !isAuditPolicyPatch(body)) {
+      return badRequest(
+        c,
+        'body must be an object with optional "retentionDays" (integer 1–3650), "errorOnly" and "captureBody" (booleans)',
+      );
+    }
+    const policy = await repo.setAuditPolicy(c.req.param('tenantId'), body);
+    return c.json(policy);
+  });
+
+  app.post('/admin/tenants/:tenantId/audit/purge', async (c) => {
+    const { deleted } = await repo.purgeAudit(c.req.param('tenantId'));
+    return c.json({ deleted });
+  });
+
   app.post('/admin/tenants/:tenantId/oauth/start', async (c) => {
     if (!config.oauth) return notFound(c, 'route not found');
     const body = await readJson(c);
@@ -233,6 +261,21 @@ async function readJson(c: Context): Promise<unknown> {
 
 function isAuditSource(value: string): value is AuditSource {
   return value === 'mcp' || value === 'admin_api' || value === 'cli';
+}
+
+function isAuditPolicyPatch(value: unknown): value is TenantAuditPolicyPatch {
+  if (!isRecord(value)) return false;
+  const { retentionDays, errorOnly, captureBody } = value;
+  if (retentionDays !== undefined) {
+    if (typeof retentionDays !== 'number' || !Number.isInteger(retentionDays)) return false;
+    if (retentionDays < 1 || retentionDays > 3650) return false;
+  }
+  if (errorOnly !== undefined && typeof errorOnly !== 'boolean') return false;
+  if (captureBody !== undefined && typeof captureBody !== 'boolean') return false;
+  for (const key of Object.keys(value)) {
+    if (key !== 'retentionDays' && key !== 'errorOnly' && key !== 'captureBody') return false;
+  }
+  return true;
 }
 
 function badRequest(c: Context, message: string): Response {

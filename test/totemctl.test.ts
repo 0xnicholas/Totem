@@ -331,4 +331,69 @@ describe('totemctl oauth-start env fallback + re-auth flag (T6 review follow-up)
       }),
     );
   });
+
+  it('get-audit-policy prints the tenant policy (T11)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() =>
+      okJson({ retentionDays: 30, errorOnly: true, captureBody: false }),
+    );
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(['get-audit-policy', 'tenant-1'], io);
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/audit-policy',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(stdout).toEqual(['retentionDays=30\terrorOnly=true\tcaptureBody=false']);
+  });
+
+  it('set-audit-policy sends only the given flags and prints the result (T11)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() =>
+      okJson({ retentionDays: 7, errorOnly: true, captureBody: false }),
+    );
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['set-audit-policy', 'tenant-1', '--retention-days', '7', '--error-only', 'true'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/audit-policy',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ retentionDays: 7, errorOnly: true }),
+      }),
+    );
+    expect(stdout).toEqual(['retentionDays=7\terrorOnly=true\tcaptureBody=false']);
+  });
+
+  it('set-audit-policy rejects bad flag values (T11)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({}));
+    const { io, stderr } = makeHarness(fetchMock);
+
+    for (const argv of [
+      ['set-audit-policy', 'tenant-1', '--retention-days', '0'],
+      ['set-audit-policy', 'tenant-1', '--error-only', 'yes'],
+      ['set-audit-policy', 'tenant-1', '--nope', '1'],
+    ]) {
+      const code = await run(argv, io);
+      expect(code).toBe(2);
+    }
+    expect(stderr.length).toBe(3);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('purge-audit POSTs and prints the deleted count (T11)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ deleted: 42 }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(['purge-audit', 'tenant-1'], io);
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/audit/purge',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(stdout).toEqual(['Deleted 42 expired audit rows for tenant tenant-1']);
+  });
 });

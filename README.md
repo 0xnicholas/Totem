@@ -60,6 +60,9 @@ npm run totemctl -- set-feishu-creds <tenant-id> <app-id> <app-secret>
 npm run totemctl -- set-allowlist <connection-id> create_doc read_doc
 npm run totemctl -- suspend-connection <connection-id>
 npm run totemctl -- query-audit <tenant-id> --action admin.tenant_created
+npm run totemctl -- get-audit-policy <tenant-id>
+npm run totemctl -- set-audit-policy <tenant-id> --retention-days 30 --error-only true
+npm run totemctl -- purge-audit <tenant-id>          # delete rows past retention
 ```
 
 Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
@@ -67,7 +70,9 @@ Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
 /admin/tenants/:id/feishu-creds`, `PUT /admin/connections/:id/allowlist`,
 `POST /admin/connections/:id/suspend|resume`, `GET
 /admin/tenants/:id/audit` (filters: `user`, `action`, `since`, `source`,
-`success`), `GET /healthz`.
+`success`), `GET|PUT /admin/tenants/:id/audit-policy` (retention days,
+error-only, body-capture flag), `POST /admin/tenants/:id/audit/purge`,
+`GET /healthz`.
 
 ## Governance (T4)
 
@@ -88,6 +93,12 @@ Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
 CI (GitHub Actions) runs lint, typecheck and the full test suite —
 migrations and admin integration tests included — against a Postgres
 service container.
+
+Per-tenant audit policy (T11): `audit_retention_days` (default 90) and
+`audit_error_only` govern the audit trail — error-only tenants record only
+failures (the trail answers "what failed, when" at lower volume), and
+`totemctl purge-audit` deletes rows past the retention window. The
+`capture_body` flag is settable now; request/response body capture is v2.
 
 ## Layout
 

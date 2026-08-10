@@ -341,3 +341,53 @@ describe('test_connection (T10)', () => {
     expect(result).toMatchObject({ ok: false, error: { code: 'validation_error' } });
   });
 });
+
+describe('audit policy at the execution boundary (T11)', () => {
+  function policyHarness(errorOnly: boolean) {
+    return makeHarness({
+      // eslint-disable-next-line @typescript-eslint/require-await -- synchronous test double
+      auditPolicy: { getPolicy: async () => ({ errorOnly }) },
+    });
+  }
+
+  it('error-only tenants skip success rows and keep failure rows', async () => {
+    const { executor, allowlists, audit } = policyHarness(true);
+
+    const ok = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'quiet' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(audit.list()).toHaveLength(0);
+
+    // Failures are always recorded — the trail answers "what failed, when".
+    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content', 'create_doc']);
+    const denied = await executor.executeAction(TENANT_A, CONN_1, 'get_doc_metadata', {
+      doc_id: 'x',
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    const failed = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', {});
+    expect(failed).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+
+    const rows = audit.list();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.errorCode).sort()).toEqual(['forbidden', 'validation_error']);
+  });
+
+  it('without a provider every attempt is recorded (v1 default)', async () => {
+    const { executor, audit } = makeHarness();
+    await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'loud' });
+    expect(audit.list()).toHaveLength(1);
+  });
+
+  it('a failing policy lookup keeps recording (the trail never silently shrinks)', async () => {
+    const { executor, audit } = makeHarness({
+      auditPolicy: {
+        // eslint-disable-next-line @typescript-eslint/require-await -- synchronous test double
+        getPolicy: async () => {
+          throw new Error('policy store exploded');
+        },
+      },
+    });
+    const ok = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', { title: 'safe' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(audit.list()).toHaveLength(1);
+  });
+});

@@ -92,8 +92,10 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       description: 'An effects value outside the vocabulary.',
       inputSchema: EMPTY_INPUT_SCHEMA,
       outputSchema: EMPTY_OUTPUT_SCHEMA,
+      // Deliberately outside ActionEffect: the registry, not the type
+      // system, is the runtime guard here.
       effects: 'obliterate',
-    };
+    } as unknown as (typeof DOCS_ACTIONS)[number];
 
     expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] })).toThrow(
       /Invalid effects "obliterate" for action "delete_doc"/,

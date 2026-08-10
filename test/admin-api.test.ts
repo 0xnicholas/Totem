@@ -231,6 +231,83 @@ describe('admin API (HTTP boundary)', () => {
     expect(sourceBody.rows).toHaveLength(0);
   });
 
+  it('reads and updates a tenant audit policy, auditing the change (T11)', async () => {
+    const tenant = await repo.createTenant('policy-tenant');
+
+    const defaults = await adminFetch(`/admin/tenants/${tenant.id}/audit-policy`);
+    expect(defaults.status).toBe(200);
+    expect(await defaults.json()).toEqual({
+      retentionDays: 90,
+      errorOnly: false,
+      captureBody: false,
+    });
+
+    const updated = await adminFetch(`/admin/tenants/${tenant.id}/audit-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ retentionDays: 30, errorOnly: true }),
+    });
+    expect(updated.status).toBe(200);
+    expect(await updated.json()).toEqual({
+      retentionDays: 30,
+      errorOnly: true,
+      captureBody: false,
+    });
+
+    const audits = (await (
+      await adminFetch(`/admin/tenants/${tenant.id}/audit?action=admin.audit_policy_updated`)
+    ).json()) as { rows: Array<{ paramHash: string }> };
+    expect(audits.rows).toHaveLength(1);
+  });
+
+  it('validates audit-policy patches and 404s unknown tenants (T11)', async () => {
+    const tenant = await repo.createTenant('policy-bad-tenant');
+
+    for (const body of [
+      { retentionDays: 0 },
+      { retentionDays: 3.5 },
+      { retentionDays: 4000 },
+      { errorOnly: 'yes' },
+      { captureBody: 1 },
+      { surprise: true },
+    ]) {
+      const response = await adminFetch(`/admin/tenants/${tenant.id}/audit-policy`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+
+    const unknown = await adminFetch('/admin/tenants/00000000-0000-0000-0000-000000000000/audit-policy');
+    expect(unknown.status).toBe(404);
+  });
+
+  it('purges expired audit rows per the tenant retention window (T11)', async () => {
+    const tenant = await repo.createTenant('purge-tenant');
+    const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    repo.seedAuditRow({ tenantId: tenant.id, actionName: 'admin.key_issued', createdAt: '2020-01-01T00:00:00.000Z' });
+    repo.seedAuditRow({ tenantId: tenant.id, actionName: 'admin.allowlist_updated', createdAt: recent });
+    // A 7-day window keeps the recent row and drops the 2020 row.
+    await adminFetch(`/admin/tenants/${tenant.id}/audit-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ retentionDays: 7 }),
+    });
+
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/audit/purge`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: 1 });
+
+    const remaining = (await (
+      await adminFetch(`/admin/tenants/${tenant.id}/audit?action=admin.allowlist_updated`)
+    ).json()) as { rows: unknown[] };
+    expect(remaining.rows).toHaveLength(1);
+
+    // The purge itself is audited.
+    const purges = (await (
+      await adminFetch(`/admin/tenants/${tenant.id}/audit?action=admin.audit_purged`)
+    ).json()) as { rows: Array<{ paramHash: string }> };
+    expect(purges.rows).toHaveLength(1);
+  });
+
   it('validates malformed bodies with a 400', async () => {
     const response = await adminFetch('/admin/tenants', {
       method: 'POST',

@@ -1,4 +1,12 @@
-import type { ApiKeyScope, AuditFilters, AuditRow, ConnectionView, Tenant } from './repo.js';
+import type {
+  ApiKeyScope,
+  AuditFilters,
+  AuditRow,
+  ConnectionView,
+  Tenant,
+  TenantAuditPolicy,
+  TenantAuditPolicyPatch,
+} from './repo.js';
 import { isRecord } from './util.js';
 
 export interface AdminApiClientOptions {
@@ -107,6 +115,25 @@ export class AdminApiClient {
       'GET',
       `/admin/tenants/${encodeURIComponent(tenantId)}/audit${query ? `?${query}` : ''}`,
     );
+  }
+
+  getAuditPolicy(tenantId: string): Promise<TenantAuditPolicy> {
+    return this.request(
+      'GET',
+      `/admin/tenants/${encodeURIComponent(tenantId)}/audit-policy`,
+    );
+  }
+
+  setAuditPolicy(tenantId: string, patch: TenantAuditPolicyPatch): Promise<TenantAuditPolicy> {
+    return this.request(
+      'PUT',
+      `/admin/tenants/${encodeURIComponent(tenantId)}/audit-policy`,
+      patch,
+    );
+  }
+
+  purgeAudit(tenantId: string): Promise<{ deleted: number }> {
+    return this.request('POST', `/admin/tenants/${encodeURIComponent(tenantId)}/audit/purge`);
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
