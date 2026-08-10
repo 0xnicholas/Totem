@@ -1,8 +1,12 @@
 # Totem — Docker Compose (v1)
 #
-# `docker compose up` starts Postgres + Redis, applies migrations once via
-# the one-shot `migrate` service, then serves the admin API on
+# `docker compose up` starts Postgres, applies migrations once via the
+# one-shot `migrate` service, then serves the admin API on
 # http://localhost:3000. Copy .env.example to .env to override.
+#
+# No Redis: rate limiting (T13) is an in-memory per-(tenant, connection)
+# token bucket; a Redis-backed limiter is deferred until horizontal scaling
+# needs it (add the service back then).
 
 services:
   db:
@@ -36,20 +40,6 @@ services:
       db:
         condition: service_healthy
 
-  redis:
-    image: redis:8.0-alpine
-    # 6380 by default: 6379 clashes with local Redis installs on macOS (same
-    # reasoning as POSTGRES_PORT). Data persists in the redis_data volume.
-    ports:
-      - "${REDIS_PORT:-6380}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   api:
     build: .
     depends_on:
@@ -75,4 +65,3 @@ services:
 
 volumes:
   totem_db_data:
-  redis_data:

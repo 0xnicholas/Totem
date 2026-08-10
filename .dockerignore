@@ -1,0 +1,14 @@
+# Build context hygiene: the Dockerfile only needs package files, src,
+# scripts and migrations — everything else bloats the context upload.
+node_modules/
+dist/
+coverage/
+.git/
+.github/
+test/
+docs/
+.pi-subagents/
+*.log
+.env
+.env.*
+!.env.example
