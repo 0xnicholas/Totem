@@ -2,8 +2,8 @@
 
 > 给 Emerald 项目(开发者/agent)的落地指引。契约依据:
 > `docs/standards/consumption-standard.md`(下文简称「标准」);操作手册:
-> `docs/integration-guide.md`。**调整前先读标准 §0 总览,理解两层契约(文档 +
-> OpenAPI,OpenAPI 见 issue #23)。**
+> `docs/integration-guide.md`。**调整前先读标准 §0 总览,理解两层契约(人类可读
+> 文档 + 机器可读 OpenAPI:`GET {TOTEM_URL}/openapi.json`,无认证)。**
 
 ## 0. 背景与边界
 
@@ -19,11 +19,12 @@
   `TOTEM_CONNECTION_ID` / 开通动作清单;key 入 secret 管理,不进代码库
 - [ ] Allowlist 开通只读动作:`search_docs get_doc_content get_doc_metadata`
   (试点期不要开写动作)
-- [ ] 确认动作 schema:`GET {TOTEM_URL}/actions`(Bearer)或 `tools/list`——
-  **不要**按本文档示例硬编码参数,以实际返回为准
+- [ ] 确认动作 schema:`GET {TOTEM_URL}/openapi.json`(REST,`components.schemas.<action>_input/_output`,无认证)或 `tools/list`(MCP)——**不要**按本文档示例硬编码参数,以实际契约为准
 
 ## 2. RPC 客户端(标准 §1–§4)
 
+- [ ] 客户端从 `openapi.json` 生成(openapi-python-client 等)或对照其 schema
+  实现——**不手抄 schema 简化版**(机器契约见标准 §0 两层)
 - [ ] 一个函数封装 `POST /actions/rpc`:`Authorization: Bearer <key>` +
   `x-connection-id` header,body `{action, args}`
 - [ ] 错误决策表落地(标准 §4):`retryable: true` 才重试;

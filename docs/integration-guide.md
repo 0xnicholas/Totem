@@ -220,16 +220,24 @@ curl -sS -X POST "$TOTEM_URL/actions/rpc" \
 | 429 | `rate_limited` | 限流,带 `Retry-After` header 和 `retryAfterSeconds` |
 | 502 | `upstream_error` | 上游(飞书)故障 |
 
-### 5.3 动态发现(可选)
+### 5.3 动态发现与机器契约(可选)
 
 不想硬编码动作清单,可以用只读发现面(同样 Bearer key,不需要 connection):
 
 ```bash
+curl -sS "$TOTEM_URL/openapi.json"                                         # 机器契约:OpenAPI 3.1(无认证)
 curl -H "Authorization: Bearer $TOTEM_API_KEY" "$TOTEM_URL/actions"        # 全部动作元数据
 curl -sS -X POST "$TOTEM_URL/actions/search" \
   -H "Authorization: Bearer $TOTEM_API_KEY" -H "Content-Type: application/json" \
   -d '{"query":"sheet"}'                                                   # 文本搜索
 ```
+
+`GET {TOTEM_URL}/openapi.json` 是注册表的**机器可读投影**(无认证;CI 锁定,
+与注册表不漂移):每个动作的输入/输出 schema 在
+`components.schemas.<action>_input` / `<action>_output`,统一错误契约在
+`components.schemas.ActionError`(七码 + `retryable` + 可选
+`retryAfterSeconds`/`upstream`/`details`)。**代码接入推荐直接用它生成客户端**
+(openapi-generator、openapi-python-client 等),不要手抄 schema 的简化版。
 
 ## 6. 错误处理决策表(Agent 和代码统一遵守)
 
@@ -264,8 +272,9 @@ curl -sS -X POST "$TOTEM_URL/actions/search" \
 | `read_bitable_records` / `write_bitable_records` | read / write | Bitable 记录读写 |
 | `test_connection` | read | 连通性自检 |
 
-精确的输入/输出 schema 以 `tools/list`(MCP)或 `GET /actions`(REST)返回为准,
-不要在代码里复制粘贴 schema 的简化版本。
+精确的输入/输出 schema 以 `tools/list`(MCP)或 `GET {TOTEM_URL}/openapi.json`
+(REST,`components.schemas.<action>_input/_output`)为准,不要在代码里复制粘贴
+schema 的简化版本。
 
 ## 8. 必须知道的三条治理事实
 
@@ -314,6 +323,7 @@ TOTEM_CONNECTION_ID=3f2a9c1e-...   # 已授权的连接
 - [ ] MCP client 配置完成,`tools/list` 能看到动作
 - [ ] 冒烟测试通过:`test_connection` + 一个只读动作
 - [ ] (代码接入)RPC 调用格式与错误处理决策表已实现,`rate_limited` 有退避
+- [ ] (代码接入)客户端 schema 取自 `openapi.json` / `tools/list`,未硬编码简化版
 - [ ] 项目里没有 totem 的 key/secret 明文提交
 
 ## 12. 事件驱动项目怎么接(webhook 场景)

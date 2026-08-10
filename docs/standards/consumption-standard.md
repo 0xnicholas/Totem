@@ -18,11 +18,16 @@
 | 发现 | StackOne `GET /actions` + `POST /actions/search` | ✅ 元数据 + 文本搜索(⚠️ 语义搜索 v2) |
 | MCP | MCP 开放协议(Streamable HTTP) | ✅ 工具列表按 allowlist 过滤(隐藏而非拒绝) |
 | 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 语义 v2 |
+| 机器可读契约 | OpenAPI 3.1(生成于注册表,非手写) | ✅ `GET {TOTEM_URL}/openapi.json`(无认证)+ CI 漂移门禁 |
 | 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §9 |
 
 一条总则(照搬 StackOne 架构结论,ADR-0008):**注册表是唯一事实源,REST 与
 MCP 都是它的投影**——接入方在任何消费面上看到的行为(参数、错误、输出)必然一致,
 不存在第二套语义。
+
+本标准分**两层**,内容同源:本文档(人类可读)+ 机器可读 OpenAPI(生成于注册表,
+发布在 `GET {TOTEM_URL}/openapi.json`,无认证,CI 锁定不漂移)。两层以生成物
+为准——它直接出自注册表,永远最新。
 
 ## 1. 身份与认证(✅)
 
@@ -109,6 +114,7 @@ totem 自定枚举——这就是 totem 的枚举):
 |---|---|---|
 | `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`),hidden 动作不出现 | actions key(Bearer),无需 connection |
 | `POST {TOTEM_URL}/actions/search` | 文本搜索,body `{query}`(大小写不敏感子串匹配;⚠️ StackOne 是语义搜索,BM25+embedding,totem v2) | 同上 |
+| `GET {TOTEM_URL}/openapi.json` | 机器可读契约(OpenAPI 3.1):每个动作 `components.schemas.<action>_input/_output` + `ActionError` 错误组件 | **无认证**(平台级契约元数据,非租户数据) |
 
 对齐 StackOne 的发现哲学:metadata 是注册表的只读投影,驱动 agent 工具列表、
 代码动态适配。**接入方不要在代码里硬编码动作清单,从 `GET /actions` 或
@@ -129,8 +135,8 @@ totem 自定枚举——这就是 totem 的枚举):
 list 动作的输出统一为 `{data, next}`(对齐 StackOne actionType=list;早期
 ADR-0006 的“命名列表字段”约定已由 ADR-0012 取代):
 
-- `data`:条目数组(条目字段以 `GET /actions` 返回的 schema 为准,如
-  `doc_id`/`title`/`doc_type`);
+- `data`:条目数组(条目字段以 `openapi.json` 的 `<action>_output` schema 或
+  `tools/list` 为准,如 `doc_id`/`title`/`doc_type`);
 - `next`:游标,当前恒 `null`;v2 接入 cursor 语义后为翻页 token(对齐 StackOne
   `next_cursor`,接入方把 `next` 传回翻页);
 - **身份字段保留在顶层**:调用者需要据以行动的对象标识(如 `doc_id`、`range`、
@@ -214,8 +220,12 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 
 1. **agent 接入**:对照 §1(认证)、§6(MCP)、§4(错误)——按标准配置 client,
    `tools/list` 即契约,无需改代码;
-2. **代码接入**:对照 §2/§3/§4/§5 写 RPC 客户端(一个函数 + 错误决策表),
-   从 `GET /actions` 动态取 schema,不硬编码;
+2. **代码接入**:对照 §2/§3/§4/§5 写 RPC 客户端(一个函数 + 错误决策表)。
+   机器契约在 `GET {TOTEM_URL}/openapi.json`(无认证):每个动作的输入/输出
+   schema 在 `components.schemas.<action>_input` / `<action>_output`,错误契约
+   在 `components.schemas.ActionError`——**可直接喂客户端生成器**
+   (openapi-generator / openapi-python-client 等);动作清单仍可从 `GET /actions`
+   动态读取,不硬编码;
 3. **事件驱动接入(如 Emerald)**:现在按 §8 设计事件处理层(标准负载 + 标准
    签名校验预留 + `{data, next}` 风格翻页),上游直连只作为 v1 临时入口;
 4. **迁移承诺**:平台在 v2 落地 §7/§8 时,已按本标准实现的接入方**零改动**
