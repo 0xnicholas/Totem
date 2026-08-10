@@ -37,8 +37,9 @@ npm run migrate:down   # roll back the most recently applied migration
 Migrations live in `migrations/<version>_<name>.up.sql` / `.down.sql` and
 are applied by `scripts/migrate.mjs`, which tracks applied versions in a
 `schema_migrations` table (re-runnable by design; each migration runs in its
-own transaction). `docker compose up` starts Postgres, applies migrations
-on the API container's startup, and serves the admin API on
+own transaction). `docker compose up` starts Postgres and Redis, applies
+migrations once via the one-shot `migrate` service (the API waits for it,
+so replicas never race on startup), and serves the admin API on
 `http://localhost:3000`.
 
 ## Admin surface (totemctl + admin API)

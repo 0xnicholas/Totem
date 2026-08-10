@@ -19,5 +19,6 @@ COPY scripts ./scripts
 COPY migrations ./migrations
 
 EXPOSE 3000
-# Migrations run on startup, then the admin API server starts (T3).
-CMD ["sh", "-c", "npm run migrate:up && node dist/server/index.js"]
+# Migrations are applied by the compose `migrate` one-shot service, never by
+# app replicas (parallel replicas would race on migrate:up).
+CMD ["node", "dist/server/index.js"]
