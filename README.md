@@ -100,6 +100,17 @@ failures (the trail answers "what failed, when" at lower volume), and
 `totemctl purge-audit` deletes rows past the retention window. The
 `capture_body` flag is settable now; request/response body capture is v2.
 
+## REST discovery (T12)
+
+The registry is discoverable programmatically without an agent: `GET
+/actions` (the platform action set as name/description/effects metadata)
+and `POST /actions/search` (case-insensitive text search across names and
+descriptions; semantic search is v2). Both authenticate with a tenant
+actions-scope API key (Bearer) — no connection needed — and never expose
+hidden actions. This is the read-only first step of the v2 REST surface;
+the RPC envelope (`POST /actions/rpc`) lands when the MCP adapter proves
+it.
+
 ## Layout
 
 - `src/action.ts` — the platform `Action` shape (`name`, `description`,

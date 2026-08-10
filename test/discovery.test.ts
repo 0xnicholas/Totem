@@ -1,0 +1,185 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { serve, type ServerType } from '@hono/node-server';
+import type { AddressInfo } from 'node:net';
+import pg from 'pg';
+import { migrateUp } from '../scripts/migrate.mjs';
+import { generateApiKey, keyPrefixForEnv } from '../src/admin/keys.js';
+import { createDiscoveryApp } from '../src/rest/discovery.js';
+import type { Action } from '../src/action.js';
+import { InMemoryMCPKeyStore } from '../src/testing/memory-key-store.js';
+import { PostgresMCPKeyStore } from '../src/mcp/pg-key-store.js';
+import { PLATFORM_ACTIONS } from './fixtures.js';
+
+const DISCOVERY_KEY = 'tt_dev_discovery_key';
+
+describe('REST discovery surface (T12, HTTP boundary)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const keys = new InMemoryMCPKeyStore();
+    keys.addKey(DISCOVERY_KEY, 'tenant-a');
+    keys.addKey('tt_dev_admin_scoped', 'tenant-a', { scope: 'admin' });
+    keys.addKey('tt_dev_disabled', 'tenant-a', { disabled: true });
+    const app = createDiscoveryApp({ actions: PLATFORM_ACTIONS, keys });
+    server = serve({ fetch: app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  function discover(path: string, init: RequestInit = {}): Promise<Response> {
+    return fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${DISCOVERY_KEY}` },
+    });
+  }
+
+  it('rejects missing, invalid, admin-scoped and disabled keys with 401', async () => {
+    expect((await fetch(`${baseUrl}/actions`)).status).toBe(401);
+    expect(
+      (await fetch(`${baseUrl}/actions`, { headers: { authorization: 'Bearer nope' } })).status,
+    ).toBe(401);
+    for (const key of ['tt_dev_admin_scoped', 'tt_dev_disabled']) {
+      const response = await fetch(`${baseUrl}/actions`, {
+        headers: { authorization: `Bearer ${key}` },
+      });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it('GET /actions lists the platform action set as metadata, hidden excluded', async () => {
+    const response = await discover('/actions');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { actions: Array<{ name: string; description: string; effects: string }> };
+    const names = body.actions.map((a) => a.name);
+    expect(names).toEqual(
+      PLATFORM_ACTIONS.filter((a) => a.hidden !== true)
+        .map((a) => a.name)
+        .sort(),
+    );
+    expect(names).toHaveLength(13);
+    const createDoc = body.actions.find((a) => a.name === 'create_doc');
+    expect(createDoc).toMatchObject({ effects: 'write' });
+    expect(typeof createDoc?.description).toBe('string');
+    const testConnection = body.actions.find((a) => a.name === 'test_connection');
+    expect(testConnection).toMatchObject({ effects: 'read' });
+    expect(typeof testConnection?.description).toBe('string');
+  });
+
+  it('hidden actions never leak through the discovery surface', async () => {
+    const hidden: Action = {
+      name: 'platform_internal',
+      description: 'Secret bookkeeping.',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      effects: 'write',
+      hidden: true,
+    };
+    const keys = new InMemoryMCPKeyStore();
+    keys.addKey('tt_dev_hidden_test', 'tenant-a');
+    const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, hidden], keys });
+    const res = await app.fetch(new Request('http://localhost/actions', {
+      headers: { authorization: 'Bearer tt_dev_hidden_test' },
+    }));
+    const body = (await res.json()) as { actions: Array<{ name: string }> };
+    expect(body.actions.map((a) => a.name)).not.toContain('platform_internal');
+  });
+
+  it('POST /actions/search matches names and descriptions, case-insensitive', async () => {
+    // 'sheet' hits the two sheet actions by name and get_doc_metadata by
+    // description ("docx, sheet, bitable, wiki").
+    const byName = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'sheet' }),
+    });
+    const nameBody = (await byName.json()) as { actions: Array<{ name: string }> };
+    expect(nameBody.actions.map((a) => a.name).sort()).toEqual([
+      'get_doc_metadata',
+      'read_sheet_cells',
+      'write_sheet_cells',
+    ]);
+
+    const byDescription = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'append' }),
+    });
+    const descBody = (await byDescription.json()) as { actions: Array<{ name: string }> };
+    expect(descBody.actions.map((a) => a.name)).toEqual(['append_doc_content']);
+
+    // Case-insensitive: 'CREATE' hits create_doc by name and
+    // append_doc_content / write_bitable_records by description.
+    const mixed = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'CREATE' }),
+    });
+    const mixedBody = (await mixed.json()) as { actions: Array<{ name: string }> };
+    expect(mixedBody.actions.map((a) => a.name).sort()).toEqual([
+      'append_doc_content',
+      'create_doc',
+      'write_bitable_records',
+    ]);
+
+    const none = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'zzz-nothing' }),
+    });
+    const noneBody = (await none.json()) as { query: string; actions: unknown[] };
+    expect(noneBody).toEqual({ query: 'zzz-nothing', actions: [] });
+  });
+
+  it('rejects empty or missing search queries with 400', async () => {
+    for (const body of [undefined, {}, { query: '' }, { query: '   ' }, { query: 42 }]) {
+      const response = await discover('/actions/search', {
+        method: 'POST',
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+});
+
+describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postgres key store', () => {
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  let server: ServerType;
+  let baseUrl: string;
+  let plaintextKey: string;
+
+  beforeAll(async () => {
+    await migrateUp(process.env.DATABASE_URL!);
+    await pool.query('TRUNCATE tenants CASCADE');
+    const tenant = (
+      await pool.query<{ id: string }>("INSERT INTO tenants (name) VALUES ('discovery-pg') RETURNING id")
+    ).rows[0]!;
+    const generated = generateApiKey(keyPrefixForEnv(false), 'actions');
+    plaintextKey = generated.plaintext;
+    await pool.query(
+      `INSERT INTO api_keys (tenant_id, prefix, key_hash, scope) VALUES ($1, $2, $3, 'actions')`,
+      [tenant.id, generated.prefix, generated.keyHash],
+    );
+    const app = createDiscoveryApp({
+      actions: PLATFORM_ACTIONS,
+      keys: new PostgresMCPKeyStore(pool),
+    });
+    server = serve({ fetch: app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    await pool.end();
+  });
+
+  it('resolves a stored tenant key for GET /actions', async () => {
+    const response = await fetch(`${baseUrl}/actions`, {
+      headers: { authorization: `Bearer ${plaintextKey}` },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { actions: unknown[] };
+    expect(body.actions).toHaveLength(13);
+  });
+});
