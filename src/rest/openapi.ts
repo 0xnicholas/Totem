@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import type { AnySchemaObject } from 'ajv';
 import type { Action } from '../action.js';
+import { ACTION_ERROR_CODES, type ActionErrorCode } from '../errors.js';
+import { STATUS_BY_ERROR_CODE } from './rpc.js';
 
 /** The document-level metadata injected by the composition root (T24). */
 export interface OpenApiMeta {
@@ -38,6 +40,7 @@ export interface RequestBody {
 export interface Response {
   description: string;
   content?: Record<string, { schema: unknown }>;
+  headers?: Record<string, { description?: string; schema: unknown }>;
 }
 
 export interface Operation {
@@ -128,6 +131,88 @@ const connectionIdParameter: Parameter = {
 };
 
 /**
+ * The unified error vocabulary as a component (T25, ADR-0005): the
+ * `ActionErrorJson` wire shape from errors.ts — seven `code` values (the
+ * registry's `ACTION_ERROR_CODES`, never re-listed by hand), `message`,
+ * `retryable`, plus the optional `retryAfterSeconds` (T13), `upstream`
+ * diagnostics and `details`.
+ */
+const actionErrorSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The unified error vocabulary (ADR-0005): seven codes, each with a ' +
+    'retryable flag — agents retry when retryable, stop otherwise.',
+  properties: {
+    code: {
+      type: 'string',
+      description: 'One of the seven ADR-0005 codes.',
+      enum: [...ACTION_ERROR_CODES],
+    },
+    message: { type: 'string', description: 'Human-readable failure description.' },
+    retryable: {
+      type: 'boolean',
+      description: 'Whether an agent should retry this action (false for validation and permission errors).',
+    },
+    retryAfterSeconds: {
+      type: 'integer',
+      minimum: 0,
+      description: 'Whole seconds to wait before retrying; present on platform-issued rate_limited (T13).',
+    },
+    upstream: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The original upstream error, for diagnostics.',
+      properties: {
+        code: { type: 'string' },
+        message: { type: 'string' },
+      },
+      required: ['code', 'message'],
+    },
+    details: {
+      description: 'Extra context — e.g. the ValidationIssue[] list on validation_error.',
+    },
+  },
+  required: ['code', 'message', 'retryable'],
+} as const;
+
+/**
+ * The unique HTTP statuses of the existing status mapping (T14), derived
+ * — never re-listed — from `STATUS_BY_ERROR_CODE`, numerically ordered so
+ * the generated document is deterministic.
+ */
+const ACTION_ERROR_STATUSES = [...new Set(Object.values(STATUS_BY_ERROR_CODE))].sort(
+  (a, b) => a - b,
+);
+
+/** The codes served at each status (for the response descriptions). */
+const CODES_BY_STATUS: Record<number, ActionErrorCode[]> = {};
+for (const [code, status] of Object.entries(STATUS_BY_ERROR_CODE)) {
+  const codes = CODES_BY_STATUS[status] ?? [];
+  codes.push(code as ActionErrorCode);
+  CODES_BY_STATUS[status] = codes;
+}
+
+/** Every ActionError response references the shared component — reused, not duplicated. */
+function actionErrorResponse(status: number): Response {
+  return {
+    description: `ActionError (ADR-0005): ${CODES_BY_STATUS[status]!.join(', ')} — see components.schemas.ActionError.`,
+    content: { 'application/json': { schema: { $ref: '#/components/schemas/ActionError' } } },
+    ...(status === 429
+      ? {
+          headers: {
+            'Retry-After': {
+              description:
+                'Whole seconds to wait before retrying (T13) — present on rate_limited errors.',
+              schema: { type: 'string' },
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+/**
  * Projection #3 of the action registry (after MCP tools and the RPC
  * envelope, ADR-0008): the machine-readable layer of the Consumption
  * Standard — generated, never hand-maintained. A pure function: no I/O, no
@@ -147,10 +232,15 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
     .filter((action) => action.hidden !== true)
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const schemas: Record<string, unknown> = {};
+  const schemas: Record<string, unknown> = { ActionError: actionErrorSchema };
   for (const action of visible) {
     schemas[`${action.name}_input`] = toOpenApiSchema(action.inputSchema);
     schemas[`${action.name}_output`] = toOpenApiSchema(action.outputSchema);
+  }
+
+  const errorResponses: Record<string, Response> = {};
+  for (const status of ACTION_ERROR_STATUSES) {
+    errorResponses[String(status)] = actionErrorResponse(status);
   }
 
   return {
@@ -206,7 +296,9 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
             "boundary (same governance, same error vocabulary, same audit as MCP). " +
             "Envelope: {action, args}. Each action's input and output schemas are " +
             "published verbatim in components.schemas as <action>_input and " +
-            "<action>_output.",
+            "<action>_output. Action-level failures return the ActionError body " +
+            "(components.schemas.ActionError) with the HTTP status per the ADR-0005 " +
+            'mapping; rate_limited responses carry a Retry-After header.',
           security: BEARER_SECURITY,
           parameters: [connectionIdParameter],
           requestBody: {
@@ -220,6 +312,7 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
                 'in components.schemas.',
               content: { 'application/json': { schema: { type: 'object' } } },
             },
+            ...errorResponses,
           },
         },
       },

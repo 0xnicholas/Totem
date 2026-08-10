@@ -158,7 +158,7 @@ describe('buildOpenApiDocument (T24, generator)', () => {
   it('publishes every visible action as <name>_input and <name>_output components', () => {
     const visible = PLATFORM_ACTIONS.filter((action) => action.hidden !== true);
     expect(Object.keys(doc.components.schemas).sort()).toEqual(
-      visible.flatMap((action) => [`${action.name}_input`, `${action.name}_output`]).sort(),
+      ['ActionError', ...visible.flatMap((action) => [`${action.name}_input`, `${action.name}_output`])].sort(),
     );
   });
 
@@ -256,6 +256,83 @@ describe('buildOpenApiDocument (T24, generator)', () => {
     expect(Object.keys(withoutHidden.components.schemas)).not.toContain('platform_internal_input');
     expect(Object.keys(withoutHidden.components.schemas)).not.toContain('platform_internal_output');
     expect(JSON.stringify(withoutHidden)).not.toContain('platform_internal');
+  });
+});
+
+/**
+ * The unified error contract (T25): one reusable `ActionError` component
+ * (the ADR-0005 shape) referenced by the RPC operation's 4xx/5xx
+ * responses, with the 429 response declaring `Retry-After`. The statuses
+ * come from the existing `STATUS_BY_ERROR_CODE` mapping (reused, not
+ * duplicated) — the RPC path is the only operation that serves the
+ * ActionError vocabulary (the discovery paths answer plain `{error}`
+ * transport bodies, never ActionErrorJson).
+ */
+describe('buildOpenApiDocument error contract (T25)', () => {
+  const doc = buildOpenApiDocument(PLATFORM_ACTIONS, META);
+
+  it('defines one ActionError component with the ADR-0005 shape', () => {
+    const component = doc.components.schemas.ActionError as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(component).toBeDefined();
+    expect(component.additionalProperties).toBe(false);
+    expect(component.required).toEqual(['code', 'message', 'retryable']);
+    expect((component.properties.code as { type: string }).type).toBe('string');
+    expect((component.properties.code as { enum: string[] }).enum).toEqual([
+      'validation_error',
+      'action_not_found',
+      'forbidden',
+      'auth_expired',
+      'not_found',
+      'rate_limited',
+      'upstream_error',
+    ]);
+    expect(component.properties.message).toMatchObject({ type: 'string' });
+    expect(component.properties.retryable).toMatchObject({ type: 'boolean' });
+    expect(
+      typeof (component.properties.message as { description?: string }).description,
+    ).toBe('string');
+    expect(
+      typeof (component.properties.retryable as { description?: string }).description,
+    ).toBe('string');
+    // Optional fields per the ADR-0005 wire shape (errors.ts ActionErrorJson).
+    expect(component.properties.retryAfterSeconds).toMatchObject({ type: 'integer', minimum: 0 });
+    expect(component.properties.upstream).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        code: { type: 'string' },
+        message: { type: 'string' },
+      },
+      required: ['code', 'message'],
+    });
+    expect(component.properties.details).toBeDefined();
+  });
+
+  it('gives the RPC operation one ActionError response per unique STATUS_BY_ERROR_CODE status, via $ref', () => {
+    const rpc = doc.paths['/actions/rpc']!.post!;
+    const errorStatuses = Object.keys(rpc.responses).filter((status) => status !== '200').sort();
+    // The unique statuses of the existing mapping (STATUS_BY_ERROR_CODE),
+    // numerically ordered: 400 validation, 401 auth, 403 forbidden, 404
+    // not found, 429 rate limit, 502 upstream.
+    expect(errorStatuses).toEqual(['400', '401', '403', '404', '429', '502']);
+    for (const status of errorStatuses) {
+      // Reused, not duplicated: every error response references the shared
+      // component instead of inlining a copy.
+      expect(rpc.responses[status]!.content!['application/json']!.schema).toEqual({
+        $ref: '#/components/schemas/ActionError',
+      });
+    }
+  });
+
+  it('declares the Retry-After header on the 429 response', () => {
+    const rpc = doc.paths['/actions/rpc']!.post!;
+    const retryAfter = rpc.responses['429']!.headers!['Retry-After'];
+    expect(retryAfter).toBeDefined();
+    expect(retryAfter!.schema).toEqual({ type: 'string' });
   });
 });
 
