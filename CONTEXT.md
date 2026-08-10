@@ -24,6 +24,8 @@ _Avoid_: Connector (when you mean a connection), account, integration instance
 The isolation unit of the platform and its unit of consumption: one consuming internal project. Owns connections, API keys, allowlists, and audit rows. Authenticates to the MCP endpoint with a tenant API key. Totem is an internal platform — tenants are the operator's own company's projects, not paying customers; there is no second-level customer (no StackOne-style origin_owner). Totem has no end-user accounts: agents act on behalf of a tenant, and system actions execute with the identity of the connection's owner (the Feishu user who authorized).
 _Avoid_: Customer, organization, user, StackOne-style org → project → origin_owner hierarchy
 
+Tenants are **mutually trusted** in v1 (ADR-0010): admin-scope tenant keys are platform-credential equivalent, so consuming projects can self-onboard without an operator ticket. Tenant-scoped admin isolation is deferred until a non-trusted consumer exists.
+
 **App Credentials**:
 The OAuth application a tenant registers for a system (v1: a Feishu custom app): app_id/app_secret, held and encrypted by the platform. Registered self-service via the admin API by the tenant's own engineers, never committed to the tenant's codebase. The platform runs the authorize flow with them and stores the resulting tokens per connection.
 _Avoid_: Client secrets, OAuth app config, setup fields
@@ -61,5 +63,13 @@ The MCP-protocol view of an action. One action may appear as one tool; the mappi
 _Avoid_: Action (when speaking at the MCP layer), tool call
 
 **Actions RPC**:
-The REST projection of an action call (`POST /actions/rpc`, envelope `{action, path, query, body, headers}`) — one of the two consumption surfaces: MCP for agents, RPC for non-agent code (CI, jobs, backend services). A thin adapter over the Execution Boundary: same governance, same error vocabulary, same audit. Never a second semantics.
+The REST projection of an action call (`POST /actions/rpc`, envelope `{action, args}`) — one of the two consumption surfaces: MCP for agents, RPC for non-agent code (CI, jobs, backend services). A thin adapter over the Execution Boundary: same governance, same error vocabulary, same audit. Never a second semantics. (StackOne splits `path/query/body/headers` because its registry has parameter positions; totem's schema-first registry has none, so a flat `args` is the canonical shape, ADR-0008.)
 _Avoid_: REST API, traditional API, endpoint (when the topic is the RPC surface)
+
+**Consumption Standard**:
+The public contract of the consumption surfaces, in two layers: a human-readable contract document (`docs/standards/consumption-standard.md`) and machine-readable OpenAPI (generated from the registry, published at `GET /openapi.json`). Aligned with StackOne's published contract; deliberate deviations are recorded in the standard's diff table. Consumers adjust against the standard, not against the implementation.
+_Avoid_: 开放标准 (it is not a standards-organization protocol), API 文档
+
+**List Envelope**:
+The unified output shape of list actions: `{data, next}` with identity fields (`doc_id`, `range`, `table_name`) kept at the top level. Aligned with StackOne's `actionType: list`; `next` is the cursor, currently always `null` (ADR-0012).
+_Avoid_: named list fields (`docs`/`records`/`values` — the ADR-0006 convention, superseded)

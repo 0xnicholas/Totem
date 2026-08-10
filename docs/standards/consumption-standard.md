@@ -1,0 +1,228 @@
+# Totem 消费面接入标准(Consumption Standard)
+
+> 本文档是 totem 消费面的**契约标准**,对齐 StackOne 开放标准(研究:
+> `docs/research/stackone-protocols.md`、`stackone-governance.md`)。接入方
+> (agent、工程师、CI)遵循本文档调整自己的代码,无需逐项询问平台。
+>
+> 状态标记:**✅ 已实现** · **⚠️ 差异(totem 有意简化)** · **🚧 v2 预记录
+> (契约现在定死,落地后接入方零改动迁移)**
+
+## 0. 标准总览
+
+| 契约领域 | 标准来源 | totem 状态 |
+|---|---|---|
+| 认证 | StackOne: API key + `x-account-id` | ✅ Bearer key + `x-connection-id`(⚠️ Bearer 非 Basic) |
+| 动作调用 | StackOne `POST /actions/rpc` envelope | ✅ `{action, args}`(⚠️ 无 path/query/body 拆分) |
+| 响应 | StackOne 统一响应 envelope | ✅ 动作统一输出 + `structuredContent` |
+| 错误 | StackOne `error_category` + `retryable` | ✅ 七码 + `retryable` + HTTP 映射 + `Retry-After` |
+| 发现 | StackOne `GET /actions` + `POST /actions/search` | ✅ 元数据 + 文本搜索(⚠️ 语义搜索 v2) |
+| MCP | MCP 开放协议(Streamable HTTP) | ✅ 工具列表按 allowlist 过滤(隐藏而非拒绝) |
+| 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 语义 v2 |
+| 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §9 |
+
+一条总则(照搬 StackOne 架构结论,ADR-0008):**注册表是唯一事实源,REST 与
+MCP 都是它的投影**——接入方在任何消费面上看到的行为(参数、错误、输出)必然一致,
+不存在第二套语义。
+
+## 1. 身份与认证(✅)
+
+每次调用携带两个值:
+
+| Header | 值 | 说明 |
+|---|---|---|
+| `Authorization` | `Bearer <tenant-api-key>` | actions scope 的 tenant key(⚠️ StackOne 用 HTTP Basic,`<api_key>:`;totem 用 Bearer,语义等价,已定不再改) |
+| `x-connection-id` | `<connection-id>` | 选定向哪个已授权连接执行;query 参数兜底(`?x-connection-id=`)。语义 = StackOne `x-account-id`(每请求选账号) |
+
+- key 无效/被禁用/非 actions scope → HTTP 401,任何消费面一致;
+- 缺少 `x-connection-id` → HTTP 400;
+- 连接不存在或不属于该 tenant → HTTP 400 `unknown connection`。
+
+## 2. 动作调用标准(✅)
+
+**REST:**
+
+```
+POST {TOTEM_URL}/actions/rpc
+Body: { "action": "<action-name>", "args": { ... } }
+```
+
+- `action`:注册表动作名(如 `create_doc`),必填非空;
+- `args`:动作输入 schema 的扁平对象,可选(默认 `{}`);
+- envelope 形状违规(非 JSON、缺 action、args 非对象)→ HTTP 400,不进入执行。
+
+⚠️ **与 StackOne 的差异(有意为之,ADR-0008)**:StackOne 的 RPC body 是
+`{action, path, query, body, headers}` 五段式,因为它支持任意 provider 的任意
+REST 动作;totem 的注册表是 schema-first 的,动作的输入就是一张扁平 schema,没有
+"位置参数"概念——拆成五段只会制造两套参数形状。**接入方按 `{action, args}` 写
+代码;如果未来 totem 出现带位置参数的动作,由平台在 args 内投影,wire 形状不变。**
+
+**MCP**(协议标准同 MCP 规范):`tools/call` 的 `arguments` 就是同一个 `args`;
+`tools/list` 返回的 inputSchema 就是注册表 schema 原样。REST 与 MCP 参数形状
+不可能漂移。
+
+## 3. 响应标准(✅)
+
+- **成功**:动作的统一输出(如 `{"doc_id": "...", "title": "..."}`)。REST 直接
+  是输出 JSON(HTTP 200);MCP 是 `content[0].text` = 输出的 JSON 字符串,当输出
+  是对象时附 `structuredContent`。
+- **输出里的 ID 是 opaque ID**(`doc_id` 等):接入方只存、只传,不解析含义;
+  ID 的语义只由平台连接器掌握(对齐 StackOne "agents reference objects by
+  opaque IDs")。
+- **失败**:见 §4。MCP 的失败是**结果**(`isError: true`),不是 JSON-RPC 异常
+  (对齐 StackOne: tool failures are results)。
+
+## 4. 错误标准(✅)
+
+统一错误体(所有消费面一致):
+
+```json
+{
+  "code": "rate_limited",
+  "message": "...",
+  "retryable": true,
+  "retryAfterSeconds": 30,
+  "upstream": { "code": "...", "message": "..." },
+  "details": { ... }
+}
+```
+
+七码与 HTTP 映射(⚠️ StackOne 的 `error_category` 没有公开枚举,研究明确建议
+totem 自定枚举——这就是 totem 的枚举):
+
+| code | HTTP | retryable | 接入方行为 |
+|---|---|---|---|
+| `validation_error` | 400 | ✗ | 读 `details`(ValidationIssue[])修正参数 |
+| `action_not_found` | 404 | ✗ | 动作名不存在;先 discovery 确认 |
+| `forbidden` | 403 | ✗ | 不在 allowlist 或 defender 拦截;上报,勿重试 |
+| `auth_expired` | 401 | ✗ | 连接 token 失效;触发 re-auth 流程 |
+| `not_found` | 404 | ✗ | 上游对象不存在(opaque ID 失效) |
+| `rate_limited` | 429 | ✓ | 等 `retryAfterSeconds` / `Retry-After` header,退避重试 |
+| `upstream_error` | 502 | ✗ | 上游故障;上报/告警,勿死循环 |
+
+规则只有一条:**`retryable: true` 才重试,其余修正或上报。** 对齐 StackOne
+"429/408 带 Retry-After;provider 侧 429 自动重试"的语义——totem 不做平台侧
+自动重试,重试是接入方的职责(信号已给全)。
+
+## 5. 发现标准(✅)
+
+| 端点 | 用途 | 认证 |
+|---|---|---|
+| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`),hidden 动作不出现 | actions key(Bearer),无需 connection |
+| `POST {TOTEM_URL}/actions/search` | 文本搜索,body `{query}`(大小写不敏感子串匹配;⚠️ StackOne 是语义搜索,BM25+embedding,totem v2) | 同上 |
+
+对齐 StackOne 的发现哲学:metadata 是注册表的只读投影,驱动 agent 工具列表、
+代码动态适配。**接入方不要在代码里硬编码动作清单,从 `GET /actions` 或
+`tools/list` 读取。**
+
+## 6. MCP 标准(✅)
+
+- 传输:Streamable HTTP,挂载 `{TOTEM_URL}/mcp`(与 StackOne `api.stackone.com/mcp`
+  同构;StackOne 是一 account 一端点,totem 是单端点 + 每请求 `x-connection-id`)。
+- **工具列表 = 注册表 ∩ allowlist ∩ 连接器实现**(ADR-0002 隐藏而非拒绝;
+  对齐 StackOne "tool catalog generated from the account's enabled actions")。
+  `tools/list` 没出现的工具 = 没有权限,不要猜。
+- 调用未知工具 → JSON-RPC `-32602`(stale 工具列表,对齐 StackOne)。
+- 成功/失败语义见 §3/§4。
+
+## 7. 分页 / List Envelope(✅ 已实现,ADR-0012)
+
+list 动作的输出统一为 `{data, next}`(对齐 StackOne actionType=list;早期
+ADR-0006 的“命名列表字段”约定已由 ADR-0012 取代):
+
+- `data`:条目数组(条目字段以 `GET /actions` 返回的 schema 为准,如
+  `doc_id`/`title`/`doc_type`);
+- `next`:游标,当前恒 `null`;v2 接入 cursor 语义后为翻页 token(对齐 StackOne
+  `next_cursor`,接入方把 `next` 传回翻页);
+- **身份字段保留在顶层**:调用者需要据以行动的对象标识(如 `doc_id`、`range`、
+  `table_name`)与 `data` 平级,不塞进条目;
+- `next` 是加性演进:未来 cursor 落地不改变 `data` 与顶层身份字段,现有接入方
+  代码不破。
+
+MCP 与 REST 同构:`tools/call` 的 `structuredContent` 就是这个对象。
+
+## 8. 事件 / Webhook 标准(🚧 v2 落地,契约现在定死)
+
+平台 v1 无 webhook 投递面(ADR-0011)。**本契约预记录,接入方现在就可以按它
+设计事件处理层**,平台投递落地后只换入口、处理层零改动。
+
+### 8.1 两类事件(对齐 StackOne)
+
+1. **平台事件(连接生命周期)**:`connection.created` / `connection.updated` /
+   `connection.deleted`(对齐 StackOne `account.created/updated/deleted`)。订阅在
+   webhook 本身上配置。
+2. **连接器事件(上游数据变化)**:由连接器/连接定义,平台按 connection 自动
+   订阅(programmatic,对齐 StackOne)或手动配置;事件类型以平台发布的
+   `GET /actions` 元数据(`event_actions`)为准。
+
+### 8.2 平台事件负载(对齐 StackOne platform-events)
+
+```json
+{
+  "event": "connection.created",
+  "tenant_id": "...",
+  "connection_id": "...",
+  "record_type": "connection",
+  "record_id": "<connection_id>",
+  "provider": "feishu",
+  "event_date": "<ISO 8601>",
+  "sent_at": "<ISO 8601>",
+  "origin_owner_id": "<tenant_id>",
+  "origin_owner_name": "<tenant name>"
+}
+```
+
+(字段逐一对应 StackOne:`project_id → tenant_id`、`account_id → connection_id`;
+totem 无 `origin_username`——连接由 tenant 的 API key 认证,没有端用户身份。)
+
+### 8.3 投递契约(逐条照搬 StackOne,研究 §4.3)
+
+- **签名**:HMAC-SHA256 over **原始 request body**(不是 re-serialized JSON),
+  base64url,放 `x-totem-signature` header(与 StackOne 契约同构,仅 header 名
+  不同——算法、比较、轮换逐条照搬);用 `timingSafeEqual` 常量时间比较。
+- **双 secret 轮换**:新旧 secret 并行,两端都接受,确认后再激活/删除。
+- **端点要求**:快速返回 200,响应体被忽略;5xx 会触发平台重试(对齐 StackOne
+  "5xx loops" 语义,投递失败有日志可查)。
+- **双重配置(缺一不可)**:webhook 端点必须存在 **且** 事件在
+  连接/连接器上启用——对齐 StackOne "enabled on profile AND routed to webhook,
+  you need both"。
+- **典型用途**:`connection.created` = OAuth 完成的异步信号(对齐 StackOne Auth
+  Link 无前端回调的场景);`connection.updated/deleted` 替代轮询连接状态。
+
+### 8.4 v1 过渡期的接入方行为(ADR-0011)
+
+v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本标准的负载格式设计**
+(把上游事件归一化为 §8.2 形状再入队),平台投递落地后迁移成本 = 换一个入口。
+
+## 9. 与 StackOne 的差异一览(接入方对照)
+
+| 维度 | StackOne | totem | 性质 |
+|---|---|---|---|
+| 认证 | Basic `api_key:` | Bearer | ⚠️ 语义等价,已定 |
+| 账号寻址 | `x-account-id` | `x-connection-id` | ✅ 同构改名 |
+| RPC envelope | `{action, path, query, body, headers}` | `{action, args}` | ⚠️ schema-first 简化(ADR-0008) |
+| 错误枚举 | `error_category`(未公开枚举) | 七码显式枚举 + `retryable` | ✅ 对齐且更强 |
+| 搜索 | 语义搜索(embedding) | 子串匹配 | ⚠️ v2 语义搜索 |
+| MCP tool-mode | individual / search_execute | individual 单模式 | ⚠️ 目录小(<50),暂不需要 |
+| 自动重试 | 平台侧 provider 429 自动重试 ≤5 次 | 无平台自动重试,信号给全 | ⚠️ 接入方职责 |
+| 限流 | 1000 req/min/key | (tenant, connection) 预算,默认 600/min | ⚠️ 粒度不同,语义一致 |
+| List envelope | actionType=list → `{data, next}` | `{data, next}` + 顶层身份字段 | ✅ 对齐(ADR-0012;曾偏离于 ADR-0006) |
+| Webhooks | 生产可用 | v2 预记录(§8);签名契约同构,header 为 `x-totem-signature` | 🚧 |
+| A2A / Agent SDK | 开放协议 + SDK | 不提供(内部平台,研究已排除) | — |
+| 连接器版本化 | semver pin per profile | 约定已记录,机制 v2 | 🚧 |
+
+## 10. 接入方对照调整指南(怎么用本标准)
+
+1. **agent 接入**:对照 §1(认证)、§6(MCP)、§4(错误)——按标准配置 client,
+   `tools/list` 即契约,无需改代码;
+2. **代码接入**:对照 §2/§3/§4/§5 写 RPC 客户端(一个函数 + 错误决策表),
+   从 `GET /actions` 动态取 schema,不硬编码;
+3. **事件驱动接入(如 Emerald)**:现在按 §8 设计事件处理层(标准负载 + 标准
+   签名校验预留 + `{data, next}` 风格翻页),上游直连只作为 v1 临时入口;
+4. **迁移承诺**:平台在 v2 落地 §7/§8 时,已按本标准实现的接入方**零改动**
+   或仅改入口;契约变更走 ADR 流程并在此文档同步,不静默修改。
+
+---
+
+*标准来源:StackOne 官方文档(webhooks / platform-events / Actions RPC OpenAPI /
+MCP / A2A,研究快照见 `docs/research/`);totem 侧契约以代码 + ADR
+(0002、0005、0008、0011)为准。*

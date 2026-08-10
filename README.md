@@ -13,6 +13,13 @@ v1 in progress, built ticket-by-ticket (see GitHub Issues). Current state
 fake connector that implements the same `IConnector` adapter contract as real
 connectors.
 
+## Consuming projects
+
+Other internal projects integrate with totem as tenants over two surfaces —
+MCP for agents, REST Actions RPC for non-agent code. See
+[docs/integration-guide.md](docs/integration-guide.md): onboarding, auth
+headers, error handling, and the smoke test.
+
 ## Development
 
 ```sh
