@@ -171,6 +171,7 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
           { name: 'write_sheet_cells' },
           { name: 'read_bitable_records' },
           { name: 'write_bitable_records' },
+          { name: 'test_connection' },
         ],
       },
     });
@@ -315,6 +316,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       'write_sheet_cells',
       'read_bitable_records',
       'write_bitable_records',
+      'test_connection',
       ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
 

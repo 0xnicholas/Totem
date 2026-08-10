@@ -468,6 +468,7 @@ export const DOCS_ACTIONS: Action[] = [
       'Optionally place it in a folder (folder_id) and seed it with initial content.',
     inputSchema: createDocInputSchema,
     outputSchema: createDocOutputSchema,
+    effects: 'write',
   },
   {
     name: 'search_docs',
@@ -477,6 +478,7 @@ export const DOCS_ACTIONS: Action[] = [
       'Cap the result count with limit (1–100, default 50).',
     inputSchema: searchDocsInputSchema,
     outputSchema: searchDocsOutputSchema,
+    effects: 'read',
   },
   {
     name: 'get_doc_content',
@@ -486,6 +488,7 @@ export const DOCS_ACTIONS: Action[] = [
       'Use get_doc_metadata for title, owner and type.',
     inputSchema: docIdInputSchema,
     outputSchema: getDocContentOutputSchema,
+    effects: 'read',
   },
   {
     name: 'get_doc_metadata',
@@ -494,6 +497,7 @@ export const DOCS_ACTIONS: Action[] = [
       '(docx, sheet, bitable, wiki) and last edit time.',
     inputSchema: docIdInputSchema,
     outputSchema: getDocMetadataOutputSchema,
+    effects: 'read',
   },
   {
     name: 'append_doc_content',
@@ -502,6 +506,7 @@ export const DOCS_ACTIONS: Action[] = [
       "document's full updated content. Use create_doc to create a document first.",
     inputSchema: appendDocContentInputSchema,
     outputSchema: appendDocContentOutputSchema,
+    effects: 'write',
   },
   {
     name: 'rename_doc',
@@ -509,6 +514,7 @@ export const DOCS_ACTIONS: Action[] = [
       "Rename an existing document by its opaque doc_id. Returns the document's id and new title.",
     inputSchema: renameDocInputSchema,
     outputSchema: renameDocOutputSchema,
+    effects: 'write',
   },
   {
     name: 'move_doc',
@@ -517,6 +523,7 @@ export const DOCS_ACTIONS: Action[] = [
       'Returns the document id and the target folder id.',
     inputSchema: moveDocInputSchema,
     outputSchema: moveDocOutputSchema,
+    effects: 'write',
   },
   {
     name: 'export_doc',
@@ -529,6 +536,9 @@ export const DOCS_ACTIONS: Action[] = [
       "the artifact requires the connection's Feishu authorization).",
     inputSchema: exportDocInputSchema,
     outputSchema: exportDocOutputSchema,
+    // Export creates an artifact on the upstream side but never changes the
+    // document itself — read class, like the rest of the metadata surface.
+    effects: 'read',
   },
   {
     name: 'read_sheet_cells',
@@ -538,6 +548,7 @@ export const DOCS_ACTIONS: Action[] = [
       'Cell values keep their native JSON types (string, number, boolean or null).',
     inputSchema: readSheetCellsInputSchema,
     outputSchema: readSheetCellsOutputSchema,
+    effects: 'read',
   },
   {
     name: 'write_sheet_cells',
@@ -548,6 +559,7 @@ export const DOCS_ACTIONS: Action[] = [
       'updated.',
     inputSchema: writeSheetCellsInputSchema,
     outputSchema: writeSheetCellsOutputSchema,
+    effects: 'write',
   },
   {
     name: 'read_bitable_records',
@@ -557,6 +569,7 @@ export const DOCS_ACTIONS: Action[] = [
       'limit (1–100, default 100).',
     inputSchema: readBitableRecordsInputSchema,
     outputSchema: readBitableRecordsOutputSchema,
+    effects: 'read',
   },
   {
     name: 'write_bitable_records',
@@ -565,5 +578,54 @@ export const DOCS_ACTIONS: Action[] = [
       "name, with field-name-based values. Returns the new record's opaque id.",
     inputSchema: writeBitableRecordsInputSchema,
     outputSchema: writeBitableRecordsOutputSchema,
+    effects: 'write',
+  },
+];
+
+export interface TestConnectionOutput {
+  /** The connection that was tested (the caller-selected connection). */
+  connection_id: string;
+  /**
+   * Always `ok` on success — the action executed, so the connection's
+   * auth and API access work. Failures are vocabulary errors, never a
+   * non-ok status in a successful result.
+   */
+  status: 'ok';
+}
+
+const testConnectionInputSchema: JSONSchemaType<Record<string, never>> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {},
+  required: [],
+};
+
+const testConnectionOutputSchema: JSONSchemaType<TestConnectionOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    connection_id: { type: 'string' },
+    status: { type: 'string', enum: ['ok'] },
+  },
+  required: ['connection_id', 'status'],
+};
+
+/**
+ * The v1 platform connection actions (T10): actions every connector
+ * implements, owned by the platform like the Docs domain actions
+ * (ADR-0001). `test_connection` closes the connection-lifecycle loop —
+ * operators and agents can verify a connection's auth and API access
+ * without executing a real action.
+ */
+export const CONNECTION_ACTIONS: Action[] = [
+  {
+    name: 'test_connection',
+    description:
+      "Verify that this connection's authentication and API access are working, without " +
+      'executing any real action. Returns the connection id and status (ok). Safe to call ' +
+      'anytime; read-only.',
+    inputSchema: testConnectionInputSchema,
+    outputSchema: testConnectionOutputSchema,
+    effects: 'read',
   },
 ];

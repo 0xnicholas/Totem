@@ -251,6 +251,25 @@ export class MockFeishuServer {
   }
 
   private docsEndpoints(): void {
+    // The test_connection probe (T10): the cheapest drive call in scope,
+    // mirroring the connector's page_size=1 files list.
+    this.app.get('/open-apis/drive/v1/files', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const pageSize = Number(c.req.query('page_size') ?? 50) || 50;
+      const files = this.docs.slice(0, pageSize).map((doc) => ({
+        token: doc.doc_id,
+        type: doc.doc_type,
+        name: doc.title,
+      }));
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { files, has_more: this.docs.length > pageSize, next_page_token: '' },
+      });
+    });
+
     this.app.post('/open-apis/drive/v1/files/search', async (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;

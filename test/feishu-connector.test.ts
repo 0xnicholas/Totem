@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createFeishuOAuthClient } from '../src/feishu/oauth.js';
 import { FeishuConnector } from '../src/feishu/connector.js';
-import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
 import { MockFeishuServer } from '../src/testing/mock-feishu-server.js';
@@ -141,6 +141,20 @@ describe('FeishuConnector (Seam B)', () => {
     expect(err).toMatchObject({ code: 'auth_expired', retryable: false });
   });
 
+  it('test_connection probes the drive and reports the connection ok (T10)', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute('test_connection', {}, ctx);
+    expect(output).toEqual({ connection_id: CONNECTION, status: 'ok' });
+  });
+
+  it('test_connection maps a stale token to auth_expired (T10)', async () => {
+    ctx.token = 'stale-token';
+    const err = await connector
+      .execute('test_connection', {}, ctx)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({ code: 'auth_expired', retryable: false });
+  });
+
   it('wraps network failures as upstream_error', async () => {
     const offline = new FeishuConnector('http://127.0.0.1:1');
     const err = await offline
@@ -194,7 +208,7 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,
@@ -227,6 +241,23 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
       doc_id: 'doc-nope',
     });
     expect(missing).toMatchObject({ ok: false, error: { code: 'not_found' } });
+  });
+
+  it('test_connection runs through the executor with allowlist + audit (T10)', async () => {
+    const { executor, audit } = makeExecutor(['test_connection']);
+
+    const ok = await executor.executeAction(TENANT, CONNECTION, 'test_connection', {});
+    expect(ok).toMatchObject({ ok: true, output: { connection_id: CONNECTION, status: 'ok' } });
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'test_connection',
+      success: true,
+      errorCode: null,
+    });
+
+    const denied = await executor.executeAction(TENANT, CONNECTION, 'search_docs', {
+      query: 'x',
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
   });
 });
 
@@ -378,7 +409,7 @@ describe('FeishuConnector write lifecycle through the executor (T8)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,
@@ -731,7 +762,7 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,

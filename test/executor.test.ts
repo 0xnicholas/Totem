@@ -313,3 +313,31 @@ describe('token acquisition at the execution boundary (T6, ADR-0004)', () => {
     expect(capturedToken).toBeUndefined();
   });
 });
+
+describe('test_connection (T10)', () => {
+  it('executes through Seam A like any action, with allowlist + audit', async () => {
+    const { executor, allowlists, audit } = makeHarness();
+
+    const ok = await executor.executeAction(TENANT_A, CONN_1, 'test_connection', {});
+    expect(ok).toMatchObject({ ok: true, output: { connection_id: CONN_1, status: 'ok' } });
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'test_connection',
+      success: true,
+      errorCode: null,
+    });
+
+    // An allowlist without test_connection denies it fail-closed, like any
+    // other action.
+    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
+    const denied = await executor.executeAction(TENANT_A, CONN_1, 'test_connection', {});
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+  });
+
+  it('rejects extra arguments (empty input schema)', async () => {
+    const { executor } = makeHarness();
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'test_connection', {
+      doc_id: 'doc-1',
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+  });
+});

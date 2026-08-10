@@ -17,6 +17,16 @@ export interface ActionContext {
 }
 
 /**
+ * The side-effect class of an action, declared by the platform so agents
+ * can see the consequences of a call before making it (mapped to MCP tool
+ * annotations at the adapter). `read` never changes state; `write` mutates
+ * but nothing is permanently destroyed; `destructive` is irreversible
+ * (deletion, overwrite of the object itself). Nothing in the v1 set is
+ * destructive; the class exists for future delete-style actions.
+ */
+export type ActionEffect = 'read' | 'write' | 'destructive';
+
+/**
  * A platform-defined action (ADR-0001): the registry is the single source of
  * truth for `name`, the agent-facing `description`, and the input/output
  * JSON Schemas. Connectors declare which actions they implement and
@@ -30,6 +40,20 @@ export interface Action {
   description: string;
   inputSchema: AnySchemaObject;
   outputSchema: AnySchemaObject;
+  /**
+   * The action's side-effect class (see `ActionEffect`). The registry
+   * validates the value at registration; the MCP adapter maps it to tool
+   * annotations.
+   */
+  effects: ActionEffect;
+  /**
+   * Hidden actions are registered, allowlistable and executable through
+   * `executeAction`, but never advertised by MCP `tools/list` — the
+   * platform-internal counterpart of ADR-0002's hide-don't-reject. Nothing
+   * in the v1 set is hidden; the capability exists for platform-internal
+   * actions.
+   */
+  hidden?: boolean;
 }
 
 /**

@@ -6,6 +6,7 @@ import { PostgresAdminRepository } from '../src/admin/pg-repo.js';
 import { PostgresAllowlistStore, PostgresAuditSink } from '../src/pg-governance.js';
 import { createActionExecutor } from '../src/index.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
+import { CONNECTION_ACTIONS } from '../src/index.js';
 import { DOCS_ACTIONS } from '../src/index.js';
 
 /**
@@ -69,7 +70,7 @@ describe.runIf(hasDb)('governance stores (Postgres)', () => {
     const args = { title: 'governed' };
 
     const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FakeConnector()],
       connections: [{ tenantId, connectionId, connectorId: 'fake' }],
       allowlists: new PostgresAllowlistStore(pool),

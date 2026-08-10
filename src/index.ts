@@ -1,5 +1,5 @@
-export type { Action, ActionContext, ActionHandler } from './action.js';
-export { DOCS_ACTIONS } from './actions.js';
+export type { Action, ActionContext, ActionHandler, ActionEffect } from './action.js';
+export { CONNECTION_ACTIONS, DOCS_ACTIONS } from './actions.js';
 export type {
   AppendDocContentInput,
   AppendDocContentOutput,
@@ -22,6 +22,7 @@ export type {
   RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
+  TestConnectionOutput,
   WriteBitableRecordsInput,
   WriteBitableRecordsOutput,
   WriteSheetCellsInput,

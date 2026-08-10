@@ -1,5 +1,5 @@
 import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector } from '../src/index.js';
-import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditSink } from '../src/governance.js';
 import type { TokenProvider } from '../src/feishu/token-manager.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
@@ -10,6 +10,9 @@ export const TENANT_B = 'tenant-b';
 export const CONN_1 = 'conn-1';
 export { FAKE_CONNECTOR_ID };
 export const MISBEHAVING_CONNECTOR_ID = 'misbehaving';
+
+/** The full v1 platform action set: the Docs domain plus connection actions. */
+export const PLATFORM_ACTIONS: Action[] = [...DOCS_ACTIONS, ...CONNECTION_ACTIONS];
 
 export const CONN_1_A: ConnectionRecord = {
   tenantId: TENANT_A,
@@ -36,7 +39,7 @@ export function makeHarness(config: {
   allowlists: InMemoryAllowlistStore;
   audit: InMemoryAuditSink;
 } {
-  const actions = config.actions ?? DOCS_ACTIONS;
+  const actions = config.actions ?? PLATFORM_ACTIONS;
   const connectors = config.connectors ?? [new FakeConnector()];
   const connections = config.connections ?? [CONN_1_A];
   const createdAllowlists = config.allowlists === undefined;
@@ -120,12 +123,14 @@ export const MISBEHAVING_ACTIONS: Action[] = [
       properties: { ok: { type: 'boolean' } },
       required: ['ok'],
     },
+    effects: 'read',
   },
   {
     name: 'throw_noise',
     description: 'Throws a plain error instead of a vocabulary error.',
     inputSchema: EMPTY_INPUT_SCHEMA,
     outputSchema: EMPTY_OUTPUT_SCHEMA,
+    effects: 'write',
   },
 ];
 

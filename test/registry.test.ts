@@ -25,6 +25,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       'read_sheet_cells',
       'rename_doc',
       'search_docs',
+      'test_connection',
       'write_bitable_records',
       'write_sheet_cells',
     ]);
@@ -61,6 +62,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
         description: 'Bad name.',
         inputSchema: EMPTY_INPUT_SCHEMA,
         outputSchema: EMPTY_OUTPUT_SCHEMA,
+        effects: 'read' as const,
       };
 
       expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] }), badName).toThrow(
@@ -76,10 +78,25 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       // Simulates a misbehaving platform definition shipping a schema Ajv cannot compile.
       inputSchema: { type: 'not-a-type' },
       outputSchema: EMPTY_OUTPUT_SCHEMA,
+      effects: 'read' as const,
     };
 
     expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] })).toThrow(
       /Invalid input schema for action "broken_schema"/,
+    );
+  });
+
+  it('rejects an action with an unknown effects value (T10)', () => {
+    const bad = {
+      name: 'delete_doc',
+      description: 'An effects value outside the vocabulary.',
+      inputSchema: EMPTY_INPUT_SCHEMA,
+      outputSchema: EMPTY_OUTPUT_SCHEMA,
+      effects: 'obliterate',
+    };
+
+    expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] })).toThrow(
+      /Invalid effects "obliterate" for action "delete_doc"/,
     );
   });
 

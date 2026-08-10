@@ -7,7 +7,7 @@ import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
 import { PostgresAdminRepository } from '../src/admin/pg-repo.js';
 import { generateApiKey, hashApiKey, keyPrefixForEnv } from '../src/admin/keys.js';
-import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import { McpAdapter } from '../src/mcp/adapter.js';
 import { PostgresMCPKeyStore, loadConnections } from '../src/mcp/pg-key-store.js';
 import { createMcpApp } from '../src/mcp/server.js';
@@ -69,7 +69,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
 
     const connections = await loadConnections(pool);
     const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FakeConnector()],
       connections,
       allowlists: new PostgresAllowlistStore(pool),

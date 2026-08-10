@@ -1,13 +1,15 @@
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import type { AnySchemaObject } from 'ajv';
-import type { Action } from './action.js';
+import type { Action, ActionEffect } from './action.js';
 import type { IConnector } from './connector.js';
 import type { ValidationIssue } from './errors.js';
 import { errorMessage } from './errors.js';
 
 /** Action names follow the spec's verb_noun snake_case convention, e.g. `create_doc`. */
 const ACTION_NAME_PATTERN = /^[a-z][a-z0-9]*(?:_[a-z][a-z0-9]*)+$/;
+
+const ACTION_EFFECTS: readonly ActionEffect[] = ['read', 'write', 'destructive'];
 
 interface RegisteredAction {
   action: Action;
@@ -41,6 +43,12 @@ export class ActionRegistry {
       throw new Error(
         `Invalid action name "${action.name}": action names must be lowercase snake_case ` +
           `with a verb_noun shape (e.g. create_doc)`,
+      );
+    }
+    if (!ACTION_EFFECTS.includes(action.effects)) {
+      throw new Error(
+        `Invalid effects "${action.effects}" for action "${action.name}": ` +
+          `must be one of ${ACTION_EFFECTS.join(', ')}`,
       );
     }
     if (this.actions.has(action.name)) {

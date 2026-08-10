@@ -66,6 +66,7 @@ export class FakeConnector implements IConnector {
   readonly manifest: ConnectorManifest = {
     id: FAKE_CONNECTOR_ID,
     implements: [
+      'test_connection',
       'create_doc',
       'search_docs',
       'get_doc_content',
@@ -87,6 +88,7 @@ export class FakeConnector implements IConnector {
   constructor(initialDocs: FakeDoc[] = []) {
     for (const doc of initialDocs) this.docs.set(doc.doc_id, { ...doc });
     this.handlers = {
+      test_connection: (_args, ctx) => ({ connection_id: ctx.connectionId, status: 'ok' }),
       create_doc: (args: CreateDocInput) => this.createDoc(args),
       search_docs: (args: SearchDocsInput) => this.searchDocs(args),
       get_doc_content: (args: GetDocContentInput) => this.getDocContent(args),

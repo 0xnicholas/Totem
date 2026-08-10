@@ -10,7 +10,7 @@ import { PostgresConnectionStateStore } from '../feishu/pg-connection-state.js';
 import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
 import { PostgresTokenStore } from '../feishu/pg-token-store.js';
 import { TokenManager } from '../feishu/token-manager.js';
-import { DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditSink } from '../pg-governance.js';
 
@@ -57,7 +57,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   // The executor resolves connections live from Postgres, so connections
   // created by the OAuth flow (T6) are visible without a restart.
   const executor = createActionExecutor({
-    actions: DOCS_ACTIONS,
+    actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
     connectors,
     connections: [],
     allowlists,

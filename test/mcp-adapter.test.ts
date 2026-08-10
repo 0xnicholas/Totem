@@ -38,6 +38,7 @@ describe('McpAdapter', () => {
       'write_sheet_cells',
       'read_bitable_records',
       'write_bitable_records',
+      'test_connection',
     ]);
     const createDoc = all.find((t) => t.name === 'create_doc');
     expect(createDoc?.description).toBeTruthy();
@@ -83,6 +84,107 @@ describe('McpAdapter', () => {
     allowlists.setAllowed(TENANT_A, CONN_1, []);
     const adapter = new McpAdapter(executor, allowlists);
     await expect(adapter.listTools(TENANT_A, CONN_1)).resolves.toEqual([]);
+  });
+
+  it('annotates tools from the action effects class (T10)', async () => {
+    const { executor, allowlists } = makeHarness();
+    const adapter = new McpAdapter(executor, allowlists);
+
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+    // read → readOnlyHint, nothing else.
+    expect(byName.get('search_docs')?.annotations).toEqual({ readOnlyHint: true });
+    expect(byName.get('get_doc_content')?.annotations).toEqual({ readOnlyHint: true });
+    // test_connection is a read class action too.
+    expect(byName.get('test_connection')?.annotations).toEqual({ readOnlyHint: true });
+    // write → no hints at all: a mutation is not marked destructive.
+    expect(byName.get('create_doc')?.annotations).toBeUndefined();
+    expect(byName.get('write_sheet_cells')?.annotations).toBeUndefined();
+  });
+
+  it('maps a destructive action to destructiveHint (T10)', async () => {
+    const destructiveAction = {
+      name: 'delete_doc',
+      description: 'Permanently deletes a document.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { doc_id: { type: 'string' } },
+        required: ['doc_id'],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { doc_id: { type: 'string' } },
+        required: ['doc_id'],
+      },
+      effects: 'destructive' as const,
+    };
+    const connector = makeConnector('destructive', ['delete_doc'], {
+      delete_doc: (args) => ({ doc_id: (args as { doc_id: string }).doc_id }),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['delete_doc']);
+    const executor = createActionExecutor({
+      actions: [destructiveAction],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'destructive' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    const adapter = new McpAdapter(executor, allowlists);
+
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    expect(tools).toEqual([
+      expect.objectContaining({ name: 'delete_doc', annotations: { destructiveHint: true } }),
+    ]);
+  });
+
+  it('never advertises hidden actions, which remain executable (T10)', async () => {
+    const hiddenAction = {
+      name: 'platform_internal',
+      description: 'Platform internal bookkeeping.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { done: { type: 'boolean' } },
+        required: ['done'],
+      },
+      effects: 'write' as const,
+      hidden: true,
+    };
+    const connector = makeConnector('with-hidden', ['create_doc', 'platform_internal'], {
+      create_doc: (args) => {
+        const input = args as { title: string };
+        return { doc_id: 'doc-1', title: input.title };
+      },
+      platform_internal: () => ({ done: true }),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc', 'platform_internal']);
+    const executor = createActionExecutor({
+      actions: [hiddenAction, ...DOCS_ACTIONS],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'with-hidden' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    const adapter = new McpAdapter(executor, allowlists);
+
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    expect(tools.map((t) => t.name)).toEqual(['create_doc']);
+    // Not visible and not callable over MCP — a stale client calling it is
+    // invalid params, but the executor itself still runs it.
+    await expect(adapter.getTool(TENANT_A, CONN_1, 'platform_internal')).resolves.toBeUndefined();
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'platform_internal', {});
+    expect(result).toMatchObject({ ok: true, output: { done: true } });
   });
 
   it('isolates tool lists per (tenant, connection)', async () => {

@@ -84,6 +84,7 @@ export class FeishuConnector implements IConnector {
   readonly manifest = {
     id: 'feishu_docs',
     implements: [
+      'test_connection',
       'create_doc',
       'search_docs',
       'get_doc_content',
@@ -112,6 +113,19 @@ export class FeishuConnector implements IConnector {
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
     this.handlers = {
+      test_connection: async (_args, ctx) => {
+        // The cheapest call in the connector's proven scope (drive:drive
+        // readonly is part of the v1 authorize set): a page_size=1 files
+        // list succeeds iff the connection's access token is valid and
+        // API access works. The token manager has already refreshed an
+        // expiring token (ADR-0004), so this call is the live proof.
+        await docsRequest<FilesListData>(this.baseUrl, '/open-apis/drive/v1/files', {
+          token: ctx.token,
+          query: { page_size: '1' },
+        });
+        return { connection_id: ctx.connectionId, status: 'ok' };
+      },
+
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
         const response = await docsRequest<SearchFilesData>(
@@ -504,6 +518,12 @@ interface BitableCreateData {
 
 interface SearchFilesData {
   docs_entities: Array<{ docs_token: string; docs_type: string; title: string }>;
+}
+
+interface FilesListData {
+  files: unknown[];
+  has_more: boolean;
+  next_page_token: string;
 }
 
 interface RawContentData {
