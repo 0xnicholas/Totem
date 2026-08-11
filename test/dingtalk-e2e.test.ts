@@ -212,4 +212,53 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
   });
+
+  it('executes a write action through the RPC surface, then reads it back (T17c)', async () => {
+    const { connections } = await client.listConnections(tenantId);
+    const connection = connections[0]!;
+    await client.setAllowlist(connection.id, [
+      'create_doc',
+      'get_doc_content',
+      'append_doc_content',
+    ]);
+
+    const key = await client.createKey(tenantId, 'actions');
+    const rpc = (body: unknown) =>
+      fetch(`${apiBaseUrl}/actions/rpc`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key.key}`,
+          'x-connection-id': connection.id,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+    const create = await rpc({
+      action: 'create_doc',
+      args: { title: 'E2E Created', content: 'First line.' },
+    });
+    expect(create.status).toBe(200);
+    const created = (await create.json()) as { doc_id: string; title: string };
+    expect(created.title).toBe('E2E Created');
+
+    // The created doc is immediately readable through the read path.
+    const read = await rpc({ action: 'get_doc_content', args: { doc_id: created.doc_id } });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({ doc_id: created.doc_id, content: 'First line.' });
+
+    const appended = await rpc({
+      action: 'append_doc_content',
+      args: { doc_id: created.doc_id, content: 'Second line.' },
+    });
+    expect(appended.status).toBe(200);
+    expect(await appended.json()).toEqual({
+      doc_id: created.doc_id,
+      content: 'First line.\n\nSecond line.',
+    });
+
+    const audit = await client.queryAudit(tenantId, { action: 'create_doc' });
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
+  });
 });
