@@ -124,4 +124,17 @@ describe('DingTalkOAuthClient', () => {
       invalidGrant: false,
     });
   });
+
+  it('fetches an app token with client credentials (T17 live pass)', async () => {
+    const pair = await oauth.appAccessToken({ creds: CREDS });
+    expect(pair.accessToken).toMatch(/^dt_app_/);
+    expect(Date.parse(pair.expiresAt)).toBeGreaterThan(Date.now());
+    expect(mock.appTokenRequestCount).toBe(1);
+  });
+
+  it('rejects unknown app credentials without marking an invalid grant', async () => {
+    await expect(
+      oauth.appAccessToken({ creds: { appKey: 'nope', appSecret: 'nope' } }),
+    ).rejects.toMatchObject({ code: 'InvalidClient', invalidGrant: false, httpStatus: 400 });
+  });
 });

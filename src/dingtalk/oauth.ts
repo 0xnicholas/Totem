@@ -47,10 +47,19 @@ export interface DingTalkOAuthClient {
   exchangeCode(opts: { creds: DingTalkAppCredentials; code: string }): Promise<TokenPair>;
   /** Refreshes an access token with its refresh token. */
   refreshToken(opts: { creds: DingTalkAppCredentials; refreshToken: string }): Promise<TokenPair>;
+  /**
+   * The app-level access token (client credentials, `POST
+   * /v1.0/oauth2/accessToken`). Live-confirmed (T17 live pass): the doc,
+   * wiki and storage APIs authenticate with the APP token plus the acting
+   * user's `operatorId` — the user access token only serves the identity
+   * APIs (`users/me`). `expiresAt` is computed from `expireIn`.
+   */
+  appAccessToken(opts: { creds: DingTalkAppCredentials }): Promise<{ accessToken: string; expiresAt: string }>;
 }
 
 const AUTHORIZE_PATH = '/oauth2/auth';
 const USER_ACCESS_TOKEN_PATH = '/v1.0/oauth2/userAccessToken';
+const APP_ACCESS_TOKEN_PATH = '/v1.0/oauth2/accessToken';
 
 /**
  * The scope the authorize request declares. DingTalk's OAuth 2.0 user
@@ -60,10 +69,12 @@ const USER_ACCESS_TOKEN_PATH = '/v1.0/oauth2/userAccessToken';
  * OAuth scope in DingTalk: they are per-app API permissions enabled in the
  * DingTalk developer console and are checked server-side per call.
  *
- * Live-confirmation note (T17a AC): the scope set needed for the doc
- * actions (T17b/T17c) is `openid` + console-granted doc permissions; the
- * exact permission list is confirmed with the operator's real DingTalk app
- * during the T17b live pass, alongside DingTalk's rate-limit envelope.
+ * Live-confirmed (T17 live pass): the doc actions authenticate with the
+ * APP-level token (client credentials, `appAccessToken`) plus the acting
+ * user's `operatorId`; the `openid` user token serves only the identity
+ * APIs. The console-granted permission points the app needs are
+ * `Storage.File.Write`/`Storage.File.Read` families, `Wiki.*` and
+ * `Document.*` per API — recorded in the connector's live-shape notes.
  */
 const DEFAULT_AUTHORIZE_SCOPES = 'openid';
 
@@ -138,6 +149,61 @@ export function createDingTalkOAuthClient(
         return { ...pair, refreshToken };
       }
       return pair;
+    },
+
+    async appAccessToken({ creds }) {
+      let response: Response;
+      try {
+        response = await fetch(`${apiBaseUrl}${APP_ACCESS_TOKEN_PATH}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ appKey: creds.appKey, appSecret: creds.appSecret }),
+        });
+      } catch (err) {
+        throw new DingTalkApiError(
+          'NetworkError',
+          err instanceof Error
+            ? `DingTalk app-token endpoint unreachable: ${err.message}`
+            : String(err),
+          0,
+          false,
+        );
+      }
+
+      let envelope: TokenEnvelope;
+      try {
+        envelope = (await response.json()) as TokenEnvelope;
+      } catch {
+        throw new DingTalkApiError(
+          'InvalidResponse',
+          `DingTalk app-token endpoint returned non-JSON (HTTP ${response.status})`,
+          response.status,
+          false,
+        );
+      }
+      if (response.status === 429) {
+        throw new DingTalkApiError(
+          envelope.code ?? 'TooManyRequests',
+          envelope.message ?? 'DingTalk rate limited',
+          429,
+          false,
+        );
+      }
+      if (!response.ok || !envelope.accessToken) {
+        // A rejected app-token request means the operator-configured app
+        // credentials are wrong — not the connection's user grant, so this
+        // is never `invalidGrant` (the connection must NOT be poisoned).
+        throw new DingTalkApiError(
+          envelope.code ?? 'InvalidClient',
+          `DingTalk app-token endpoint error (HTTP ${response.status}): ${envelope.message ?? 'no accessToken'}`,
+          response.status,
+          false,
+        );
+      }
+      return {
+        accessToken: envelope.accessToken,
+        expiresAt: new Date(now() + (envelope.expireIn ?? 0) * 1000).toISOString(),
+      };
     },
   };
 }

@@ -206,7 +206,7 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
       body: JSON.stringify({ action: 'get_doc_content', args: { doc_id: 'e2e-doc-1' } }),
     });
     expect(content.status).toBe(200);
-    expect(await content.json()).toEqual({ doc_id: 'e2e-doc-1', content: '# Strategy\n\nE2E content.' });
+    expect(await content.json()).toEqual({ doc_id: 'e2e-doc-1', content: '# Strategy\nE2E content.' });
 
     const audit = await client.queryAudit(tenantId, { action: 'search_docs' });
     expect(audit.rows).toHaveLength(1);
@@ -254,7 +254,7 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     expect(appended.status).toBe(200);
     expect(await appended.json()).toEqual({
       doc_id: created.doc_id,
-      content: 'First line.\n\nSecond line.',
+      content: 'First line.\nSecond line.',
     });
 
     const audit = await client.queryAudit(tenantId, { action: 'create_doc' });

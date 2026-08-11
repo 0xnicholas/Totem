@@ -29,16 +29,14 @@ export interface MockDingTalkServerOptions {
 
 /** A seeded online document in the mock's DingTalk knowledge base (T17b). */
 export interface MockDingTalkDoc {
-  /** The document identity (the platform's opaque doc_id). */
+  /** The document identity: the dentryUuid (node id) — the platform's opaque doc_id. */
   docKey: string;
   name: string;
-  /** Markdown content — what the doc content API returns. */
+  /** Markdown content — the blocks endpoint derives blocks from this. */
   content: string;
   /** The owning user's unionId. */
   ownerUnionId: string;
-  /** DingTalk's dentry content type; defaults to 'alidoc' (online doc). */
-  contentType?: string;
-  /** The storage space (knowledge base) the doc lives in. */
+  /** The space the doc lives in (wiki workspaceId namespace). */
   spaceId?: string;
   /** The parent dentry (folder) the doc lives under, if any. */
   parentDentryId?: string;
@@ -47,9 +45,11 @@ export interface MockDingTalkDoc {
   updatedTime?: number;
 }
 
-/** A seeded folder in the mock's DingTalk knowledge base (T17c). */
+/** A seeded folder in the mock's DingTalk knowledge base (T17c live pass). */
 export interface MockDingTalkFolder {
   folderId: string;
+  /** The 16-char storage dentryId the create API's parentDentryId wants. */
+  dentryId: string;
   name: string;
   spaceId: string;
 }
@@ -57,31 +57,35 @@ export interface MockDingTalkFolder {
 /**
  * Seam B (T17a): an in-memory mock of the DingTalk Open Platform surface
  * used by the connection tests — the OAuth 2.0 authorize redirect, the
- * userAccessToken endpoint (code exchange + refresh), and the
- * `users/me` identity call that `test_connection` uses as its live proof —
- * so no real DingTalk credentials are needed in CI.
+ * userAccessToken endpoint (code exchange + refresh), the app-token
+ * endpoint (client credentials, T17 live pass), and the identity + doc
+ * surface — so no real DingTalk credentials are needed in CI.
  *
- * The mock mirrors DingTalk's shapes: form-free JSON token endpoint with
- * flat `{accessToken, refreshToken, expireIn}` success bodies and
- * `{code, message}` error bodies (HTTP 400 for bad grants, 429 for rate
- * limits), plus the `x-acs-dingtalk-access-token` header on v1.0 APIs. It
- * supports the token-lifecycle scenarios the tests need: revoking refresh
- * tokens and scripting failures for the next call.
+ * The mock mirrors DingTalk's shapes (live-confirmed during the T17 live
+ * pass): the USER token authenticates only the identity API (`users/me`);
+ * the APP token authenticates the doc/wiki/storage APIs together with the
+ * acting user's `operatorId` (missing operatorId → 400 MissingoperatorId).
  *
- * T17b adds the doc read surface: `POST /v2.0/storage/dentries/search`
- * (keyword search over seeded online docs, `operatorId` required), and the
- * doc family `GET /v1.0/doc/suites/documents/{docKey}` (+ `/content`) —
- * shapes modeled on the published API docs; the live pass (AC-7) corrects
- * any drift.
+ * Doc surface (live shapes):
+ * - `POST /v2.0/storage/dentries/search` → `{items, nextToken}` — items
+ *   carry `{dentryUuid, name, creator{userId}, modifier{userId}, path}`
+ *   and NO contentType/docKey (the connector therefore does not filter);
+ * - `GET /v2.0/wiki/nodes/{nodeId}` → node info (name, workspaceId,
+ *   creatorId, ISO createTime/modifiedTime, type, category, extension);
+ * - `POST /v2.0/doc/spaces/{spaceId}/dentries` → DentryVO (dentryUuid,
+ *   docKey, name WITH the `.adoc` extension, contentType 'alidoc',
+ *   creator.unionId); `parentDentryId` takes the folder's 16-char
+ *   dentryId (resolved via `GET /v2.0/doc/dentries/{uuid}/queryDentryId`);
+ * - `POST .../dentries/{id}/rename|move` (dentryUuid ids);
+ * - `GET /v1.0/doc/suites/documents/{id}/blocks` → blocks (paragraph /
+ *   heading) derived from the stored markdown — the connector's
+ *   content-read path (blocks → markdown);
+ * - `POST /v1.0/doc/suites/documents/{id}/content` → `{success, result}`
+ *   (markdown insert, no path/index = append at the end).
  *
- * T17c adds the write surface, modeled on the official docs/SDK: the wiki
- * node resolution (`GET /v2.0/wiki/nodes/{nodeId}`, mineWorkspaces), the
- * doc_2.0 create/rename/move family
- * (`POST /v2.0/doc/spaces/{spaceId}/dentries[ /{dentryId}/rename|/move]`),
- * markdown insert (`POST /v1.0/doc/suites/documents/{docKey}/content`,
- * no path/index = append at the end of the document root), and the async
- * export task (`POST /v2.0/doc/dentries/export` → poll
- * `GET /v2.0/doc/me/export/task/query`). The live pass corrects any drift.
+ * The live pass corrected several mock-modeled shapes (search `dentries`
+ * → `items`, v1.0 doc-family GET endpoints do not exist, the app-token
+ * auth model); this file tracks the confirmed shapes.
  */
 export class MockDingTalkServer {
   /** The mock's "我的文档" (my documents) workspace id. */
@@ -92,12 +96,15 @@ export class MockDingTalkServer {
   refreshRequestCount = 0;
   /** Number of authorization_code grant calls received. */
   exchangeRequestCount = 0;
+  /** Number of app-token (client credentials) calls received. */
+  appTokenRequestCount = 0;
 
   private readonly accessTokenTtlMs: number;
   private readonly refreshTokenTtlMs: number;
   private readonly issuedCodes = new Set<string>();
   private readonly refreshTokens = new Map<string, { active: boolean }>();
   private readonly issuedAccessTokens = new Map<string, { expiresAt: number }>();
+  private readonly issuedAppTokens = new Map<string, { expiresAt: number }>();
   private scriptedFailure: ScriptedFailure | undefined;
   private insertFailure: ScriptedFailure | undefined;
   private omitRefreshTokenArmed = false;
@@ -168,7 +175,26 @@ export class MockDingTalkServer {
       return c.json({ code: 'InvalidParameter', message: `unsupported grantType "${String(grantType)}"` }, 400);
     });
 
+    // POST /v1.0/oauth2/accessToken — client credentials (app token). The
+    // doc/wiki/storage APIs authenticate with this token (T17 live pass).
+    this.app.post('/v1.0/oauth2/accessToken', async (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const body = await readJson(c);
+      if (!isRecord(body) || body.appKey !== options.appKey || body.appSecret !== options.appSecret) {
+        return c.json({ code: 'InvalidClient', message: 'invalid client credentials' }, 400);
+      }
+      this.appTokenRequestCount++;
+      const token = `dt_app_${randomUUID()}`;
+      this.issuedAppTokens.set(token, { expiresAt: Date.now() + this.accessTokenTtlMs });
+      return c.json({
+        accessToken: token,
+        expireIn: Math.floor(this.accessTokenTtlMs / 1000),
+      });
+    });
+
     // GET /v1.0/contact/users/me — the identity call test_connection uses.
+    // USER token only (an app token gets 404, mirroring the live API).
     this.app.get('/v1.0/contact/users/me', (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
@@ -188,18 +214,17 @@ export class MockDingTalkServer {
       });
     });
 
-    // POST /v2.0/storage/dentries/search — keyword search over the seeded
-    // docs (v1 read scope: online docs only, category ALIDOC). Requires
-    // the operatorId of the acting user, mirroring the real API.
+    // POST /v2.0/storage/dentries/search — keyword search (app token +
+    // operatorId). Live shape: {items, nextToken}; items carry dentryUuid
+    // + name and NO contentType/docKey.
     this.app.post('/v2.0/storage/dentries/search', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
-      const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(c.req.header('x-acs-dingtalk-access-token'))) {
         return c.json(INVALID_AUTH, 401);
       }
       if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
       }
       const body = await readJson(c);
       if (!isRecord(body) || typeof body.keyword !== 'string') {
@@ -214,140 +239,85 @@ export class MockDingTalkServer {
         .filter((doc) => doc.name.toLowerCase().includes(keyword))
         .slice(0, maxResults);
       return c.json({
-        dentries: matches.map((doc) => this.dentryShape(doc)),
+        items: matches.map((doc) => this.searchItemShape(doc)),
         nextToken: '',
       });
     });
 
-    // GET /v1.0/doc/suites/documents/{docKey} — document info.
-    this.app.get('/v1.0/doc/suites/documents/:docKey', (c) => {
-      const scripted = this.scriptedResponse();
-      if (scripted) return scripted;
-      const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
-        return c.json(INVALID_AUTH, 401);
-      }
-      if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
-      }
-      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docKey'));
-      if (!doc) {
-        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
-      }
-      return c.json(this.dentryShape(doc));
-    });
-
-    // GET /v1.0/doc/suites/documents/{docKey}/content — markdown content.
-    this.app.get('/v1.0/doc/suites/documents/:docKey/content', (c) => {
-      const scripted = this.scriptedResponse();
-      if (scripted) return scripted;
-      const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
-        return c.json(INVALID_AUTH, 401);
-      }
-      if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
-      }
-      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docKey'));
-      if (!doc) {
-        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
-      }
-      return c.json({ content: doc.content });
-    });
-
-    // POST /v1.0/doc/suites/documents/{docKey}/content — insert markdown
-    // content. No path/index = append at the end of the document root
-    // (T17c modeled shape; the live pass confirms the append semantics).
-    this.app.post('/v1.0/doc/suites/documents/:docKey/content', async (c) => {
-      const insertFailure = this.insertFailure;
-      if (insertFailure) {
-        this.insertFailure = undefined;
-        return c.json(
-          { code: insertFailure.code, message: insertFailure.message },
-          insertFailure.httpStatus ?? 400,
-        );
-      }
-      const scripted = this.scriptedResponse();
-      if (scripted) return scripted;
-      const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
-        return c.json(INVALID_AUTH, 401);
-      }
-      if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
-      }
-      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docKey'));
-      if (!doc) {
-        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
-      }
-      const body = await readJson(c);
-      const content =
-        isRecord(body) && isRecord(body.content) && typeof body.content.content === 'string'
-          ? body.content.content
-          : undefined;
-      if (content === undefined) {
-        return c.json({ code: 'paramError', message: 'missing content' }, 400);
-      }
-      doc.content = doc.content === '' ? content : `${doc.content}\n\n${content}`;
-      return c.json({ success: true, result: {} });
-    });
-
-    // GET /v2.0/wiki/mineWorkspaces — the acting user's "我的文档" space.
-    this.app.get('/v2.0/wiki/mineWorkspaces', (c) => {
-      const scripted = this.scriptedResponse();
-      if (scripted) return scripted;
-      const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
-        return c.json(INVALID_AUTH, 401);
-      }
-      if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
-      }
-      return c.json({
-        workspace: {
-          workspaceId: MockDingTalkServer.MINE_SPACE_ID,
-          name: '我的文档',
-          rootNodeId: 'root-mine',
-          corpId: 'corp-1',
-        },
-      });
-    });
-
-    // GET /v2.0/wiki/nodes/{nodeId} — node info; the spaceId resolution
-    // rename/move/create-in-folder need (nodeId = docKey / folderId).
+    // GET /v2.0/wiki/nodes/{nodeId} — node info; the metadata + space
+    // resolution path (nodeId = dentryUuid).
     this.app.get('/v2.0/wiki/nodes/:nodeId', (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
       }
       const nodeId = c.req.param('nodeId');
       const doc = this.docs.find((candidate) => candidate.docKey === nodeId);
       if (doc) {
         return c.json({
-          node: this.nodeShape(doc.docKey, doc.name, 'FILE', doc.spaceId ?? 'space-1', doc.contentType ?? 'alidoc'),
+          node: this.nodeShape(
+            doc.docKey,
+            // Live finding: the wiki node name carries the `.adoc`
+            // extension for online docs; the connector strips it.
+            `${doc.name}.adoc`,
+            'FILE',
+            doc.spaceId ?? 'space-1',
+            'ALIDOC',
+            'adoc',
+            // Live finding: node creatorId is the numeric userId, not the
+            // unionId.
+            '663443604826350971',
+            doc.createdTime ?? 1_700_000_000_000,
+            doc.updatedTime ?? 1_700_000_000_000,
+          ),
         });
       }
       const folder = this.folders.find((candidate) => candidate.folderId === nodeId);
       if (folder) {
         return c.json({
-          node: this.nodeShape(folder.folderId, folder.name, 'FOLDER', folder.spaceId, 'alidoc'),
+          node: this.nodeShape(folder.folderId, folder.name, 'FOLDER', folder.spaceId, 'OTHER', '', 'mock-union-id'),
+        });
+      }
+      return c.json({ code: 'NodeNotFound', message: 'node not found' }, 404);
+    });
+
+    // GET /v2.0/doc/dentries/{dentryUuid}/queryDentryId — the storage
+    // dentryId the create API's parentDentryId wants (T17 live pass).
+    this.app.get('/v2.0/doc/dentries/:dentryUuid/queryDentryId', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const uuid = c.req.param('dentryUuid');
+      const folder = this.folders.find((candidate) => candidate.folderId === uuid);
+      if (folder) {
+        return c.json({
+          dentryId: folder.dentryId,
+          spaceId: `storage-${folder.spaceId}`,
+          dentryUuid: uuid,
         });
       }
       return c.json({ code: 'NodeNotFound', message: 'node not found' }, 404);
     });
 
     // POST /v2.0/doc/spaces/{spaceId}/dentries — create a dentry
-    // (documentType 0 = online document / ALIDOC; T17c modeled shape).
+    // (documentType 0 = online document / ALIDOC; dentryType folder for
+    // folders). parentDentryId takes the folder's storage dentryId.
     this.app.post('/v2.0/doc/spaces/:spaceId/dentries', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       const spaceId = c.req.param('spaceId');
@@ -360,15 +330,20 @@ export class MockDingTalkServer {
       }
       const operatorId = typeof body.operatorId === 'string' ? body.operatorId : undefined;
       if (!operatorId) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
       }
-      const parentDentryId =
-        typeof body.parentDentryId === 'string' ? body.parentDentryId : undefined;
+      const parentDentryId = typeof body.parentDentryId === 'string' ? body.parentDentryId : undefined;
       if (parentDentryId !== undefined) {
-        const parent = this.folders.find((candidate) => candidate.folderId === parentDentryId);
+        const parent = this.folders.find((candidate) => candidate.dentryId === parentDentryId);
         if (!parent || parent.spaceId !== spaceId) {
           return c.json({ code: 'NodeNotFound', message: 'parent node not found' }, 404);
         }
+      }
+      const dentryType = typeof body.dentryType === 'string' ? body.dentryType : undefined;
+      // The mock only serves online-doc creation (the connector never
+      // creates folders — folder targets arrive as folder_id).
+      if (dentryType !== undefined && dentryType !== 'file') {
+        return c.json({ code: 'paramError', message: 'unsupported dentryType' }, 400);
       }
       const docKey = `dt-${randomUUID()}`;
       const doc: MockDingTalkDoc = {
@@ -388,7 +363,7 @@ export class MockDingTalkServer {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       const doc = this.findDocInSpace(c.req.param('dentryId'), c.req.param('spaceId'));
@@ -404,12 +379,13 @@ export class MockDingTalkServer {
     });
 
     // POST /v2.0/doc/spaces/{spaceId}/dentries/{dentryId}/move — move into
-    // a target folder (toParentDentryId) in a target space.
+    // a target folder (toParentDentryId = folder dentryUuid) in a target
+    // space (T17 live pass shape).
     this.app.post('/v2.0/doc/spaces/:spaceId/dentries/:dentryId/move', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       const doc = this.findDocInSpace(c.req.param('dentryId'), c.req.param('spaceId'));
@@ -434,12 +410,92 @@ export class MockDingTalkServer {
       return c.json(this.dentryVoShape(doc));
     });
 
-    // POST /v2.0/doc/dentries/export — create an async export task.
+    // GET /v1.0/doc/suites/documents/{docId}/blocks — the content-read
+    // path: blocks derived from the stored markdown (paragraph / heading,
+    // live-confirmed block shapes).
+    this.app.get('/v1.0/doc/suites/documents/:docId/blocks', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docId'));
+      if (!doc) {
+        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
+      }
+      return c.json({ result: { data: this.blocksFromMarkdown(doc.content) }, success: true });
+    });
+
+    // POST /v1.0/doc/suites/documents/{docId}/content — insert markdown
+    // content. No path/index = append at the end of the document root
+    // (T17c modeled shape; live-confirmed the request + response).
+    this.app.post('/v1.0/doc/suites/documents/:docId/content', async (c) => {
+      const insertFailure = this.insertFailure;
+      if (insertFailure) {
+        this.insertFailure = undefined;
+        return c.json(
+          { code: insertFailure.code, message: insertFailure.message },
+          insertFailure.httpStatus ?? 400,
+        );
+      }
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docId'));
+      if (!doc) {
+        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
+      }
+      const body = await readJson(c);
+      const content =
+        isRecord(body) && isRecord(body.content) && typeof body.content.content === 'string'
+          ? body.content.content
+          : undefined;
+      if (content === undefined) {
+        return c.json({ code: 'paramError', message: 'missing content' }, 400);
+      }
+      doc.content = doc.content === '' ? content : `${doc.content}\n\n${content}`;
+      return c.json({ success: true, result: {} });
+    });
+
+    // GET /v2.0/wiki/mineWorkspaces — the acting user's "我的文档" space.
+    this.app.get('/v2.0/wiki/mineWorkspaces', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      return c.json({
+        workspace: {
+          workspaceId: MockDingTalkServer.MINE_SPACE_ID,
+          name: '我的文档',
+          rootNodeId: 'root-mine',
+          corpId: 'corp-1',
+        },
+      });
+    });
+
+    // POST /v2.0/doc/dentries/export — create an async export task. The
+    // mock accepts it (the live API 404s for this app — see connector
+    // notes); the connector keeps export_doc hidden either way.
     this.app.post('/v2.0/doc/dentries/export', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       const body = await readJson(c);
@@ -465,11 +521,11 @@ export class MockDingTalkServer {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
-      if (!this.isAuthorized(token)) {
+      if (!this.isAppAuthorized(token)) {
         return c.json(INVALID_AUTH, 401);
       }
       if (!c.req.query('operatorId')) {
-        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
       }
       const taskId = c.req.query('taskId');
       const job = taskId ? this.exportJobs.get(taskId) : undefined;
@@ -483,10 +539,27 @@ export class MockDingTalkServer {
     });
   }
 
-  /** True when the presented token is one this mock issued and it is unexpired. */
-  private isAuthorized(token: string | undefined): boolean {
+  /** True when the presented token is a USER token this mock issued. */
+  private isUserAuthorized(token: string | undefined): boolean {
     const record = token ? this.issuedAccessTokens.get(token) : undefined;
     return record !== undefined && Date.now() <= record.expiresAt;
+  }
+
+  /** True when the presented token is an APP token this mock issued. */
+  private isAppAuthorized(token: string | undefined): boolean {
+    const record = token ? this.issuedAppTokens.get(token) : undefined;
+    return record !== undefined && Date.now() <= record.expiresAt;
+  }
+
+  /** Consumes the scripted failure, if any, into a mock error response. */
+  private scriptedResponse(): Response | undefined {
+    const scripted = this.scriptedFailure;
+    if (!scripted) return undefined;
+    this.scriptedFailure = undefined;
+    return new Response(JSON.stringify({ code: scripted.code, message: scripted.message }), {
+      status: scripted.httpStatus ?? 400,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
   /** Finds a seeded doc, failing when it lives outside the given space. */
@@ -511,13 +584,26 @@ export class MockDingTalkServer {
     type: 'FILE' | 'FOLDER',
     workspaceId: string,
     category: string,
+    extension: string,
+    creatorId: string,
+    createdTimeMs = 1_700_000_000_000,
+    updatedTimeMs = 1_700_000_000_000,
   ): {
     nodeId: string;
     workspaceId: string;
     name: string;
     type: string;
     category: string;
+    extension: string;
     url: string;
+    creatorId: string;
+    modifierId: string;
+    createTime: string;
+    modifiedTime: string;
+    createTimestamp: number;
+    modifiedTimestamp: number;
+    size: number;
+    hasChildren: boolean;
   } {
     return {
       nodeId,
@@ -525,7 +611,33 @@ export class MockDingTalkServer {
       name,
       type,
       category,
+      extension,
       url: `https://alidocs.dingtalk.com/i/nodes/${nodeId}`,
+      creatorId,
+      modifierId: creatorId,
+      createTime: new Date(createdTimeMs).toISOString(),
+      modifiedTime: new Date(updatedTimeMs).toISOString(),
+      createTimestamp: createdTimeMs,
+      modifiedTimestamp: updatedTimeMs,
+      size: 0,
+      hasChildren: false,
+    };
+  }
+
+  /** The search item shape (live-confirmed: no docKey/contentType). */
+  private searchItemShape(doc: MockDingTalkDoc): {
+    dentryUuid: string;
+    name: string;
+    path: Record<string, never>;
+    creator: { name: string; userId: string };
+    modifier: { name: string; userId: string };
+  } {
+    return {
+      dentryUuid: doc.docKey,
+      name: doc.name,
+      path: {},
+      creator: { name: 'Mock Owner', userId: 'mock-user-id' },
+      modifier: { name: 'Mock Owner', userId: 'mock-user-id' },
     };
   }
 
@@ -536,56 +648,64 @@ export class MockDingTalkServer {
     docKey: string;
     name: string;
     contentType: string;
+    extension: string;
     url: string;
     createdTime: number;
     updatedTime: number;
+    spaceId: string;
+    dentryType: string;
+    hasChildren: boolean;
     creator: { unionId: string; name: string };
   } {
     return {
-      dentryId: `dentry-${doc.docKey}`,
+      dentryId: `dentry-${doc.docKey.slice(0, 16)}`,
       dentryUuid: doc.docKey,
       docKey: doc.docKey,
-      name: doc.name,
-      contentType: doc.contentType ?? 'alidoc',
+      // Live finding: the create response name carries the `.adoc`
+      // extension; the connector strips it for the platform title.
+      name: `${doc.name}.adoc`,
+      contentType: 'alidoc',
+      extension: 'adoc',
       url: `https://alidocs.dingtalk.com/i/doc/${doc.docKey}`,
       createdTime: doc.createdTime ?? 1_700_000_000_000,
       updatedTime: doc.updatedTime ?? 1_700_000_000_000,
+      spaceId: `storage-${doc.spaceId ?? 'space-1'}`,
+      dentryType: 'file',
+      hasChildren: false,
       creator: { unionId: doc.ownerUnionId, name: 'Mock Owner' },
     };
   }
 
-  /** Consumes the scripted failure, if any, into a mock error response. */
-  private scriptedResponse(): Response | undefined {
-    const scripted = this.scriptedFailure;
-    if (!scripted) return undefined;
-    this.scriptedFailure = undefined;
-    return new Response(JSON.stringify({ code: scripted.code, message: scripted.message }), {
-      status: scripted.httpStatus ?? 400,
-      headers: { 'content-type': 'application/json' },
-    });
-  }
-
-  /** The dentry response shape shared by search + doc info. */
-  private dentryShape(doc: MockDingTalkDoc): {
-    dentryId: string;
-    docKey: string;
-    name: string;
-    contentType: string;
-    url: string;
-    createdTime: number;
-    updatedTime: number;
-    creator: { unionId: string; name: string };
-  } {
-    return {
-      dentryId: `dentry-${doc.docKey}`,
-      docKey: doc.docKey,
-      name: doc.name,
-      contentType: doc.contentType ?? 'alidoc',
-      url: `https://alidocs.dingtalk.com/i/doc/${doc.docKey}`,
-      createdTime: doc.createdTime ?? 1_700_000_000_000,
-      updatedTime: doc.updatedTime ?? 1_700_000_000_000,
-      creator: { unionId: doc.ownerUnionId, name: 'Mock Owner' },
-    };
+  /**
+   * Derives the block list from stored markdown (live-confirmed block
+   * shapes: paragraph{text}, heading{level: 'heading-N', text}). Blank
+   * lines collapse into adjacent blocks upstream (the live read-back
+   * showed no empty paragraphs between blocks), so they are skipped.
+   */
+  private blocksFromMarkdown(markdown: string): Array<Record<string, unknown>> {
+    let index = 0;
+    const blocks: Array<Record<string, unknown>> = [];
+    for (const line of markdown.split('\n')) {
+      if (line === '') continue;
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (heading) {
+        blocks.push({
+          blockType: 'heading',
+          index,
+          id: `blk-${index}`,
+          heading: { level: `heading-${heading[1]!.length}`, text: heading[2] },
+        });
+      } else {
+        blocks.push({
+          blockType: 'paragraph',
+          index,
+          id: `blk-${index}`,
+          paragraph: { text: line },
+        });
+      }
+      index++;
+    }
+    return blocks;
   }
 
   /** Seeds the mock's knowledge base with online documents (T17b). */
@@ -593,12 +713,12 @@ export class MockDingTalkServer {
     this.docs.push(...docs);
   }
 
-  /** Seeds folders (T17c): targets for create-in-folder and move. */
+  /** Seeds folders (T17c live pass): targets for create-in-folder + move. */
   seedFolders(folders: MockDingTalkFolder[]): void {
     this.folders.push(...folders);
   }
 
-  /** A fresh token pair, issued against the configured TTLs. */
+  /** A fresh USER token pair, issued against the configured TTLs. */
   private tokenBody(): {
     accessToken: string;
     refreshToken?: string;
@@ -646,7 +766,7 @@ export class MockDingTalkServer {
     this.refreshTokens.get(refreshToken)!.active = false;
   }
 
-  /** Scripts one failure for the next refresh_token or users/me call. */
+  /** Scripts one failure for the next refresh_token, app-token or users/me call. */
   failNext(failure: ScriptedFailure): void {
     this.scriptedFailure = failure;
   }

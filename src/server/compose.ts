@@ -91,8 +91,17 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
 
   // The real Feishu Docs connector (T7) plus the DingTalk connector (T17a,
   // test_connection skeleton; doc actions in T17b/T17c). Both serve the
-  // same platform action set; the executor dispatches by connection.
-  const connectors = [new FeishuConnector(feishuBaseUrl), new DingTalkConnector(dingtalkApiBaseUrl)];
+  // same platform action set; the executor dispatches by connection. The
+  // DingTalk connector receives the app-token resolver (T17 live pass):
+  // its doc/wiki/storage APIs authenticate with the app-level client-
+  // credentials token, while ActionContext.token stays the user token for
+  // the identity APIs.
+  const connectors = [
+    new FeishuConnector(feishuBaseUrl),
+    new DingTalkConnector(dingtalkApiBaseUrl, {
+      getAppAccessToken: (tenantId) => dingtalkTokenManager.getValidAppAccessToken(tenantId),
+    }),
+  ];
   const allowlists = new PostgresAllowlistStore(pool);
   const connectionLookup = new PostgresConnectionStore(pool);
 

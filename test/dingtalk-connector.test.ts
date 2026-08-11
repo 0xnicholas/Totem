@@ -32,20 +32,28 @@ describe('DingTalkConnector (Seam B)', () => {
   let mock: MockDingTalkServer;
   let connector: DingTalkConnector;
   let accessToken: string;
+  let appToken: string;
 
   beforeAll(async () => {
     mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    connector = new DingTalkConnector(baseUrl);
+    connector = new DingTalkConnector(baseUrl, {
+      // The app token the doc APIs authenticate with (T17 live pass); the
+      // test resolves it from the mock's client-credentials endpoint.
+      getAppAccessToken: () => Promise.resolve(appToken),
+    });
 
-    // A real token from the mock's token endpoint, as the token manager
-    // would deliver it in ActionContext.
+    // A real user token from the mock's token endpoint, as the token
+    // manager would deliver it in ActionContext.
     const oauth = createDingTalkOAuthClient({ apiBaseUrl: baseUrl, authorizeBaseUrl: baseUrl });
     const code = await mock.authorizeCode(REDIRECT_URI, 's');
     accessToken = (await oauth.exchangeCode({ creds: { appKey: APP_KEY, appSecret: APP_SECRET }, code }))
       .accessToken;
+    appToken = (await oauth.appAccessToken({ creds: { appKey: APP_KEY, appSecret: APP_SECRET } }))
+      .accessToken;
+
 
     mock.seedDocs([
       {
@@ -78,8 +86,8 @@ describe('DingTalkConnector (Seam B)', () => {
       { docKey: 'doc-w5', name: 'Cross Space', content: '', ownerUnionId: 'user-9' },
     ]);
     mock.seedFolders([
-      { folderId: 'folder-1', name: 'Projects', spaceId: 'space-1' },
-      { folderId: 'folder-other', name: 'Other Space', spaceId: 'space-2' },
+      { folderId: 'folder-1', dentryId: 'dentry-folder-1', name: 'Projects', spaceId: 'space-1' },
+      { folderId: 'folder-other', dentryId: 'dentry-folder-other', name: 'Other Space', spaceId: 'space-2' },
     ]);
   });
 
@@ -142,7 +150,7 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output.data).toEqual([{ doc_id: 'doc-3', title: 'Quarterly Plan', doc_type: 'docx' }]);
   });
 
-  it('search_docs honors the limit and the opaque doc_id is the docKey', async () => {
+  it('search_docs honors the limit and the opaque doc_id is the dentryUuid', async () => {
     const output = (await connector.execute(
       'search_docs',
       { query: '', limit: 2 },
@@ -152,14 +160,16 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output.data.map((d) => d.doc_id).sort()).toEqual(['doc-1', 'doc-2']);
   });
 
-  it('search_docs keeps only online documents (ALIDOC), not the broader file store', async () => {
+  it('search_docs returns every matching dentry (live search items carry no contentType)', async () => {
+    // Live finding: search items have no contentType/docKey, so the
+    // T17b-modeled ALIDOC filter does not apply — non-doc dentries are
+    // returned as-is by the upstream.
     mock.seedDocs([
       {
         docKey: 'file-1',
         name: 'Uploaded Report',
         content: 'binary',
         ownerUnionId: 'user-9',
-        contentType: 'document',
       },
     ]);
     const output = (await connector.execute(
@@ -167,17 +177,17 @@ describe('DingTalkConnector (Seam B)', () => {
       { query: 'report' },
       { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
     )) as { data: Array<{ doc_id: string }> };
-    expect(output.data).toEqual([]);
+    expect(output.data).toEqual([{ doc_id: 'file-1', title: 'Uploaded Report', doc_type: 'docx' }]);
   });
 
-  it('get_doc_content returns the markdown content', async () => {
+  it('get_doc_content returns the blocks rendered as markdown', async () => {
     const output = (await connector.execute(
       'get_doc_content',
       { doc_id: 'doc-1' },
       { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
     )) as { doc_id: string; content: string };
     expect(output.doc_id).toBe('doc-1');
-    expect(output.content).toContain('# Strategy');
+    expect(output.content).toBe('# Strategy\nFocus on the action layer.');
   });
 
   it('get_doc_metadata returns title, owner, type and an ISO edited_at', async () => {
@@ -189,12 +199,13 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output).toEqual({
       doc_id: 'doc-1',
       title: 'Product Strategy',
-      owner_id: 'user-9',
+      // Live shape: the node creatorId is the numeric userId (the mock
+      // mirrors it); opaque per the platform contract.
+      owner_id: '663443604826350971',
       doc_type: 'docx',
       edited_at: '2026-03-01T10:00:00.000Z',
     });
   });
-
   it('maps a missing document to not_found with the upstream code preserved', async () => {
     await expect(
       connector.execute('get_doc_content', { doc_id: 'no-such-doc' }, {
@@ -210,10 +221,12 @@ describe('DingTalkConnector (Seam B)', () => {
   });
 
   it('maps a rejected token on a read action to auth_expired', async () => {
+    // A cold connection id: the unionId cache is per connection, so the
+    // identity call actually runs and the bad user token is rejected.
     await expect(
       connector.execute('search_docs', { query: 'x' }, {
         tenantId: TENANT,
-        connectionId: CONNECTION,
+        connectionId: 'conn-cold-read',
         token: 'bad',
       }),
     ).rejects.toMatchObject({ code: 'auth_expired', retryable: false });
@@ -237,14 +250,14 @@ describe('DingTalkConnector (Seam B)', () => {
       { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
     )) as { doc_id: string; title: string };
     expect(output.title).toBe('New Plan');
-    // The opaque doc_id is the upstream docKey; the created doc is
-    // immediately readable through the read path.
+    // The opaque doc_id is the upstream dentryUuid; the created doc is
+    // immediately readable through the read path (blocks → markdown).
     const content = (await connector.execute(
       'get_doc_content',
       { doc_id: output.doc_id },
       { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
     )) as { content: string };
-    expect(content.content).toBe('# New Plan\n\nDraft.');
+    expect(content.content).toBe('# New Plan\nDraft.');
   });
 
   it('create_doc without content creates an empty document', async () => {
@@ -306,7 +319,7 @@ describe('DingTalkConnector (Seam B)', () => {
       { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
     )) as { doc_id: string; content: string };
     expect(output.doc_id).toBe('doc-w1');
-    expect(output.content).toBe('Base content.\n\nMore.');
+    expect(output.content).toBe('Base content.\nMore.');
   });
 
   it('append_doc_content to a missing document maps to not_found', async () => {
@@ -387,10 +400,12 @@ describe('DingTalkConnector (Seam B)', () => {
   });
 
   it('maps a rejected token on a write action to auth_expired', async () => {
+    // A cold connection id, as above: the write path's first identity
+    // resolution must run to hit the bad user token.
     await expect(
       connector.execute('create_doc', { title: 'X' }, {
         tenantId: TENANT,
-        connectionId: CONNECTION,
+        connectionId: 'conn-cold-write',
         token: 'bad',
       }),
     ).rejects.toMatchObject({ code: 'auth_expired', retryable: false });
@@ -431,6 +446,7 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
   let baseUrl: string;
   let mock: MockDingTalkServer;
   let accessToken: string;
+  let appToken: string;
 
   beforeAll(async () => {
     mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
@@ -440,6 +456,8 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
     const oauth = createDingTalkOAuthClient({ apiBaseUrl: baseUrl, authorizeBaseUrl: baseUrl });
     const code = await mock.authorizeCode(REDIRECT_URI, 's');
     accessToken = (await oauth.exchangeCode({ creds: { appKey: APP_KEY, appSecret: APP_SECRET }, code }))
+      .accessToken;
+    appToken = (await oauth.appAccessToken({ creds: { appKey: APP_KEY, appSecret: APP_SECRET } }))
       .accessToken;
 
     mock.seedDocs([
@@ -474,7 +492,7 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
       actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
-      connectors: [new DingTalkConnector(baseUrl)],
+      connectors: [new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'dingtalk_docs' }],
       allowlists,
       audit,
@@ -670,6 +688,7 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
   let baseUrl: string;
   let mock: MockDingTalkServer;
   let accessToken: string;
+  let appToken: string;
   const DINGTALK_CONN = 'conn-dt-2';
   const FAKE_CONN = 'conn-fake';
 
@@ -681,6 +700,8 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
     const oauth = createDingTalkOAuthClient({ apiBaseUrl: baseUrl, authorizeBaseUrl: baseUrl });
     const code = await mock.authorizeCode(REDIRECT_URI, 's');
     accessToken = (await oauth.exchangeCode({ creds: { appKey: APP_KEY, appSecret: APP_SECRET }, code }))
+      .accessToken;
+    appToken = (await oauth.appAccessToken({ creds: { appKey: APP_KEY, appSecret: APP_SECRET } }))
       .accessToken;
     mock.seedDocs([
       { docKey: 'dt-doc', name: 'DingTalk Doc', content: 'dt content', ownerUnionId: 'user-9' },
@@ -698,7 +719,10 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
       actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
-      connectors: [new FakeConnector([{ doc_id: 'fake-1', title: 'Fake Doc', content: 'fake' }]), new DingTalkConnector(baseUrl)],
+      connectors: [
+        new FakeConnector([{ doc_id: 'fake-1', title: 'Fake Doc', content: 'fake' }]),
+        new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) }),
+      ],
       connections: [
         { tenantId: TENANT, connectionId: FAKE_CONN, connectorId: 'fake' },
         { tenantId: TENANT, connectionId: DINGTALK_CONN, connectorId: 'dingtalk_docs' },

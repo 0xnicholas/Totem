@@ -33,6 +33,9 @@ export class DingTalkTokenManager implements TokenProvider {
   private readonly refreshes = new Map<string, Promise<string>>();
   private readonly refreshWindowMs: number;
   private readonly now: () => number;
+  /** Cached app-level tokens per tenant (client credentials, T17 live pass). */
+  private readonly appTokens = new Map<string, { token: string; expiresAt: number }>();
+  private readonly appTokenFetches = new Map<string, Promise<string>>();
 
   constructor(
     private readonly deps: {
@@ -80,6 +83,58 @@ export class DingTalkTokenManager implements TokenProvider {
       return accessToken;
     }
     return this.refresh(connectionId, stored);
+  }
+
+  /**
+   * The app-level access token for a tenant (client credentials — the
+   * `x-acs-dingtalk-access-token` the doc/wiki/storage APIs require, per
+   * the T17 live pass). Cached in memory per tenant with the same early-
+   * refresh discipline as user tokens; single-flight per tenant. A
+   * rejection (bad app credentials) surfaces as `upstream_error` with the
+   * upstream code — the operator-configured credentials are wrong, which
+   * is NOT the connection's user grant, so the connection is never
+   * poisoned with `auth_expired`.
+   */
+  async getValidAppAccessToken(tenantId: string): Promise<string> {
+    const cached = this.appTokens.get(tenantId);
+    if (cached && cached.expiresAt - this.now() > this.refreshWindowMs) {
+      return cached.token;
+    }
+    const inflight = this.appTokenFetches.get(tenantId);
+    if (inflight) return inflight;
+    const fetch = this.fetchAppToken(tenantId).finally(() => {
+      this.appTokenFetches.delete(tenantId);
+    });
+    this.appTokenFetches.set(tenantId, fetch);
+    return fetch;
+  }
+
+  private async fetchAppToken(tenantId: string): Promise<string> {
+    const creds = await this.deps.credsStore.get(tenantId);
+    if (!creds) {
+      throw new ActionError(
+        'upstream_error',
+        `Tenant "${tenantId}" has no DingTalk credentials configured; app token unavailable`,
+      );
+    }
+    try {
+      const pair = await this.deps.oauth.appAccessToken({ creds });
+      this.appTokens.set(tenantId, {
+        token: pair.accessToken,
+        expiresAt: Date.parse(pair.expiresAt),
+      });
+      return pair.accessToken;
+    } catch (err) {
+      if (err instanceof DingTalkApiError) {
+        if (err.httpStatus === 429) {
+          throw new ActionError('rate_limited', `DingTalk rate limited during app-token fetch: ${err.message}`);
+        }
+        throw new ActionError('upstream_error', `DingTalk app-token fetch failed: ${err.message}`, {
+          upstream: { code: err.code, message: err.message },
+        });
+      }
+      throw new ActionError('upstream_error', `DingTalk app-token fetch failed: ${errorMessage(err)}`);
+    }
   }
 
   /** Single-flight: one in-flight refresh promise per connection. */

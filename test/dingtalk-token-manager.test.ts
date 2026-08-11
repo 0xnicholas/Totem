@@ -182,4 +182,61 @@ describe('DingTalkTokenManager', () => {
     });
     expect(mock.refreshRequestCount).toBe(0);
   });
+
+  it('fetches the app token once and serves it from cache (T17 live pass)', async () => {
+    const first = await manager.getValidAppAccessToken(TENANT);
+    expect(first).toMatch(/^dt_app_/);
+    const second = await manager.getValidAppAccessToken(TENANT);
+    expect(second).toBe(first);
+    expect(mock.appTokenRequestCount).toBe(1);
+  });
+
+  it('refetches the app token inside the early-refresh window', async () => {
+    const first = await manager.getValidAppAccessToken(TENANT);
+    // Mock app tokens live 2h; advance the clock past the 5-minute window.
+    now = START + (2 * 60 - 4) * 60 * 1000;
+    const second = await manager.getValidAppAccessToken(TENANT);
+    expect(second).not.toBe(first);
+    expect(mock.appTokenRequestCount).toBe(2);
+  });
+
+  it('is single-flight for concurrent app-token fetches', async () => {
+    const fresh = 'tenant-app-singleflight';
+    credsStore.set(fresh, { appKey: APP_KEY, appSecret: APP_SECRET });
+    const before = mock.appTokenRequestCount;
+    const [a, b] = await Promise.all([
+      manager.getValidAppAccessToken(fresh),
+      manager.getValidAppAccessToken(fresh),
+    ]);
+    expect(a).toBe(b);
+    expect(mock.appTokenRequestCount - before).toBe(1);
+  });
+
+  it('maps invalid app credentials to upstream_error WITHOUT poisoning the connection', async () => {
+    const badTenant = 'tenant-app-badcreds';
+    credsStore.set(badTenant, { appKey: 'bad', appSecret: 'bad' });
+    await expect(manager.getValidAppAccessToken(badTenant)).rejects.toMatchObject({
+      code: 'upstream_error',
+      upstream: { code: 'InvalidClient' },
+    });
+    // The user grant is unrelated to the app credentials: the connection
+    // must stay usable for identity flows (never marked auth_expired).
+    expect(await connectionState.getStatus(CONNECTION)).not.toBe('auth_expired');
+  });
+
+  it('fails with upstream_error when the tenant has no credentials', async () => {
+    credsStore.clear();
+    await expect(manager.getValidAppAccessToken('tenant-app-nocreds')).rejects.toMatchObject({
+      code: 'upstream_error',
+    });
+  });
+
+  it('maps a rate limit during app-token fetch to rate_limited', async () => {
+    credsStore.set('tenant-app-ratelimited', { appKey: APP_KEY, appSecret: APP_SECRET });
+    mock.failNext({ code: 'TooManyRequests', message: 'slow down', httpStatus: 429 });
+    await expect(manager.getValidAppAccessToken('tenant-app-ratelimited')).rejects.toMatchObject({
+      code: 'rate_limited',
+      retryable: true,
+    });
+  });
 });

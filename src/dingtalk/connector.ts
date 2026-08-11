@@ -51,35 +51,43 @@ export function mapDingtalkError(err: DingTalkApiError): ActionError {
 /**
  * The real DingTalk Docs connector (T17a): a pure translator per ADR-0003 —
  * unified args → DingTalk request, DingTalk response → unified output,
- * DingTalk errors → the unified vocabulary. It receives an already-valid
- * user access token in `ActionContext.token` (ADR-0004) and never touches
- * the database, governance, or config stores.
+ * DingTalk errors → the unified vocabulary. It receives already-valid
+ * tokens from the orchestration layer and never touches the database,
+ * governance, or config stores.
  *
- * T17a shipped the connection skeleton: `test_connection`, which proves
- * the Connection's token against the cheapest call in DingTalk's proven
- * scope (the identity API `GET /v1.0/contact/users/me`, which needs only
- * the `openid` scope). T17b adds the read subset — `search_docs` (via
- * `POST /v2.0/storage/dentries/search`), `get_doc_content` and
- * `get_doc_metadata` (via the doc family `GET
- * /v1.0/doc/suites/documents/{docKey}[ /content]`) — over DingTalk's
- * online documents (ALIDOC). Sheets/workbooks stay out of the manifest
- * until a faithful translation lands (T17c decision point).
+ * Token model (T17 LIVE PASS, corrected from the mock-modeled shape):
+ * DingTalk's doc/wiki/storage APIs authenticate with the APP-level access
+ * token (client credentials, `POST /v1.0/oauth2/accessToken`) plus the
+ * acting user's `operatorId` (unionId); the USER access token only serves
+ * the identity APIs (`users/me`). Accordingly:
+ * - `ActionContext.token` (the user token) is used for identity:
+ *   `test_connection` and the unionId resolution;
+ * - the APP token comes from the injected `getAppAccessToken` resolver
+ *   (composition root, wired to the DingTalk token manager's
+ *   client-credentials lifecycle — ADR-0004 holds: connectors never do
+ *   OAuth, they receive valid tokens).
  *
- * T17c adds the write subset — `create_doc`, `append_doc_content`,
- * `rename_doc`, `move_doc` — modeled on the official docs/SDK: doc_2.0's
- * create/rename/move family under `POST /v2.0/doc/spaces/{spaceId}/dentries
- * [ /{dentryId}/rename|/move]` (space-scoped, so a node lookup
- * `GET /v2.0/wiki/nodes/{nodeId}` resolves the spaceId first), and the
- * markdown insert `POST /v1.0/doc/suites/documents/{docKey}/content`
- * (no path/index = append at the end of the document root). These write
- * APIs need `permission-Storage.File.Write`-family permission packages on
- * the DingTalk app (operator-side configuration; the OAuth scope string is
- * unchanged — live-pass item).
+ * Live-confirmed endpoint shapes (T17 live pass; the mock tracks them):
+ * - search: `POST /v2.0/storage/dentries/search` → `{items, nextToken}`,
+ *   items carry `dentryUuid` + `name` and NO contentType/docKey;
+ * - metadata + space resolution: `GET /v2.0/wiki/nodes/{nodeId}` → node
+ *   with ISO `modifiedTime`, numeric `creatorId`, `workspaceId`;
+ * - content read: `GET /v1.0/doc/suites/documents/{docId}/blocks` →
+ *   blocks (paragraph/heading), which the connector renders to markdown;
+ * - content write: `POST /v1.0/doc/suites/documents/{docId}/content`
+ *   (markdown, no path/index = append at the end);
+ * - create: `POST /v2.0/doc/spaces/{spaceId}/dentries` with `operatorId`
+ *   in the BODY and `parentDentryId` = the folder's storage dentryId
+ *   (resolved via `GET /v2.0/doc/dentries/{uuid}/queryDentryId`);
+ * - rename/move: `POST /v2.0/doc/spaces/{spaceId}/dentries/{dentryUuid}
+ *   /rename|move` (move's `toParentDentryId` takes the dentryUuid).
  *
- * Live-shape notes (T17b/T17c AC pending): the endpoints below are
- * modeled on the published API docs/SDK; the live pass with a real
- * DingTalk account corrects any drift (the Feishu connector's T9 pass
- * corrected several mock-modeled shapes).
+ * export_doc stays OUT of the manifest (T17c AC-2 decision, confirmed by
+ * the live pass): the async task endpoints 404 for this app
+ * (`InvalidAction.NotFound`) and the required `Document.Document.Read`
+ * permission point is not grantable in the DingTalk console. The
+ * translation is implemented and Seam B tested so a future flip only
+ * needs the manifest entry + corrected shapes.
  */
 export class DingTalkConnector implements IConnector {
   readonly manifest = {
@@ -94,35 +102,18 @@ export class DingTalkConnector implements IConnector {
       'rename_doc',
       'move_doc',
     ],
-    // Conservative comfort level (120/min = 2 QPS average) until a live
-    // pass confirms DingTalk's real per-API limits; the boundary throttles
-    // per (tenant, connection) to this. T17c adds the write actions — the
-    // same shared budget applies.
+    // Conservative comfort level (120/min = 2 QPS average) until the live
+    // pass measures DingTalk's real per-API limits; the boundary throttles
+    // per (tenant, connection) to this. Writes share the same budget.
     rateLimit: { requestsPerMinute: 120 },
-  };
-
-  // T17c decision (recorded): export_doc stays OUT of the manifest until
-  // the live pass confirms a faithful DingTalk export path. The async
-  // task flow is confirmed from the official SDK — create
-  // (`POST /v2.0/doc/dentries/export` {param: {dentryUuid, exportType}}),
-  // poll (`GET /v2.0/doc/me/export/task/query?operatorId=&taskId=` →
-  // {downloadUrl, status}) — but the exportType enum values are
-  // unconfirmed (only `dingTalksheetToxlsx` is published), so the mapping
-  // below is an assumption and nothing has run live. The translation is
-  // implemented and Seam B tested so the live pass can flip the manifest
-  // entry after correcting the mapping.
-  private static readonly EXPORT_TYPE_BY_FORMAT: Record<string, string> = {
-    // Pattern modeled on the published `dingTalksheetToxlsx` example —
-    // UNCONFIRMED until the live pass.
-    docx: 'dingTalkDocToDocx',
-    pdf: 'dingTalkDocToPdf',
   };
 
   private readonly handlers: Record<string, ActionHandler>;
   private readonly exportPollMs: number;
   private readonly exportMaxAttempts: number;
+  private readonly getAppAccessToken: ((tenantId: string) => Promise<string>) | undefined;
   /**
-   * DingTalk's v2.0 doc APIs require the acting user's `unionId` as
+   * DingTalk's doc APIs require the acting user's `unionId` as
    * `operatorId`. The unionId is stable per connection and resolvable from
    * the identity API, so the connector caches it in memory per connection
    * (translation-layer state only — ADR-0003's no-storage rule is about
@@ -137,16 +128,24 @@ export class DingTalkConnector implements IConnector {
 
   constructor(
     private readonly apiBaseUrl: string,
-    options: { exportPollMs?: number; exportMaxAttempts?: number } = {},
+    options: {
+      getAppAccessToken?: (tenantId: string) => Promise<string>;
+      exportPollMs?: number;
+      exportMaxAttempts?: number;
+    } = {},
   ) {
+    this.getAppAccessToken = options.getAppAccessToken;
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
+
     this.handlers = {
       test_connection: async (_args, ctx) => {
         // The cheapest call in the connector's proven scope: the identity
         // API succeeds iff the connection's user access token is valid and
         // API access works. The token manager has already refreshed an
-        // expiring token (ADR-0004), so this call is the live proof.
+        // expiring token (ADR-0004), so this call is the live proof. (The
+        // app token is derived from tenant credentials, not the user grant;
+        // a broken app secret surfaces on the first doc action instead.)
         await dingtalkRequest(this.apiBaseUrl, '/v1.0/contact/users/me', {
           token: ctx.token,
         });
@@ -159,7 +158,7 @@ export class DingTalkConnector implements IConnector {
 
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
-        const response = await this.docRequest<DentriesResponse>(
+        const response = await this.docRequest<SearchResponse>(
           '/v2.0/storage/dentries/search',
           {
             method: 'POST',
@@ -170,19 +169,18 @@ export class DingTalkConnector implements IConnector {
           },
           ctx,
         );
-        // v1 read scope: online documents (ALIDOC) only — the platform's
-        // doc actions address documents, not the broader file store (which
-        // the search API also returns: uploaded files, images, archives).
-        // Matches beyond DingTalk's page cap (maxResults ≤ 50) are
-        // truncated; cursor semantics are v2 per ADR-0012.
+        // Live finding (T17 live pass): search returns `{items, nextToken}`
+        // — items carry `dentryUuid` + `name` and NO contentType/docKey,
+        // so the T17b-modeled ALIDOC filter cannot be applied (the search
+        // response does not say what the dentry is). Matches beyond
+        // DingTalk's page cap (maxResults ≤ 50) are truncated; cursor
+        // semantics are v2 per ADR-0012.
         const output: SearchDocsOutput = {
-          data: response.dentries
-            .filter((dentry) => dentry.contentType === 'alidoc')
-            .map((dentry) => ({
-              doc_id: dentry.docKey,
-              title: dentry.name,
-              doc_type: DingTalkConnector.DOC_TYPE_ONLINE_DOC,
-            })),
+          data: response.items.map((item) => ({
+            doc_id: item.dentryUuid,
+            title: item.name,
+            doc_type: DingTalkConnector.DOC_TYPE_ONLINE_DOC,
+          })),
           next: null,
         };
         return output;
@@ -190,71 +188,91 @@ export class DingTalkConnector implements IConnector {
 
       get_doc_content: async (args: GetDocContentInput, ctx) => {
         const input = args;
-        const response = await this.docRequest<{ content: string }>(
-          `/v1.0/doc/suites/documents/${encodeURIComponent(input.doc_id)}/content`,
+        // Live-confirmed read path: the block API (the v1.0 doc-family GET
+        // endpoints modeled in T17b do not exist live; the v2.0 content
+        // endpoints need a permission point this app cannot grant). The
+        // official DingTalk MCP reads content the same way — blocks →
+        // markdown.
+        const response = await this.docRequest<BlocksResponse>(
+          `/v1.0/doc/suites/documents/${encodeURIComponent(input.doc_id)}/blocks`,
           {},
           ctx,
         );
         const output: GetDocContentOutput = {
           doc_id: input.doc_id,
-          content: response.content,
+          content: blocksToMarkdown(response.result.data),
         };
         return output;
       },
 
       get_doc_metadata: async (args: GetDocMetadataInput, ctx) => {
         const input = args;
-        const response = await this.docRequest<DentryResponse>(
-          `/v1.0/doc/suites/documents/${encodeURIComponent(input.doc_id)}`,
+        const response = await this.docRequest<NodeResponse>(
+          `/v2.0/wiki/nodes/${encodeURIComponent(input.doc_id)}`,
           {},
           ctx,
         );
         const output: GetDocMetadataOutput = {
           doc_id: input.doc_id,
-          title: response.name,
-          owner_id: response.creator.unionId,
+          // Live finding: the node name carries the `.adoc` extension
+          // (like the create response); the platform title is the bare
+          // name.
+          title: stripAdocExtension(response.node.name),
+          // Live finding: the node creatorId is the numeric userId (not the
+          // unionId) — opaque either way per the platform contract.
+          owner_id: response.node.creatorId,
           doc_type: DingTalkConnector.DOC_TYPE_ONLINE_DOC,
-          // DingTalk timestamps are epoch-millisecond Longs (occasionally
-          // serialized as strings); the platform contract promises an ISO
-          // timestamp.
-          edited_at: toIsoMillis(response.updatedTime),
+          // Live finding: node timestamps are ISO strings — no Long
+          // conversion (the T17b-modeled epoch-ms shape did not hold).
+          edited_at: response.node.modifiedTime,
         };
         return output;
       },
 
       create_doc: async (args: CreateDocInput, ctx) => {
         const input = args;
-        // Target space: an explicit folder (its nodeId IS its dentryUuid,
-        // which the create API takes as parentDentryId) or the acting
-        // user's "我的文档" root.
-        const spaceId =
-          input.folder_id !== undefined && input.folder_id !== null
-            ? (await this.resolveNode(input.folder_id, ctx)).workspaceId
-            : await this.mineWorkspaceId(ctx);
+        // Target space: an explicit folder (its nodeId IS its dentryUuid)
+        // or the acting user's "我的文档" root. Live finding: the create
+        // API's parentDentryId takes the folder's STORAGE dentryId, not
+        // the dentryUuid — resolved via queryDentryId (move_doc's
+        // toParentDentryId takes the dentryUuid instead; the API is
+        // internally inconsistent).
+        let spaceId: string;
+        let parentDentryId: string | undefined;
+        if (input.folder_id !== undefined && input.folder_id !== null) {
+          spaceId = (await this.resolveNode(input.folder_id, ctx)).workspaceId;
+          parentDentryId = (
+            await this.docRequest<{ dentryId: string }>(
+              `/v2.0/doc/dentries/${encodeURIComponent(input.folder_id)}/queryDentryId`,
+              {},
+              ctx,
+            )
+          ).dentryId;
+        } else {
+          spaceId = await this.mineWorkspaceId(ctx);
+        }
         const created = await this.docRequest<DentryVO>(
           `/v2.0/doc/spaces/${encodeURIComponent(spaceId)}/dentries`,
           {
             method: 'POST',
             // The doc_2.0 create API takes operatorId in the BODY (the
-            // other doc APIs take it as a query param) — SDK-confirmed.
-            body: (operatorId: string) => ({
+            // other doc APIs take it as a query param) — live-confirmed.
+            body: (operatorId) => ({
               dentryType: 'file',
-              // 0 = online document (ALIDOC); T17c modeled shape.
+              // 0 = online document (ALIDOC); live-confirmed.
               documentType: 0,
               name: input.title,
               operatorId,
-              ...(input.folder_id !== undefined && input.folder_id !== null
-                ? { parentDentryId: input.folder_id }
-                : {}),
+              ...(parentDentryId !== undefined ? { parentDentryId } : {}),
             }),
           },
           ctx,
         );
-        const docId = created.docKey ?? created.dentryUuid;
+        const docId = created.dentryUuid ?? created.docKey;
         if (!docId) {
           throw new ActionError(
             'upstream_error',
-            'DingTalk create-document response omitted docKey and dentryUuid',
+            'DingTalk create-document response omitted dentryUuid and docKey',
           );
         }
         // DingTalk creates documents empty; seeded initial content goes
@@ -274,7 +292,9 @@ export class DingTalkConnector implements IConnector {
         }
         const output: CreateDocOutput = {
           doc_id: docId,
-          title: created.name,
+          // Live finding: the create response echoes the name with the
+          // `.adoc` extension; the platform title is the bare name.
+          title: stripAdocExtension(created.name),
         };
         return output;
       },
@@ -283,17 +303,17 @@ export class DingTalkConnector implements IConnector {
         const input = args;
         await this.insertContent(input.doc_id, input.content, ctx);
         // The AC promises the updated state: re-read the full content
-        // (Feishu precedent). The append itself has landed by now, so a
-        // re-read failure says so — a retry would duplicate the append.
+        // through the blocks path (Feishu precedent). The append itself
+        // has landed by now, so a re-read failure says so — a retry would
+        // duplicate the append.
         let content: string;
         try {
-          content = (
-            await this.docRequest<{ content: string }>(
-              `/v1.0/doc/suites/documents/${encodeURIComponent(input.doc_id)}/content`,
-              {},
-              ctx,
-            )
-          ).content;
+          const response = await this.docRequest<BlocksResponse>(
+            `/v1.0/doc/suites/documents/${encodeURIComponent(input.doc_id)}/blocks`,
+            {},
+            ctx,
+          );
+          content = blocksToMarkdown(response.result.data);
         } catch (err) {
           throw new ActionError(
             'upstream_error',
@@ -319,7 +339,7 @@ export class DingTalkConnector implements IConnector {
         );
         const output: RenameDocOutput = {
           doc_id: input.doc_id,
-          title: response.name,
+          title: stripAdocExtension(response.name),
         };
         return output;
       },
@@ -334,7 +354,11 @@ export class DingTalkConnector implements IConnector {
           `/v2.0/doc/spaces/${encodeURIComponent(source.workspaceId)}/dentries/${encodeURIComponent(input.doc_id)}/move`,
           {
             method: 'POST',
-            body: () => ({
+            // Live finding: unlike rename (query param accepted), the move
+            // API REQUIRES operatorId in the BODY — query-only calls fail
+            // with MissingoperatorId.
+            body: (operatorId) => ({
+              operatorId,
               targetSpaceId: target.workspaceId,
               toParentDentryId: input.folder_id,
             }),
@@ -350,12 +374,11 @@ export class DingTalkConnector implements IConnector {
 
       export_doc: async (args: ExportDocInput, ctx) => {
         const input = args;
-        // Hidden from the manifest (T17c decision above); implemented so
-        // the live pass can flip it. DingTalk exports are async, like
-        // Feishu: create a task, then poll until the downloadUrl exists.
+        // Hidden from the manifest (T17c decision, live-confirmed); kept
+        // implemented + Seam B tested for a future flip. DingTalk exports
+        // are async: create a task, then poll until the downloadUrl exists.
         // Note: the SDK's export-create takes no operatorId — docRequest
-        // attaches it as a query param anyway (harmless if ignored
-        // upstream; verify live).
+        // attaches it as a query param anyway (harmless if ignored).
         const task = await this.docRequest<ExportTaskState>(
           '/v2.0/doc/dentries/export',
           {
@@ -383,15 +406,30 @@ export class DingTalkConnector implements IConnector {
     };
   }
 
+  // T17c AC-2 decision (live-confirmed): export_doc stays OUT of the
+  // manifest. The live pass showed the async export endpoints answering
+  // 404 `InvalidAction.NotFound` for this app, and the required
+  // `Document.Document.Read` permission point is not grantable in the
+  // DingTalk console. The mapping below is an unconfirmed assumption
+  // (pattern modeled on the published `dingTalksheetToxlsx` example) and
+  // stays hidden until a faithful live path exists.
+  private static readonly EXPORT_TYPE_BY_FORMAT: Record<string, string> = {
+    docx: 'dingTalkDocToDocx',
+    pdf: 'dingTalkDocToPdf',
+  };
+
   /**
-   * One doc-family call with the acting user's `operatorId` attached.
-   * The doc APIs take it as a query param; the doc_2.0 create API takes it
-   * in the BODY instead (SDK-confirmed shape), so `body` is built from
-   * the resolved operatorId (static bodies ignore it).
-   * A rejected token drops the cached unionId (the connection's identity
-   * may have changed on re-authorization) and rethrows, so the caller
-   * sees `auth_expired` (the token manager marks the connection and
-   * fail-fast afterwards).
+   * One doc-family call with the acting user's `operatorId` attached and
+   * the APP token in the auth header (live-confirmed auth model). The doc
+   * APIs take operatorId as a query param; the doc_2.0 create API takes it
+   * in the BODY instead, so `body` is built from the resolved operatorId
+   * (static bodies ignore it).
+   *
+   * A rejected APP token mid-call is an operator-config problem (rotated
+   * secret, revoked app), NOT a dead user grant: it is reclassified from
+   * `auth_expired` to `upstream_error` so the agent does not re-authorize
+   * the connection. The unionId cache is dropped either way (the identity
+   * context may have changed; it re-resolves on the next call).
    */
   private async docRequest<T>(
     path: string,
@@ -403,19 +441,38 @@ export class DingTalkConnector implements IConnector {
     ctx: ActionContext,
   ): Promise<T> {
     const operatorId = await this.resolveUnionId(ctx.connectionId, ctx.token);
+    const appToken = await this.appToken(ctx.tenantId);
     try {
       return await dingtalkRequest<T>(this.apiBaseUrl, path, {
         method: opts.method,
-        token: ctx.token,
+        token: appToken,
         query: { operatorId, ...opts.query },
         body: opts.body?.(operatorId),
       });
     } catch (err) {
       if (err instanceof ActionError && err.code === 'auth_expired') {
         this.unionIds.delete(ctx.connectionId);
+        throw new ActionError(
+          'upstream_error',
+          `DingTalk rejected the app token (operator-config issue, not the connection grant): ${err.message}`,
+          { upstream: err.upstream },
+        );
       }
       throw err;
     }
+  }
+
+  /** The app-level token, resolved by the composition-root provider. */
+  private appToken(tenantId: string): Promise<string> {
+    if (!this.getAppAccessToken) {
+      return Promise.reject(
+        new ActionError(
+          'upstream_error',
+          'DingTalk connector has no app-token provider configured (composition root)',
+        ),
+      );
+    }
+    return this.getAppAccessToken(tenantId);
   }
 
   /** Resolves a node's wiki info (its spaceId) by dentryUuid. */
@@ -481,7 +538,8 @@ export class DingTalkConnector implements IConnector {
 
   /**
    * Resolves the acting user's unionId (DingTalk's `operatorId`), cached
-   * per connection. The identity call only runs on a cache miss.
+   * per connection. The identity call only runs on a cache miss and uses
+   * the USER token (the identity API rejects the app token — live pass).
    */
   private async resolveUnionId(connectionId: string, token: string | undefined): Promise<string> {
     const cached = this.unionIds.get(connectionId);
@@ -506,23 +564,49 @@ export class DingTalkConnector implements IConnector {
   }
 }
 
-/** A dentry in a search response / doc-info response (T17b modeled shapes). */
-interface DentryResponse {
-  dentryId: string;
-  docKey: string;
-  name: string;
-  contentType: string;
-  url: string;
-  createdTime: number | string;
-  updatedTime: number | string;
-  creator: { unionId: string; name: string };
-}
-
-/** A dentry in a doc_2.0 create/rename/move response (T17c modeled shape). */
+/** A dentry in a doc_2.0 create/rename/move response (live-confirmed shape). */
 interface DentryVO {
   dentryUuid?: string;
   docKey?: string;
   name: string;
+}
+
+/** The search response (live-confirmed: items, no dentries/contentType). */
+interface SearchResponse {
+  items: Array<{
+    dentryUuid: string;
+    name: string;
+    creator?: { userId?: string };
+    modifier?: { userId?: string };
+  }>;
+  nextToken: string;
+}
+
+/** The wiki node response (live-confirmed shape). */
+interface NodeResponse {
+  node: {
+    workspaceId: string;
+    name: string;
+    creatorId: string;
+    modifiedTime: string;
+    type: string;
+    category: string;
+    extension: string;
+  };
+}
+
+/** A document block as the block API returns it (live-confirmed shapes). */
+interface Block {
+  blockType: string;
+  index: number;
+  id: string;
+  paragraph?: { text: string };
+  heading?: { level: string; text: string };
+}
+
+/** The block-list response (live-confirmed wrapper). */
+interface BlocksResponse {
+  result: { data: Block[] };
 }
 
 /** The async export task state (T17c modeled shape). */
@@ -533,25 +617,35 @@ interface ExportTaskState {
 }
 
 /**
- * Normalizes an epoch-millisecond Long (number or numeric string) to ISO.
- * A missing or non-numeric value is an upstream contract break — the
- * platform output schema requires edited_at — so it fails loudly as an
- * upstream_error instead of a raw RangeError.
+ * Renders the block list as markdown-ish plain text — the platform
+ * contract ("plain text with markdown-style headings preserved").
+ * Live-confirmed block shapes are `paragraph{text}` and `heading{level:
+ * 'heading-N', text}`; other block types (tables, callouts, …) carry their
+ * own payloads and are dropped in v1 (empty paragraphs included).
  */
-function toIsoMillis(value: number | string | undefined): string {
-  const millis = typeof value === 'string' ? Number(value) : value;
-  if (millis === undefined || !Number.isFinite(millis)) {
-    throw new ActionError(
-      'upstream_error',
-      `DingTalk document info omitted a valid updatedTime (got ${String(value)})`,
-    );
-  }
-  return new Date(millis).toISOString();
+function blocksToMarkdown(blocks: Block[]): string {
+  return blocks
+    .map((block) => {
+      if (block.blockType === 'heading' && block.heading) {
+        const level = Number(/heading-(\d)/.exec(block.heading.level)?.[1] ?? 1);
+        return `${'#'.repeat(level)} ${block.heading.text}`;
+      }
+      if (block.blockType === 'paragraph' && block.paragraph) {
+        return block.paragraph.text;
+      }
+      return '';
+    })
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
-interface DentriesResponse {
-  dentries: DentryResponse[];
-  nextToken: string;
+/**
+ * Live finding: create/rename echo the title with the `.adoc` extension;
+ * the platform title is the bare name (the official DingTalk MCP strips
+ * file suffixes from names too).
+ */
+function stripAdocExtension(name: string): string {
+  return name.endsWith('.adoc') ? name.slice(0, -'.adoc'.length) : name;
 }
 
 /**
