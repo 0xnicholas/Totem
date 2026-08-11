@@ -171,6 +171,14 @@ describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postg
 
   afterAll(async () => {
     if (server) await new Promise((resolve) => server.close(resolve));
+    // Leave the database as found: truncate fixtures so repeated runs
+    // against a dev DB never accumulate leftover tenants (issue #27).
+    try {
+      await pool.query('TRUNCATE tenants CASCADE');
+    } catch {
+      // beforeAll may have failed (e.g. an unreachable database); never
+      // mask the original error.
+    }
     await pool.end();
   });
 

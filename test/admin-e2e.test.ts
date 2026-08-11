@@ -34,6 +34,14 @@ describe.runIf(hasDb)('admin API end to end', () => {
 
   afterAll(async () => {
     await new Promise((resolve) => server.close(resolve));
+    // Leave the database as found: truncate fixtures so repeated runs
+    // against a dev DB never accumulate leftover tenants (issue #27).
+    try {
+      await pool.query('TRUNCATE tenants CASCADE');
+    } catch {
+      // beforeAll may have failed (e.g. an unreachable database); never
+      // mask the original error.
+    }
     await pool.end();
   });
 

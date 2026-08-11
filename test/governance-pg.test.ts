@@ -13,7 +13,8 @@ import { DOCS_ACTIONS } from '../src/index.js';
  * Governance against Postgres: allowlist reads + audit writes through the
  * real stores, and a full-stack check that executeAction's audit rows are
  * queryable via the T3 admin API (AC-4). DB-gated like the other
- * integration tests; applies migrations and truncates at start.
+ * integration tests; applies migrations and truncates tenants at start
+ * and end (leaves the DB as found, issue #27).
  */
 const dbUrl = process.env.DATABASE_URL;
 const hasDb = Boolean(dbUrl);
@@ -27,6 +28,14 @@ describe.runIf(hasDb)('governance stores (Postgres)', () => {
   });
 
   afterAll(async () => {
+    // Leave the database as found: truncate fixtures so repeated runs
+    // against a dev DB never accumulate leftover tenants (issue #27).
+    try {
+      await pool.query('TRUNCATE tenants CASCADE');
+    } catch {
+      // beforeAll may have failed (e.g. an unreachable database); never
+      // mask the original error.
+    }
     await pool.end();
   });
 
