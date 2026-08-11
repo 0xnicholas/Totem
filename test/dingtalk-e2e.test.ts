@@ -51,6 +51,17 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
         updatedTime: Date.parse('2026-03-01T10:00:00Z'),
       },
     ]);
+    mock.seedWorkbooks([
+      {
+        workbookId: 'e2e-wb-1',
+        name: 'E2E Budget',
+        ownerUnionId: 'mock-union-id',
+        sheets: [
+          { id: 'e2e-sht-a', name: 'Summary', values: [['Region', 'Q1'], ['APAC', 10]] },
+          { id: 'e2e-sht-b', name: 'Detail', values: [['untouched']] },
+        ],
+      },
+    ]);
     dingtalk = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => dingtalk.once('listening', resolve));
     dingtalkBaseUrl = `http://127.0.0.1:${(dingtalk.address() as AddressInfo).port}`;
@@ -260,5 +271,65 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     const audit = await client.queryAudit(tenantId, { action: 'create_doc' });
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
+  });
+
+  it('walks the sheet leg: write then read back through the RPC surface, audited (T18a)', async () => {
+    const { connections } = await client.listConnections(tenantId);
+    const connection = connections[0]!;
+    await client.setAllowlist(connection.id, ['write_sheet_cells', 'read_sheet_cells']);
+
+    const key = await client.createKey(tenantId, 'actions');
+    const rpc = (body: unknown) =>
+      fetch(`${apiBaseUrl}/actions/rpc`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key.key}`,
+          'x-connection-id': connection.id,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+    // Write with an explicit sheet name (the sheetId slot takes the NAME
+    // directly — no resolution), native types preserved.
+    const write = await rpc({
+      action: 'write_sheet_cells',
+      args: {
+        doc_id: 'e2e-wb-1',
+        sheet_name: 'Summary',
+        range: 'A2:B2',
+        values: [['EMEA', 25]],
+      },
+    });
+    expect(write.status).toBe(200);
+    expect(await write.json()).toEqual({
+      doc_id: 'e2e-wb-1',
+      range: 'A2:B2',
+      updated_cells: 2,
+    });
+
+    // Read back with sheet_name omitted — the first-worksheet resolution
+    // path through the composed server.
+    const read = await rpc({
+      action: 'read_sheet_cells',
+      args: { doc_id: 'e2e-wb-1', range: 'A1:B2' },
+    });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({
+      doc_id: 'e2e-wb-1',
+      range: 'A1:B2',
+      data: [
+        ['Region', 'Q1'],
+        ['EMEA', 25],
+      ],
+      next: null,
+    });
+
+    const writeAudit = await client.queryAudit(tenantId, { action: 'write_sheet_cells' });
+    expect(writeAudit.rows).toHaveLength(1);
+    expect(writeAudit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
+    const readAudit = await client.queryAudit(tenantId, { action: 'read_sheet_cells' });
+    expect(readAudit.rows).toHaveLength(1);
+    expect(readAudit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
   });
 });

@@ -89,13 +89,59 @@ describe('DingTalkConnector (Seam B)', () => {
       { folderId: 'folder-1', dentryId: 'dentry-folder-1', name: 'Projects', spaceId: 'space-1' },
       { folderId: 'folder-other', dentryId: 'dentry-folder-other', name: 'Other Space', spaceId: 'space-2' },
     ]);
+    // T18a sheet fixtures. wb-1 is the shared read fixture (never
+    // mutated); the wb-w* workbooks are dedicated write fixtures so
+    // mutations never leak across tests sharing this mock.
+    mock.seedWorkbooks([
+      {
+        workbookId: 'wb-1',
+        name: 'Budget 2026',
+        ownerUnionId: 'user-9',
+        sheets: [
+          {
+            id: 'sht-1a',
+            name: 'Summary',
+            values: [
+              ['Region', 'Q1', 'Q2'],
+              ['APAC', 10, 20],
+              ['EMEA', 5, 15],
+            ],
+          },
+          {
+            id: 'sht-1b',
+            name: 'Detail',
+            // Mixed native cell types: string, number, boolean.
+            values: [
+              ['Item', 'Cost'],
+              ['Hosting', 120],
+              ['Licenses', true],
+            ],
+          },
+        ],
+      },
+      {
+        workbookId: 'wb-w1',
+        name: 'Write Me',
+        ownerUnionId: 'user-9',
+        sheets: [{ id: 'sht-w1', name: 'Sheet1', values: [['a', 'b'], ['c', 'd']] }],
+      },
+      {
+        workbookId: 'wb-w2',
+        name: 'Two Tabs',
+        ownerUnionId: 'user-9',
+        sheets: [
+          { id: 'sht-w2a', name: 'First', values: [['original', 1]] },
+          { id: 'sht-w2b', name: 'Second', values: [['untouched']] },
+        ],
+      },
+    ]);
   });
 
   afterAll(async () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('declares the full implemented manifest (T17b reads + T17c writes, export_doc hidden)', () => {
+  it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets, export_doc hidden)', () => {
     expect(connector.manifest.id).toBe('dingtalk_docs');
     expect(connector.manifest.implements).toEqual([
       'test_connection',
@@ -106,6 +152,8 @@ describe('DingTalkConnector (Seam B)', () => {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
     ]);
     expect(connector.manifest.implements).not.toContain('export_doc');
     expect(connector.manifest.rateLimit).toEqual({ requestsPerMinute: 120 });
@@ -437,6 +485,344 @@ describe('DingTalkConnector (Seam B)', () => {
 });
 
 /**
+ * T18a Seam B: the workbook sheet surface — read_sheet_cells /
+ * write_sheet_cells translated against the mock's workbook endpoints
+ * (official-docs shapes: sheet list, range read with select=values,
+ * range write returning only a1Notation). The sheetId path slot accepts
+ * the sheet NAME directly, so an explicit sheet_name skips id
+ * resolution; omitting it resolves the first worksheet via the sheets
+ * list.
+ */
+describe('DingTalkConnector sheet actions (T18a, Seam B)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockDingTalkServer;
+  let connector: DingTalkConnector;
+  let accessToken: string;
+  let appToken: string;
+
+  beforeAll(async () => {
+    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    connector = new DingTalkConnector(baseUrl, {
+      getAppAccessToken: () => Promise.resolve(appToken),
+    });
+
+    const oauth = createDingTalkOAuthClient({ apiBaseUrl: baseUrl, authorizeBaseUrl: baseUrl });
+    const code = await mock.authorizeCode(REDIRECT_URI, 's');
+    accessToken = (await oauth.exchangeCode({ creds: { appKey: APP_KEY, appSecret: APP_SECRET }, code }))
+      .accessToken;
+    appToken = (await oauth.appAccessToken({ creds: { appKey: APP_KEY, appSecret: APP_SECRET } }))
+      .accessToken;
+
+    mock.seedWorkbooks([
+      {
+        workbookId: 'wb-1',
+        name: 'Budget 2026',
+        ownerUnionId: 'user-9',
+        sheets: [
+          {
+            id: 'sht-1a',
+            name: 'Summary',
+            values: [
+              ['Region', 'Q1', 'Q2'],
+              ['APAC', 10, 20],
+              ['EMEA', 5, 15],
+            ],
+          },
+          {
+            id: 'sht-1b',
+            name: 'Detail',
+            // Mixed native cell types: string, number, boolean.
+            values: [
+              ['Item', 'Cost'],
+              ['Hosting', 120],
+              ['Licenses', true],
+            ],
+          },
+        ],
+      },
+      {
+        workbookId: 'wb-w1',
+        name: 'Write Me',
+        ownerUnionId: 'user-9',
+        sheets: [{ id: 'sht-w1', name: 'Sheet1', values: [['a', 'b'], ['c', 'd']] }],
+      },
+      {
+        workbookId: 'wb-w2',
+        name: 'Two Tabs',
+        ownerUnionId: 'user-9',
+        sheets: [
+          { id: 'sht-w2a', name: 'First', values: [['original', 1]] },
+          { id: 'sht-w2b', name: 'Second', values: [['untouched']] },
+        ],
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  it('read_sheet_cells translates with an explicit sheet name (name used directly in the sheetId slot)', async () => {
+    const output = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-1', sheet_name: 'Summary', range: 'A1:C3' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { doc_id: string; range: string; data: unknown[][]; next: string | null };
+    // The List Envelope (ADR-0012): data + next, with the identity fields
+    // at the top level.
+    expect(output).toEqual({
+      doc_id: 'wb-1',
+      range: 'A1:C3',
+      data: [
+        ['Region', 'Q1', 'Q2'],
+        ['APAC', 10, 20],
+        ['EMEA', 5, 15],
+      ],
+      next: null,
+    });
+  });
+
+  it('read_sheet_cells defaults to the first worksheet when sheet_name is omitted', async () => {
+    const output = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-1', range: 'A1:B2' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    expect(output.data).toEqual([
+      ['Region', 'Q1'],
+      ['APAC', 10],
+    ]);
+  });
+
+  it('read_sheet_cells preserves native cell types (string, number, boolean)', async () => {
+    const output = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-1', sheet_name: 'Detail', range: 'A1:B3' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    expect(output.data).toEqual([
+      ['Item', 'Cost'],
+      ['Hosting', 120],
+      ['Licenses', true],
+    ]);
+  });
+
+  it('read_sheet_cells maps a missing workbook to not_found with the upstream code', async () => {
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'no-such-wb', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      retryable: false,
+      upstream: { code: 'invalidRequest.resource.notFound' },
+    });
+  });
+
+  it('read_sheet_cells maps an unknown sheet name to not_found', async () => {
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'wb-1', sheet_name: 'Nope', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      retryable: false,
+      upstream: { code: 'invalidRequest.resource.notFound' },
+    });
+  });
+
+  it('read_sheet_cells maps a non-workbook doc id to upstream_error with the upstream code', async () => {
+    mock.failNext({ code: 'invalidRequest.resource.notWorkbook', message: 'not a workbook', httpStatus: 400 });
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'doc-1', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'invalidRequest.resource.notWorkbook' },
+    });
+  });
+
+  it('read_sheet_cells maps a denied operator to upstream_error with the upstream code', async () => {
+    mock.failNext({ code: 'forbidden.accessDenied', message: 'The operator has no permission.', httpStatus: 403 });
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'wb-1', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'forbidden.accessDenied' },
+    });
+  });
+
+  it('read_sheet_cells maps a rate limit to rate_limited (retryable)', async () => {
+    mock.failNext({ code: 'TooManyRequests', message: 'slow down', httpStatus: 429 });
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'wb-1', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({ code: 'rate_limited', retryable: true });
+  });
+
+  it('read_sheet_cells maps a rejected token to auth_expired (cold connection)', async () => {
+    await expect(
+      connector.execute('read_sheet_cells', { doc_id: 'wb-1', range: 'A1' }, {
+        tenantId: TENANT,
+        connectionId: 'conn-cold-sheet-read',
+        token: 'bad',
+      }),
+    ).rejects.toMatchObject({ code: 'auth_expired', retryable: false });
+  });
+
+  it('write_sheet_cells writes values and reports updated_cells from the submitted shape', async () => {
+    const output = (await connector.execute(
+      'write_sheet_cells',
+      {
+        doc_id: 'wb-w1',
+        sheet_name: 'Sheet1',
+        range: 'A1:B2',
+        values: [
+          ['x', 1],
+          ['y', true],
+        ],
+      },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { doc_id: string; range: string; updated_cells: number };
+    // DingTalk returns only the a1Notation — no cell count — so
+    // updated_cells = rows × columns of the submitted values (recorded
+    // finding).
+    expect(output).toEqual({ doc_id: 'wb-w1', range: 'A1:B2', updated_cells: 4 });
+
+    // The write is visible through the read path, types preserved.
+    const read = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-w1', sheet_name: 'Sheet1', range: 'A1:B2' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    expect(read.data).toEqual([
+      ['x', 1],
+      ['y', true],
+    ]);
+  });
+
+  it('write_sheet_cells counts a non-square values matrix as rows × columns', async () => {
+    const output = (await connector.execute(
+      'write_sheet_cells',
+      {
+        doc_id: 'wb-w1',
+        sheet_name: 'Sheet1',
+        range: 'A1:C2',
+        values: [
+          ['a', 'b', 'c'],
+          ['d', 'e', 'f'],
+        ],
+      },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { updated_cells: number };
+    expect(output.updated_cells).toBe(6);
+  });
+
+  it('write_sheet_cells defaults to the first worksheet when sheet_name is omitted', async () => {
+    const output = (await connector.execute(
+      'write_sheet_cells',
+      { doc_id: 'wb-w2', range: 'A1:B1', values: [['written', 42]] },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { doc_id: string; updated_cells: number };
+    expect(output).toMatchObject({ doc_id: 'wb-w2', updated_cells: 2 });
+
+    // The first tab changed; the second tab is untouched.
+    const first = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-w2', sheet_name: 'First', range: 'A1:B1' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    expect(first.data).toEqual([['written', 42]]);
+    const second = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-w2', sheet_name: 'Second', range: 'A1' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    expect(second.data).toEqual([['untouched']]);
+  });
+
+  it('write_sheet_cells maps a range/shape mismatch to upstream_error', async () => {
+    await expect(
+      connector.execute(
+        'write_sheet_cells',
+        { doc_id: 'wb-w1', sheet_name: 'Sheet1', range: 'A1:B2', values: [[1]] },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'upstream_error', retryable: false });
+  });
+
+  it('write_sheet_cells maps a missing workbook to not_found with the upstream code', async () => {
+    await expect(
+      connector.execute('write_sheet_cells', { doc_id: 'no-such-wb', range: 'A1', values: [[1]] }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      retryable: false,
+      upstream: { code: 'invalidRequest.resource.notFound' },
+    });
+  });
+
+  it('write_sheet_cells maps a denied operator to upstream_error with the upstream code', async () => {
+    mock.failNext({ code: 'forbidden.accessDenied', message: 'The operator has no permission.', httpStatus: 403 });
+    await expect(
+      connector.execute('write_sheet_cells', { doc_id: 'wb-w1', range: 'A1', values: [[1]] }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'forbidden.accessDenied' },
+    });
+  });
+
+  it('write_sheet_cells maps a rate limit to rate_limited (retryable)', async () => {
+    mock.failNext({ code: 'TooManyRequests', message: 'slow down', httpStatus: 429 });
+    await expect(
+      connector.execute('write_sheet_cells', { doc_id: 'wb-w1', range: 'A1', values: [[1]] }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({ code: 'rate_limited', retryable: true });
+  });
+
+  it('write_sheet_cells maps a rejected token to auth_expired (cold connection)', async () => {
+    await expect(
+      connector.execute('write_sheet_cells', { doc_id: 'wb-w1', range: 'A1', values: [[1]] }, {
+        tenantId: TENANT,
+        connectionId: 'conn-cold-sheet-write',
+        token: 'bad',
+      }),
+    ).rejects.toMatchObject({ code: 'auth_expired', retryable: false });
+  });
+});
+
+/**
  * Seam A slice (T17a AC-3): the DingTalk connection runs through the
  * execution boundary with the same governance as Feishu — allowlist,
  * audit, token placement — without any change to the boundary.
@@ -758,13 +1144,197 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
       'search_docs',
       'create_doc',
       'get_doc_metadata',
+      'read_sheet_cells',
+      'write_sheet_cells',
       'export_doc',
     ]);
     const adapter = new McpAdapter(executor, allowlists);
     const tools = await adapter.listTools(TENANT, DINGTALK_CONN);
     const names = tools.map((tool) => tool.name).sort();
-    expect(names).toEqual(['create_doc', 'get_doc_metadata', 'search_docs']);
+    // T18a: the two sheet Actions now join implements ∩ allowlist.
+    expect(names).toEqual([
+      'create_doc',
+      'get_doc_metadata',
+      'read_sheet_cells',
+      'search_docs',
+      'write_sheet_cells',
+    ]);
     expect(names).not.toContain('export_doc'); // hidden even when allowed
     expect(names).not.toContain('get_doc_content'); // allowed ∩ implemented only
+  });
+});
+
+/**
+ * T18a Seam A: the two sheet Actions run through the execution boundary
+ * with the same governance as every other action — allowlist, audit,
+ * Defender output scan, manifest rate limit — with zero Execution
+ * Boundary changes.
+ */
+describe('DingTalk sheet actions through Seam A (T18a)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockDingTalkServer;
+  let accessToken: string;
+  let appToken: string;
+
+  beforeAll(async () => {
+    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createDingTalkOAuthClient({ apiBaseUrl: baseUrl, authorizeBaseUrl: baseUrl });
+    const code = await mock.authorizeCode(REDIRECT_URI, 's');
+    accessToken = (await oauth.exchangeCode({ creds: { appKey: APP_KEY, appSecret: APP_SECRET }, code }))
+      .accessToken;
+    appToken = (await oauth.appAccessToken({ creds: { appKey: APP_KEY, appSecret: APP_SECRET } }))
+      .accessToken;
+
+    mock.seedWorkbooks([
+      {
+        workbookId: 'wb-sa',
+        name: 'Governed Sheet',
+        ownerUnionId: 'user-9',
+        sheets: [{ id: 'sht-sa', name: 'Data', values: [['clean', 1]] }],
+      },
+      {
+        // T18a Defender test: the write output echoes doc_id (never the
+        // submitted values — DingTalk returns only a1Notation), so a
+        // workbook id carrying a signature word lands in the scanned
+        // output; 'jailbreak' matches the defender's jailbreak-mode
+        // signature with the hyphens around it.
+        workbookId: 'wb-jailbreak',
+        name: 'Poisoned Id',
+        ownerUnionId: 'user-9',
+        sheets: [{ id: 'sht-poison', name: 'Data', values: [['x']] }],
+      },
+    ]);
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  function makeExecutor(opts: {
+    allowed: string[];
+    rateLimiter?: RateLimiter;
+    defenderPolicy?: InMemoryDefenderPolicyStore;
+  }) {
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT, CONNECTION, opts.allowed);
+    const audit = new InMemoryAuditSink();
+    const executor = createActionExecutor({
+      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      connectors: [new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) })],
+      connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'dingtalk_docs' }],
+      allowlists,
+      audit,
+      tokenProvider: { getValidAccessToken: () => Promise.resolve(accessToken) },
+      ...(opts.rateLimiter !== undefined ? { rateLimiter: opts.rateLimiter } : {}),
+      ...(opts.defenderPolicy !== undefined ? { defenderPolicy: opts.defenderPolicy } : {}),
+    });
+    return { executor, audit };
+  }
+
+  it('executes read_sheet_cells when allowed, with audit', async () => {
+    const { executor, audit } = makeExecutor({ allowed: ['read_sheet_cells'] });
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'read_sheet_cells',
+      { doc_id: 'wb-sa', sheet_name: 'Data', range: 'A1:B1' },
+      'rpc',
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output).toMatchObject({ doc_id: 'wb-sa', data: [['clean', 1]], next: null });
+    }
+    expect(audit.list()).toHaveLength(1);
+    expect(audit.list()[0]).toMatchObject({
+      connectionId: CONNECTION,
+      actionName: 'read_sheet_cells',
+      source: 'rpc',
+      success: true,
+      errorCode: null,
+    });
+  });
+
+  it('executes write_sheet_cells when allowed, with audit', async () => {
+    const { executor, audit } = makeExecutor({ allowed: ['write_sheet_cells'] });
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'write_sheet_cells',
+      { doc_id: 'wb-sa', sheet_name: 'Data', range: 'A1', values: [[7]] },
+      'cli',
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output).toMatchObject({ doc_id: 'wb-sa', updated_cells: 1 });
+    }
+    expect(audit.list()).toHaveLength(1);
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'write_sheet_cells',
+      source: 'cli',
+      success: true,
+      errorCode: null,
+    });
+  });
+
+  it('rejects the sheet actions when the allowlist does not include them (fail-closed)', async () => {
+    const { executor } = makeExecutor({ allowed: [] });
+    for (const action of ['read_sheet_cells', 'write_sheet_cells']) {
+      const result = await executor.executeAction(TENANT, CONNECTION, action, { doc_id: 'wb-sa', range: 'A1' }, 'cli');
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('forbidden');
+      }
+    }
+  });
+
+  it('throttles the new sheet Actions to the manifest-declared rate limit (120/min, shared budget)', async () => {
+    const now = 1_700_000_000_000;
+    const rateLimiter = new RateLimiter({ now: () => now });
+    const { executor } = makeExecutor({ allowed: ['read_sheet_cells', 'write_sheet_cells'], rateLimiter });
+
+    // 60 reads + 60 writes = the full 120/min budget, proving both new
+    // Actions draw on the same per-(tenant, connection) budget as the
+    // docs family.
+    for (let i = 0; i < 60; i++) {
+      const read = await executor.executeAction(TENANT, CONNECTION, 'read_sheet_cells', { doc_id: 'wb-sa', range: 'A1' }, 'cli');
+      expect(read.ok, `read call ${i + 1} should pass`).toBe(true);
+      const write = await executor.executeAction(TENANT, CONNECTION, 'write_sheet_cells', { doc_id: 'wb-sa', range: 'A1', values: [[1]] }, 'cli');
+      expect(write.ok, `write call ${i + 1} should pass`).toBe(true);
+    }
+    const denied = await executor.executeAction(TENANT, CONNECTION, 'read_sheet_cells', { doc_id: 'wb-sa', range: 'A1' }, 'cli');
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) {
+      expect(denied.error.code).toBe('rate_limited');
+      expect(denied.error.retryable).toBe(true);
+      expect(denied.error.retryAfterSeconds).toBeGreaterThan(0);
+    }
+  });
+
+  it('scans write_sheet_cells output with the Defender tripwire (write output scanned)', async () => {
+    // The write output echoes doc_id and range but never the submitted
+    // values (DingTalk returns only a1Notation), so the tripwire proof
+    // seeds a workbook whose id carries a signature word — the write
+    // output then contains it and the boundary blocks delivery, mirroring
+    // the T17c append test's write-output scan.
+    const defender = new InMemoryDefenderPolicyStore();
+    defender.setPolicy(TENANT, { enabled: true, blockHighRisk: true });
+    const { executor } = makeExecutor({ allowed: ['write_sheet_cells'], defenderPolicy: defender });
+
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'write_sheet_cells',
+      { doc_id: 'wb-jailbreak', range: 'A1', values: [[1]] },
+      'cli',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('forbidden');
+      expect(result.error.details).toMatchObject({ reason: 'defender_block' });
+    }
   });
 });

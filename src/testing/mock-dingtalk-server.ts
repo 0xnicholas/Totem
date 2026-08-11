@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
+import type { CellValue } from '../actions.js';
 import { isRecord } from '../admin/util.js';
+import { parseRange, sliceValues, writeValues } from './range.js';
 
 /** DingTalk v1.0 API error shape: HTTP status + `{code, message}`. */
 interface DingTalkErrorBody {
@@ -54,6 +56,26 @@ export interface MockDingTalkFolder {
   spaceId: string;
 }
 
+/** A seeded worksheet in a mock workbook (T18a). */
+export interface MockDingTalkSheet {
+  /** The sheet id (the `id` the sheets-list returns). */
+  id: string;
+  /** The display name — the range APIs accept the NAME in the sheetId slot. */
+  name: string;
+  /** The cell matrix, row-major, native JSON value types (live shape). */
+  values: CellValue[][];
+}
+
+/** A seeded workbook in the mock's DingTalk knowledge base (T18a). */
+export interface MockDingTalkWorkbook {
+  /** The workbook identity: the dentryUuid (node id) — the platform's opaque doc_id. */
+  workbookId: string;
+  name: string;
+  ownerUnionId: string;
+  /** The worksheets in display order — the first one is the default target. */
+  sheets: MockDingTalkSheet[];
+}
+
 /**
  * Seam B (T17a): an in-memory mock of the DingTalk Open Platform surface
  * used by the connection tests — the OAuth 2.0 authorize redirect, the
@@ -83,6 +105,19 @@ export interface MockDingTalkFolder {
  * - `POST /v1.0/doc/suites/documents/{id}/content` → `{success, result}`
  *   (markdown insert, no path/index = append at the end).
  *
+ * Workbook surface (T18a, official-docs shapes — same app-token +
+ * operatorId auth model):
+ * - `GET /v1.0/doc/workbooks/{workbookId}/sheets` → `{value: [{id, name}]}`
+ *   (worksheet list in display order; the connector resolves the first
+ *   worksheet through this when sheet_name is omitted);
+ * - `GET /v1.0/doc/workbooks/{workbookId}/sheets/{sheetId}/ranges/
+ *   {rangeAddress}?select=values&operatorId=` → `{values: any[][]}` — the
+ *   sheetId slot accepts the sheet ID **or** the sheet NAME directly (the
+ *   connector therefore passes an explicit sheet_name through unchanged);
+ * - `PUT .../ranges/{rangeAddress}?operatorId=` body `{values}` →
+ *   `{a1Notation}` — DingTalk returns NO cell count, so the connector
+ *   computes updated_cells from the submitted values (recorded finding).
+ *
  * The live pass corrected several mock-modeled shapes (search `dentries`
  * → `items`, v1.0 doc-family GET endpoints do not exist, the app-token
  * auth model); this file tracks the confirmed shapes.
@@ -110,6 +145,7 @@ export class MockDingTalkServer {
   private omitRefreshTokenArmed = false;
   private readonly docs: MockDingTalkDoc[] = [];
   private readonly folders: MockDingTalkFolder[] = [];
+  private readonly workbooks: MockDingTalkWorkbook[] = [];
   private readonly exportJobs = new Map<string, { status: string }>();
 
   constructor(private readonly options: MockDingTalkServerOptions) {
@@ -515,6 +551,107 @@ export class MockDingTalkServer {
       return c.json({ jobId, status: 'init' });
     });
 
+    // GET /v1.0/doc/workbooks/{workbookId}/sheets — the worksheet list
+    // (T18a, official-docs shape): {value: [{id, name}]}, display order.
+    this.app.get('/v1.0/doc/workbooks/:workbookId/sheets', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const workbook = this.findWorkbook(c.req.param('workbookId'));
+      if (!workbook) {
+        return c.json({ code: 'invalidRequest.resource.notFound', message: 'workbook not found' }, 404);
+      }
+      return c.json({ value: workbook.sheets.map((sheet) => ({ id: sheet.id, name: sheet.name })) });
+    });
+
+    // GET /v1.0/doc/workbooks/{workbookId}/sheets/{sheetId}/ranges/
+    // {rangeAddress} — the range read (T18a, official-docs shape):
+    // ?select=values&operatorId= → {values: any[][]}. The sheetId slot
+    // accepts the sheet ID or NAME (the mock resolves both).
+    this.app.get('/v1.0/doc/workbooks/:workbookId/sheets/:sheetId/ranges/:rangeAddress', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const workbook = this.findWorkbook(c.req.param('workbookId'));
+      if (!workbook) {
+        return c.json({ code: 'invalidRequest.resource.notFound', message: 'workbook not found' }, 404);
+      }
+      const sheet = this.findSheet(workbook, c.req.param('sheetId'));
+      if (!sheet) {
+        return c.json({ code: 'invalidRequest.resource.notFound', message: 'sheet not found' }, 404);
+      }
+      const ref = parseRange(c.req.param('rangeAddress'));
+      if (!ref) {
+        return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'invalid range address' }, 400);
+      }
+      // select filters the returned fields; the connector always sends
+      // select=values, and the mock only stores values — any other select
+      // is rejected as an unsupported field set.
+      const select = c.req.query('select');
+      if (select !== undefined && select !== 'values') {
+        return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'unsupported select fields' }, 400);
+      }
+      // Out-of-bounds cells read as null (modeled on the Feishu mock;
+      // live-shape assumption — the docs only promise the values matrix).
+      return c.json({ values: sliceValues(sheet.values, ref) });
+    });
+
+    // PUT /v1.0/doc/workbooks/{workbookId}/sheets/{sheetId}/ranges/
+    // {rangeAddress} — the range write (T18a, official-docs shape): body
+    // {values} → {a1Notation} (NO cell count — the connector computes
+    // updated_cells from the submitted values, recorded finding).
+    this.app.put('/v1.0/doc/workbooks/:workbookId/sheets/:sheetId/ranges/:rangeAddress', async (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAppAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'MissingoperatorId', message: 'operatorId is mandatory for this action.' }, 400);
+      }
+      const workbook = this.findWorkbook(c.req.param('workbookId'));
+      if (!workbook) {
+        return c.json({ code: 'invalidRequest.resource.notFound', message: 'workbook not found' }, 404);
+      }
+      const sheet = this.findSheet(workbook, c.req.param('sheetId'));
+      if (!sheet) {
+        return c.json({ code: 'invalidRequest.resource.notFound', message: 'sheet not found' }, 404);
+      }
+      const ref = parseRange(c.req.param('rangeAddress'));
+      if (!ref) {
+        return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'invalid range address' }, 400);
+      }
+      const body = await readJson(c);
+      if (!isRecord(body) || !Array.isArray(body.values)) {
+        return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'missing values' }, 400);
+      }
+      const values = body.values as CellValue[][];
+      // Documented contract: the values matrix must match the range's
+      // shape (the docs: the matrix has one element per range row and one
+      // value per range column). A mismatch is modeled as the documented
+      // generic invalid-args error.
+      const height = ref.rowEnd - ref.rowStart + 1;
+      const width = ref.colEnd - ref.colStart + 1;
+      if (values.length !== height || values.some((row) => row.length !== width)) {
+        return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'values shape does not match the range' }, 400);
+      }
+      writeValues(sheet.values, ref, values);
+      return c.json({ a1Notation: c.req.param('rangeAddress') });
+    });
+
     // GET /v2.0/doc/me/export/task/query — poll an export task; the mock
     // completes instantly on first poll.
     this.app.get('/v2.0/doc/me/export/task/query', (c) => {
@@ -716,6 +853,29 @@ export class MockDingTalkServer {
   /** Seeds folders (T17c live pass): targets for create-in-folder + move. */
   seedFolders(folders: MockDingTalkFolder[]): void {
     this.folders.push(...folders);
+  }
+
+  /** Seeds workbooks (T18a): the sheet surface's knowledge base. */
+  seedWorkbooks(workbooks: MockDingTalkWorkbook[]): void {
+    this.workbooks.push(...workbooks);
+  }
+
+  /** Finds a seeded workbook by its dentryUuid (the opaque doc_id). */
+  private findWorkbook(workbookId: string): MockDingTalkWorkbook | undefined {
+    return this.workbooks.find((candidate) => candidate.workbookId === workbookId);
+  }
+
+  /**
+   * Resolves the sheetId path slot: DingTalk accepts the sheet ID **or**
+   * the NAME here (official-docs shape), so both match.
+   */
+  private findSheet(
+    workbook: MockDingTalkWorkbook,
+    sheetId: string,
+  ): MockDingTalkSheet | undefined {
+    return workbook.sheets.find(
+      (candidate) => candidate.id === sheetId || candidate.name === sheetId,
+    );
   }
 
   /** A fresh USER token pair, issued against the configured TTLs. */

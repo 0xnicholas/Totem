@@ -2,6 +2,7 @@ import type { ActionContext, ActionHandler } from '../action.js';
 import type {
   AppendDocContentInput,
   AppendDocContentOutput,
+  CellValue,
   CreateDocInput,
   CreateDocOutput,
   ExportDocInput,
@@ -12,11 +13,15 @@ import type {
   GetDocMetadataOutput,
   MoveDocInput,
   MoveDocOutput,
+  ReadSheetCellsInput,
+  ReadSheetCellsOutput,
   RenameDocInput,
   RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
   TestConnectionOutput,
+  WriteSheetCellsInput,
+  WriteSheetCellsOutput,
 } from '../actions.js';
 import type { IConnector } from '../connector.js';
 import { ActionError, errorMessage } from '../errors.js';
@@ -82,6 +87,21 @@ export function mapDingtalkError(err: DingTalkApiError): ActionError {
  * - rename/move: `POST /v2.0/doc/spaces/{spaceId}/dentries/{dentryUuid}
  *   /rename|move` (move's `toParentDentryId` takes the dentryUuid).
  *
+ * Workbook surface (T18a, official-docs shapes — same app-token +
+ * operatorId auth model; workbookId = the dentryUuid node id):
+ * - sheet resolution: `GET /v1.0/doc/workbooks/{workbookId}/sheets` →
+ *   `{value: [{id, name}]}` (worksheet display order — the first entry
+ *   is the default target when sheet_name is omitted; live-pass item);
+ * - range read: `GET /v1.0/doc/workbooks/{workbookId}/sheets/{sheetId}
+ *   /ranges/{rangeAddress}?select=values&operatorId=` → `{values:
+ *   any[][]}` — the sheetId slot accepts the sheet ID **or** the NAME
+ *   directly, so an explicit sheet_name passes through without
+ *   resolution (live-confirmed path shape);
+ * - range write: `PUT .../ranges/{rangeAddress}?operatorId=` body
+ *   `{values}` → `{a1Notation}` — DingTalk returns NO cell count, so
+ *   updated_cells is computed as rows × columns of the submitted values
+ *   (recorded finding).
+ *
  * export_doc stays OUT of the manifest (T17c AC-2 decision, confirmed by
  * the live pass): the async task endpoints 404 for this app
  * (`InvalidAction.NotFound`) and the required `Document.Document.Read`
@@ -101,6 +121,8 @@ export class DingTalkConnector implements IConnector {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'read_sheet_cells',
+      'write_sheet_cells',
     ],
     // Conservative comfort level (120/min = 2 QPS average) until the live
     // pass measures DingTalk's real per-API limits; the boundary throttles
@@ -403,6 +425,56 @@ export class DingTalkConnector implements IConnector {
         };
         return output;
       },
+
+      read_sheet_cells: async (args: ReadSheetCellsInput, ctx) => {
+        const input = args;
+        // Explicit sheet_name passes straight into the sheetId path slot
+        // (DingTalk accepts the sheet NAME there — no id resolution); an
+        // omitted sheet_name resolves the first worksheet.
+        const sheetId = await this.resolveSheetId(input.doc_id, input.sheet_name, ctx);
+        const response = await this.docRequest<WorkbookRangeReadResponse>(
+          `/v1.0/doc/workbooks/${encodeURIComponent(input.doc_id)}` +
+            `/sheets/${encodeURIComponent(sheetId)}/ranges/${encodeURIComponent(input.range)}`,
+          // select=values limits the response to the cell values (the
+          // docs recommend it for performance); the platform contract
+          // preserves the native JSON cell types.
+          { query: { select: 'values' } },
+          ctx,
+        );
+        const output: ReadSheetCellsOutput = {
+          doc_id: input.doc_id,
+          range: input.range,
+          data: response.values,
+          // Cursor semantics are v2 (ADR-0012).
+          next: null,
+        };
+        return output;
+      },
+
+      write_sheet_cells: async (args: WriteSheetCellsInput, ctx) => {
+        const input = args;
+        const sheetId = await this.resolveSheetId(input.doc_id, input.sheet_name, ctx);
+        await this.docRequest<WorkbookRangeWriteResponse>(
+          `/v1.0/doc/workbooks/${encodeURIComponent(input.doc_id)}` +
+            `/sheets/${encodeURIComponent(sheetId)}/ranges/${encodeURIComponent(input.range)}`,
+          {
+            method: 'PUT',
+            body: () => ({ values: input.values }),
+          },
+          ctx,
+        );
+        const output: WriteSheetCellsOutput = {
+          doc_id: input.doc_id,
+          range: input.range,
+          // Recorded finding (T18a): DingTalk's range write returns only
+          // the a1Notation — no cell count — so updated_cells is computed
+          // as rows × columns of the submitted values (the documented
+          // contract requires the matrix to match the range's shape, so
+          // this equals the range's cell count on success).
+          updated_cells: input.values.reduce((sum, row) => sum + row.length, 0),
+        };
+        return output;
+      },
     };
   }
 
@@ -434,7 +506,7 @@ export class DingTalkConnector implements IConnector {
   private async docRequest<T>(
     path: string,
     opts: {
-      method?: 'GET' | 'POST';
+      method?: 'GET' | 'POST' | 'PUT';
       body?: (operatorId: string) => unknown;
       query?: Record<string, string>;
     },
@@ -473,6 +545,33 @@ export class DingTalkConnector implements IConnector {
       );
     }
     return this.getAppAccessToken(tenantId);
+  }
+
+  /**
+   * Resolves the sheet slot for the workbook range APIs. An explicit
+   * sheet_name is passed through UNCHANGED: DingTalk's sheetId path slot
+   * accepts the sheet NAME directly (live-confirmed path shape — no id
+   * resolution). When omitted, the first worksheet is resolved via the
+   * sheets list ({value: [{id, name}]}, display order).
+   */
+  private async resolveSheetId(
+    workbookId: string,
+    sheetName: string | undefined,
+    ctx: ActionContext,
+  ): Promise<string> {
+    if (sheetName !== undefined) {
+      return sheetName;
+    }
+    const response = await this.docRequest<WorkbookSheetsResponse>(
+      `/v1.0/doc/workbooks/${encodeURIComponent(workbookId)}/sheets`,
+      {},
+      ctx,
+    );
+    const first = response.value[0];
+    if (!first) {
+      throw new ActionError('upstream_error', `Workbook "${workbookId}" has no sheets`);
+    }
+    return first.id;
   }
 
   /** Resolves a node's wiki info (its spaceId) by dentryUuid. */
@@ -616,6 +715,21 @@ interface ExportTaskState {
   downloadUrl?: string;
 }
 
+/** The worksheet-list response (T18a, official-docs shape). */
+interface WorkbookSheetsResponse {
+  value: Array<{ id: string; name: string }>;
+}
+
+/** The range-read response with select=values (T18a, official-docs shape). */
+interface WorkbookRangeReadResponse {
+  values: CellValue[][];
+}
+
+/** The range-write response (T18a, official-docs shape): a1Notation only. */
+interface WorkbookRangeWriteResponse {
+  a1Notation: string;
+}
+
 /**
  * Renders the block list as markdown-ish plain text — the platform
  * contract ("plain text with markdown-style headings preserved").
@@ -656,7 +770,12 @@ function stripAdocExtension(name: string): string {
 async function dingtalkRequest<T>(
   baseUrl: string,
   path: string,
-  opts: { method?: 'GET' | 'POST'; token?: string; query?: Record<string, string>; body?: unknown },
+  opts: {
+    method?: 'GET' | 'POST' | 'PUT';
+    token?: string;
+    query?: Record<string, string>;
+    body?: unknown;
+  },
 ): Promise<T> {
   const url = new URL(`${baseUrl}${path}`);
   for (const [key, value] of Object.entries(opts.query ?? {})) {
