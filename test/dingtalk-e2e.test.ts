@@ -42,6 +42,15 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     await pool.query('TRUNCATE tenants CASCADE');
 
     mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    mock.seedDocs([
+      {
+        docKey: 'e2e-doc-1',
+        name: 'E2E Strategy',
+        content: '# Strategy\n\nE2E content.',
+        ownerUnionId: 'mock-union-id',
+        updatedTime: Date.parse('2026-03-01T10:00:00Z'),
+      },
+    ]);
     dingtalk = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => dingtalk.once('listening', resolve));
     dingtalkBaseUrl = `http://127.0.0.1:${(dingtalk.address() as AddressInfo).port}`;
@@ -160,5 +169,47 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
       success: true,
       errorCode: null,
     });
+  });
+
+  it('executes a read action through the RPC surface with List Envelope + audit (T17b)', async () => {
+    const { connections } = await client.listConnections(tenantId);
+    const connection = connections[0]!;
+    await client.setAllowlist(connection.id, ['search_docs', 'get_doc_content']);
+
+    const key = await client.createKey(tenantId, 'actions');
+    const search = await fetch(`${apiBaseUrl}/actions/rpc`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key.key}`,
+        'x-connection-id': connection.id,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'search_docs', args: { query: 'strategy' } }),
+    });
+    expect(search.status).toBe(200);
+    const searchPayload = (await search.json()) as {
+      data: Array<{ doc_id: string; title: string; doc_type: string }>;
+      next: string | null;
+    };
+    expect(searchPayload).toEqual({
+      data: [{ doc_id: 'e2e-doc-1', title: 'E2E Strategy', doc_type: 'docx' }],
+      next: null,
+    });
+
+    const content = await fetch(`${apiBaseUrl}/actions/rpc`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key.key}`,
+        'x-connection-id': connection.id,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'get_doc_content', args: { doc_id: 'e2e-doc-1' } }),
+    });
+    expect(content.status).toBe(200);
+    expect(await content.json()).toEqual({ doc_id: 'e2e-doc-1', content: '# Strategy\n\nE2E content.' });
+
+    const audit = await client.queryAudit(tenantId, { action: 'search_docs' });
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
   });
 });

@@ -27,6 +27,22 @@ export interface MockDingTalkServerOptions {
   refreshTokenTtlMs?: number;
 }
 
+/** A seeded online document in the mock's DingTalk knowledge base (T17b). */
+export interface MockDingTalkDoc {
+  /** The document identity (the platform's opaque doc_id). */
+  docKey: string;
+  name: string;
+  /** Markdown content — what the doc content API returns. */
+  content: string;
+  /** The owning user's unionId. */
+  ownerUnionId: string;
+  /** DingTalk's dentry content type; defaults to 'alidoc' (online doc). */
+  contentType?: string;
+  /** Epoch ms timestamps (DingTalk's Long shapes). */
+  createdTime?: number;
+  updatedTime?: number;
+}
+
 /**
  * Seam B (T17a): an in-memory mock of the DingTalk Open Platform surface
  * used by the connection tests — the OAuth 2.0 authorize redirect, the
@@ -40,6 +56,12 @@ export interface MockDingTalkServerOptions {
  * limits), plus the `x-acs-dingtalk-access-token` header on v1.0 APIs. It
  * supports the token-lifecycle scenarios the tests need: revoking refresh
  * tokens and scripting failures for the next call.
+ *
+ * T17b adds the doc read surface: `POST /v2.0/storage/dentries/search`
+ * (keyword search over seeded online docs, `operatorId` required), and the
+ * doc family `GET /v1.0/doc/suites/documents/{docKey}` (+ `/content`) —
+ * shapes modeled on the published API docs; the live pass (AC-7) corrects
+ * any drift.
  */
 export class MockDingTalkServer {
   readonly app: Hono;
@@ -55,6 +77,7 @@ export class MockDingTalkServer {
   private readonly issuedAccessTokens = new Map<string, { expiresAt: number }>();
   private scriptedFailure: ScriptedFailure | undefined;
   private omitRefreshTokenArmed = false;
+  private readonly docs: MockDingTalkDoc[] = [];
 
   constructor(private readonly options: MockDingTalkServerOptions) {
     this.accessTokenTtlMs = options.accessTokenTtlMs ?? 2 * 60 * 60 * 1000;
@@ -106,11 +129,8 @@ export class MockDingTalkServer {
 
       if (grantType === 'refresh_token') {
         this.refreshRequestCount++;
-        const scripted = this.scriptedFailure;
-        if (scripted) {
-          this.scriptedFailure = undefined;
-          return c.json({ code: scripted.code, message: scripted.message }, scripted.httpStatus ?? 400);
-        }
+        const scripted = this.scriptedResponse();
+        if (scripted) return scripted;
         const refreshToken = typeof body.refreshToken === 'string' ? body.refreshToken : undefined;
         const record = refreshToken ? this.refreshTokens.get(refreshToken) : undefined;
         if (!record?.active) {
@@ -124,11 +144,8 @@ export class MockDingTalkServer {
 
     // GET /v1.0/contact/users/me — the identity call test_connection uses.
     this.app.get('/v1.0/contact/users/me', (c) => {
-      const scripted = this.scriptedFailure;
-      if (scripted) {
-        this.scriptedFailure = undefined;
-        return c.json({ code: scripted.code, message: scripted.message }, scripted.httpStatus ?? 401);
-      }
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
       const token = c.req.header('x-acs-dingtalk-access-token');
       const record = token ? this.issuedAccessTokens.get(token) : undefined;
       if (!record) {
@@ -144,6 +161,118 @@ export class MockDingTalkServer {
         avatarUrl: 'https://mock.dingtalk.example/avatar.png',
       });
     });
+
+    // POST /v2.0/storage/dentries/search — keyword search over the seeded
+    // docs (v1 read scope: online docs only, category ALIDOC). Requires
+    // the operatorId of the acting user, mirroring the real API.
+    this.app.post('/v2.0/storage/dentries/search', async (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+      }
+      const body = await readJson(c);
+      if (!isRecord(body) || typeof body.keyword !== 'string') {
+        return c.json({ code: 'paramError', message: 'missing keyword' }, 400);
+      }
+      const keyword = body.keyword.toLowerCase();
+      const maxResults =
+        isRecord(body.option) && typeof body.option.maxResults === 'number'
+          ? body.option.maxResults
+          : 50;
+      const matches = this.docs
+        .filter((doc) => doc.name.toLowerCase().includes(keyword))
+        .slice(0, maxResults);
+      return c.json({
+        dentries: matches.map((doc) => this.dentryShape(doc)),
+        nextToken: '',
+      });
+    });
+
+    // GET /v1.0/doc/suites/documents/{docKey} — document info.
+    this.app.get('/v1.0/doc/suites/documents/:docKey', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+      }
+      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docKey'));
+      if (!doc) {
+        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
+      }
+      return c.json(this.dentryShape(doc));
+    });
+
+    // GET /v1.0/doc/suites/documents/{docKey}/content — markdown content.
+    this.app.get('/v1.0/doc/suites/documents/:docKey/content', (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const token = c.req.header('x-acs-dingtalk-access-token');
+      if (!this.isAuthorized(token)) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      if (!c.req.query('operatorId')) {
+        return c.json({ code: 'paramError', message: 'missing operatorId' }, 400);
+      }
+      const doc = this.docs.find((candidate) => candidate.docKey === c.req.param('docKey'));
+      if (!doc) {
+        return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
+      }
+      return c.json({ content: doc.content });
+    });
+  }
+
+  /** True when the presented token is one this mock issued and it is unexpired. */
+  private isAuthorized(token: string | undefined): boolean {
+    const record = token ? this.issuedAccessTokens.get(token) : undefined;
+    return record !== undefined && Date.now() <= record.expiresAt;
+  }
+
+  /** Consumes the scripted failure, if any, into a mock error response. */
+  private scriptedResponse(): Response | undefined {
+    const scripted = this.scriptedFailure;
+    if (!scripted) return undefined;
+    this.scriptedFailure = undefined;
+    return new Response(JSON.stringify({ code: scripted.code, message: scripted.message }), {
+      status: scripted.httpStatus ?? 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  /** The dentry response shape shared by search + doc info. */
+  private dentryShape(doc: MockDingTalkDoc): {
+    dentryId: string;
+    docKey: string;
+    name: string;
+    contentType: string;
+    url: string;
+    createdTime: number;
+    updatedTime: number;
+    creator: { unionId: string; name: string };
+  } {
+    return {
+      dentryId: `dentry-${doc.docKey}`,
+      docKey: doc.docKey,
+      name: doc.name,
+      contentType: doc.contentType ?? 'alidoc',
+      url: `https://alidocs.dingtalk.com/i/doc/${doc.docKey}`,
+      createdTime: doc.createdTime ?? 1_700_000_000_000,
+      updatedTime: doc.updatedTime ?? 1_700_000_000_000,
+      creator: { unionId: doc.ownerUnionId, name: 'Mock Owner' },
+    };
+  }
+
+  /** Seeds the mock's knowledge base with online documents (T17b). */
+  seedDocs(docs: MockDingTalkDoc[]): void {
+    this.docs.push(...docs);
   }
 
   /** A fresh token pair, issued against the configured TTLs. */
