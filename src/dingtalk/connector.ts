@@ -459,7 +459,16 @@ export class DingTalkConnector implements IConnector {
             `/sheets/${encodeURIComponent(sheetId)}/ranges/${encodeURIComponent(input.range)}`,
           {
             method: 'PUT',
-            body: () => ({ values: input.values }),
+            // Live finding (T18 live pass): the range write accepts STRING
+            // values only — numbers/booleans are rejected with
+            // `MissingString` and null with a shape error. The platform
+            // values are coerced to their string form; the read-back
+            // parses numeric/boolean strings back to native types.
+            body: () => ({
+              values: input.values.map((row) =>
+                row.map((cell) => (cell === null ? '' : String(cell))),
+              ),
+            }),
           },
           ctx,
         );

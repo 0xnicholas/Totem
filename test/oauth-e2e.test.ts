@@ -41,7 +41,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
 
   beforeAll(async () => {
     await migrateUp(dbUrl!);
-    await pool.query('TRUNCATE tenants CASCADE');
+    await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
 
     mock = new MockFeishuServer({
       appId: 'e2e_app_id',
@@ -73,7 +73,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     // Leave the database as found: truncate fixtures so repeated runs
     // against a dev DB never accumulate leftover tenants (issue #27).
     try {
-      await pool.query('TRUNCATE tenants CASCADE');
+      await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     } catch {
       // beforeAll may have failed (e.g. an unreachable database); never
       // mask the original error.

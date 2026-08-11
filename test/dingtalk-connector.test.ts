@@ -721,6 +721,38 @@ describe('DingTalkConnector sheet actions (T18a, Seam B)', () => {
     ]);
   });
 
+  it('write_sheet_cells coerces null cells to empty strings (live: null is rejected)', async () => {
+    // Live finding (T18 live pass): the range write accepts STRING values
+    // only — null fails with a shape error, numbers/booleans with
+    // MissingString. The connector coerces: null → '', others → String().
+    const output = (await connector.execute(
+      'write_sheet_cells',
+      {
+        doc_id: 'wb-w1',
+        sheet_name: 'Sheet1',
+        range: 'A1:B2',
+        values: [
+          ['kept', null],
+          [42, false],
+        ],
+      },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { updated_cells: number };
+    expect(output.updated_cells).toBe(4);
+
+    const read = (await connector.execute(
+      'read_sheet_cells',
+      { doc_id: 'wb-w1', sheet_name: 'Sheet1', range: 'A1:B2' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { data: unknown[][] };
+    // null round-trips as the empty string (the only lossless
+    // representation DingTalk's string-only cells allow).
+    expect(read.data).toEqual([
+      ['kept', ''],
+      [42, false],
+    ]);
+  });
+
   it('write_sheet_cells counts a non-square values matrix as rows × columns', async () => {
     const output = (await connector.execute(
       'write_sheet_cells',

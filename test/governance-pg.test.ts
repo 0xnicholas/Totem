@@ -24,14 +24,14 @@ describe.runIf(hasDb)('governance stores (Postgres)', () => {
 
   beforeAll(async () => {
     await migrateUp(dbUrl!);
-    await pool.query('TRUNCATE tenants CASCADE');
+    await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
   });
 
   afterAll(async () => {
     // Leave the database as found: truncate fixtures so repeated runs
     // against a dev DB never accumulate leftover tenants (issue #27).
     try {
-      await pool.query('TRUNCATE tenants CASCADE');
+      await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     } catch {
       // beforeAll may have failed (e.g. an unreachable database); never
       // mask the original error.

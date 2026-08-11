@@ -34,7 +34,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
 
   beforeAll(async () => {
     await migrateUp(dbUrl!);
-    await pool.query('TRUNCATE tenants CASCADE');
+    await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
 
     const tenant = (
       await pool.query('INSERT INTO tenants (name) VALUES ($1) RETURNING id', ['mcp-e2e'])
@@ -89,7 +89,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
     // Leave the database as found: truncate fixtures so repeated runs
     // against a dev DB never accumulate leftover tenants (issue #27).
     try {
-      await pool.query('TRUNCATE tenants CASCADE');
+      await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     } catch {
       // beforeAll may have failed (e.g. an unreachable database); never
       // mask the original error.

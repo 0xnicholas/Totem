@@ -150,7 +150,7 @@ describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postg
 
   beforeAll(async () => {
     await migrateUp(process.env.DATABASE_URL!);
-    await pool.query('TRUNCATE tenants CASCADE');
+    await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     const tenant = (
       await pool.query<{ id: string }>("INSERT INTO tenants (name) VALUES ('discovery-pg') RETURNING id")
     ).rows[0]!;
@@ -174,7 +174,7 @@ describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postg
     // Leave the database as found: truncate fixtures so repeated runs
     // against a dev DB never accumulate leftover tenants (issue #27).
     try {
-      await pool.query('TRUNCATE tenants CASCADE');
+      await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     } catch {
       // beforeAll may have failed (e.g. an unreachable database); never
       // mask the original error.

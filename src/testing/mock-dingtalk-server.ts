@@ -605,7 +605,11 @@ export class MockDingTalkServer {
       }
       // Out-of-bounds cells read as null (modeled on the Feishu mock;
       // live-shape assumption — the docs only promise the values matrix).
-      return c.json({ values: sliceValues(sheet.values, ref) });
+      // Live finding (T18 live pass): cells written as strings are parsed
+      // back to native types on read ('1' → 1, 'true' → true).
+      return c.json({
+        values: sliceValues(sheet.values, ref).map((row) => row.map(parseCellValue)),
+      });
     });
 
     // PUT /v1.0/doc/workbooks/{workbookId}/sheets/{sheetId}/ranges/
@@ -639,6 +643,13 @@ export class MockDingTalkServer {
         return c.json({ code: 'invalidRequest.inputArgs.invalid', message: 'missing values' }, 400);
       }
       const values = body.values as CellValue[][];
+      // Live finding (T18 live pass): the range write accepts STRING
+      // values only — a non-string cell is rejected (`MissingString` for
+      // numbers/booleans, a shape error for null). The connector coerces
+      // before sending; the mock enforces the same contract.
+      if (values.some((row) => row.some((cell) => typeof cell !== 'string'))) {
+        return c.json({ code: 'MissingString', message: 'String is mandatory for this action.' }, 400);
+      }
       // Documented contract: the values matrix must match the range's
       // shape (the docs: the matrix has one element per range row and one
       // value per range column). A mismatch is modeled as the documented
@@ -948,4 +959,17 @@ async function readJson(c: Context): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Live finding (T18 live pass): cells written as strings are parsed back
+ * to native JSON types on read ('1' → 1, 'true' → true); other strings
+ * and pre-seeded native values pass through unchanged.
+ */
+function parseCellValue(value: CellValue): CellValue {
+  if (typeof value !== 'string') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  return value;
 }

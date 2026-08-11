@@ -24,7 +24,7 @@ describe.runIf(hasDb)('admin API end to end', () => {
 
   beforeAll(async () => {
     await migrateUp(dbUrl!);
-    await pool.query('TRUNCATE tenants CASCADE');
+    await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     const app = createAdminApp({ repo: new PostgresAdminRepository(pool), adminKey: 'e2e-admin-key' });
     server = serve({ fetch: app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
@@ -37,7 +37,7 @@ describe.runIf(hasDb)('admin API end to end', () => {
     // Leave the database as found: truncate fixtures so repeated runs
     // against a dev DB never accumulate leftover tenants (issue #27).
     try {
-      await pool.query('TRUNCATE tenants CASCADE');
+      await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
     } catch {
       // beforeAll may have failed (e.g. an unreachable database); never
       // mask the original error.
