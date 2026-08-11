@@ -67,6 +67,12 @@ export interface FeishuCreds {
   appSecret: string;
 }
 
+/** A tenant's DingTalk app credentials as stored by the admin surface (T17a). */
+export interface DingTalkCreds {
+  appKey: string;
+  appSecret: string;
+}
+
 /**
  * A tenant's audit policy (T11): the tenants-row config the schema has
  * carried since T2 but nothing read or set. `captureBody` is the opt-in
@@ -139,6 +145,12 @@ export interface AdminRepository {
   /** @throws NotFoundError when the tenant does not exist. */
   setFeishuCreds(tenantId: string, creds: FeishuCreds): Promise<void>;
   /**
+   * Sets the tenant's DingTalk app credentials (T17a), encrypted at rest
+   * by the route's cipher. @throws NotFoundError when the tenant does not
+   * exist.
+   */
+  setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void>;
+  /**
    * Creates a connection for the OAuth flow (T6). `ownerId` is server-set
    * to the tenant id. @throws NotFoundError when the tenant does not exist.
    */
@@ -192,6 +204,7 @@ export const ADMIN_AUDIT_ACTIONS = {
   keyIssued: 'admin.key_issued',
   keyDisabled: 'admin.key_disabled',
   feishuCredsUpdated: 'admin.feishu_creds_updated',
+  dingtalkCredsUpdated: 'admin.dingtalk_creds_updated',
   allowlistUpdated: 'admin.allowlist_updated',
   connectionSuspended: 'admin.connection_suspended',
   connectionResumed: 'admin.connection_resumed',

@@ -10,6 +10,7 @@ import {
   type AuditSource,
   type ConnectionStatus,
   type ConnectionView,
+  type DingTalkCreds,
   type FeishuCreds,
   type Tenant,
   type TenantAuditPolicy,
@@ -193,6 +194,26 @@ export class PostgresAdminRepository implements AdminRepository {
         tenantId,
         actionName: ADMIN_AUDIT_ACTIONS.feishuCredsUpdated,
         params: { appId: creds.appId },
+        durationMs: 0,
+      });
+    });
+  }
+
+  async setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void> {
+    await this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      await client.query(
+        `INSERT INTO dingtalk_credentials (tenant_id, app_key, app_secret)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id) DO UPDATE
+           SET app_key = $2, app_secret = $3, updated_at = now()`,
+        [tenantId, creds.appKey, creds.appSecret],
+      );
+      // The secret stays out of the audit trail (param_hash covers appKey only).
+      await this.writeAudit(client, {
+        tenantId,
+        actionName: ADMIN_AUDIT_ACTIONS.dingtalkCredsUpdated,
+        params: { appKey: creds.appKey },
         durationMs: 0,
       });
     });

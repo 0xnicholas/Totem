@@ -112,6 +112,21 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     expect(stdout[0]).toContain('tenant-1');
   });
 
+  it('set-dingtalk-creds POSTs appKey and appSecret (T17a)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(['set-dingtalk-creds', 'tenant-1', 'cli_app_key', 's3cret'], io);
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/dingtalk-creds',
+      expect.objectContaining({
+        body: JSON.stringify({ appKey: 'cli_app_key', appSecret: 's3cret' }),
+      }),
+    );
+    expect(stdout[0]).toContain('tenant-1');
+  });
+
   it('set-allowlist PUTs the actions', async () => {
     const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
     const { io, stdout } = makeHarness(fetchMock);
@@ -237,6 +252,41 @@ describe('totemctl oauth + connections (T6)', () => {
     );
     expect(stdout[0]).toContain('https://open.feishu.cn/');
     expect(stdout[1]).toContain('Open the URL above');
+  });
+
+  it('oauth-start --connector dingtalk_docs requests the DingTalk flow (T17a)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() =>
+      okJson({ authorizationUrl: 'https://login.dingtalk.com/oauth2/auth?client_id=a' }),
+    );
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['oauth-start', 'tenant-1', 'https://totem.example.com/oauth/callback/dingtalk', '--connector', 'dingtalk_docs'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/oauth/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          redirectUri: 'https://totem.example.com/oauth/callback/dingtalk',
+          connectorId: 'dingtalk_docs',
+        }),
+      }),
+    );
+    expect(stdout[0]).toContain('https://login.dingtalk.com/');
+    expect(stdout[1]).toContain('DingTalk');
+  });
+
+  it('oauth-start rejects an unknown --connector value', async () => {
+    const { io, stderr } = makeHarness(vi.fn<FetchLike>());
+    const code = await run(
+      ['oauth-start', 'tenant-1', 'https://totem.example.com/oauth/callback/x', '--connector', 'nope'],
+      io,
+    );
+    expect(code).toBe(2);
+    expect(stderr[0]).toContain('--connector');
   });
 
   it('oauth-start without a redirect-uri is a usage error', async () => {

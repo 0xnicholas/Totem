@@ -159,10 +159,37 @@ describe('admin API (HTTP boundary)', () => {
     expect(repo.getFeishuCreds(tenant.id)).toEqual({ appId: 'cli_app_id', appSecret: 's3cret' });
   });
 
+  it('stores dingtalk app credentials for a tenant (T17a)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-dt');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'cli_app_key', appSecret: 's3cret' }),
+    });
+    expect(response.status).toBe(200);
+    expect(repo.getDingTalkCreds(tenant.id)).toEqual({ appKey: 'cli_app_key', appSecret: 's3cret' });
+  });
+
+  it('400s on dingtalk creds with a missing field (T17a)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-dt2');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'only-key' }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   it('404s on feishu creds for an unknown tenant', async () => {
     const response = await adminFetch('/admin/tenants/00000000-0000-0000-0000-000000000000/feishu-creds', {
       method: 'POST',
       body: JSON.stringify({ appId: 'a', appSecret: 'b' }),
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it('404s on dingtalk creds for an unknown tenant (T17a)', async () => {
+    const response = await adminFetch('/admin/tenants/00000000-0000-0000-0000-000000000000/dingtalk-creds', {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'a', appSecret: 'b' }),
     });
     expect(response.status).toBe(404);
   });
@@ -428,6 +455,34 @@ describe('admin API: OAuth flow and connections (T6)', () => {
     expect(response.status).toBe(400);
   });
 
+  it('rejects an unknown connectorId with 400 (T17a)', async () => {
+    flow.start.mockClear();
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({
+        redirectUri: 'https://totem.example.com/oauth/callback/x',
+        connectorId: 'no_such_connector',
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('unknown connector');
+    expect(flow.start).not.toHaveBeenCalled();
+  });
+
+  it('404s a known connector whose flow is not configured (T17a)', async () => {
+    flow.start.mockClear();
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({
+        redirectUri: 'https://totem.example.com/oauth/callback/dingtalk',
+        connectorId: 'dingtalk_docs',
+      }),
+    });
+    expect(response.status).toBe(404);
+    expect(flow.start).not.toHaveBeenCalled();
+  });
+
   it('surfaces FlowError statuses from the flow', async () => {
     flow.start.mockRejectedValueOnce(new FlowError(400, 'no credentials configured'));
     const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
@@ -474,6 +529,15 @@ describe('admin API: OAuth flow and connections (T6)', () => {
       body: JSON.stringify({ appId: 'app-1', appSecret: 'super-secret' }),
     });
     const stored = repo.getFeishuCreds(tenantId);
+    expect(stored?.appSecret).toBe(`v1:${tenantId}:super-secret`);
+  });
+
+  it('encrypts dingtalk app secrets via the injected cipher (T17a)', async () => {
+    await adminFetch(`/admin/tenants/${tenantId}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'app-1', appSecret: 'super-secret' }),
+    });
+    const stored = repo.getDingTalkCreds(tenantId);
     expect(stored?.appSecret).toBe(`v1:${tenantId}:super-secret`);
   });
 });

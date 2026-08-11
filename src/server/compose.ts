@@ -2,6 +2,11 @@ import { Hono } from 'hono';
 import pg from 'pg';
 import { createAdminApp } from '../admin/server.js';
 import { PostgresAdminRepository } from '../admin/pg-repo.js';
+import { DingTalkConnector } from '../dingtalk/connector.js';
+import { createDingTalkOAuthFlow } from '../dingtalk/flow.js';
+import { createDingTalkOAuthClient } from '../dingtalk/oauth.js';
+import { PostgresDingTalkCredsStore } from '../dingtalk/pg-creds-store.js';
+import { DingTalkTokenManager } from '../dingtalk/token-manager.js';
 import { FeishuConnector } from '../feishu/connector.js';
 import { encryptValue } from '../feishu/crypto.js';
 import { createOAuthFlow } from '../feishu/flow.js';
@@ -16,6 +21,7 @@ import { createRpcApp } from '../rest/rpc.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../pg-governance.js';
+import { TokenRoutingProvider } from '../token-routing.js';
 
 export interface ServerEnv {
   /** Master key for per-tenant secret encryption (TOTEM_TOKEN_ENC_KEY). */
@@ -26,6 +32,10 @@ export interface ServerEnv {
   production?: boolean;
   /** Feishu Open Platform base URL (FEISHU_BASE_URL); defaults to open.feishu.cn. */
   feishuBaseUrl?: string;
+  /** DingTalk API base URL (DINGTALK_API_BASE_URL); defaults to api.dingtalk.com. */
+  dingtalkApiBaseUrl?: string;
+  /** DingTalk authorize base URL (DINGTALK_AUTHORIZE_BASE_URL); defaults to login.dingtalk.com. */
+  dingtalkAuthorizeBaseUrl?: string;
   /** Public base URL of this deployment (TOTEM_URL); mirrored into the OpenAPI document. */
   serverUrl?: string;
 }
@@ -54,13 +64,42 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   });
   const flow = createOAuthFlow({ credsStore, tokenStore, oauth, connections: repo, masterKey });
 
-  // The real Feishu Docs connector (T7): read actions live; T8-T9 add the
-  // write/export/sheet/bitable actions to this same connector.
-  const connectors = [new FeishuConnector(feishuBaseUrl)];
+  // DingTalk (T17a): same wiring shape as Feishu — per-tenant app
+  // credentials (encrypted), its own OAuth client + token manager + flow —
+  // routed alongside Feishu by the composition root's token provider.
+  const dingtalkApiBaseUrl = env.dingtalkApiBaseUrl ?? 'https://api.dingtalk.com';
+  const dingtalkAuthorizeBaseUrl = env.dingtalkAuthorizeBaseUrl ?? 'https://login.dingtalk.com';
+  const dingtalkOauth = createDingTalkOAuthClient({
+    apiBaseUrl: dingtalkApiBaseUrl,
+    authorizeBaseUrl: dingtalkAuthorizeBaseUrl,
+  });
+  const dingtalkCredsStore = new PostgresDingTalkCredsStore(pool, masterKey);
+  const dingtalkTokenManager = new DingTalkTokenManager({
+    tokenStore,
+    credsStore: dingtalkCredsStore,
+    oauth: dingtalkOauth,
+    connectionState: new PostgresConnectionStateStore(pool),
+    masterKey,
+  });
+  const dingtalkFlow = createDingTalkOAuthFlow({
+    credsStore: dingtalkCredsStore,
+    tokenStore,
+    oauth: dingtalkOauth,
+    connections: repo,
+    masterKey,
+  });
+
+  // The real Feishu Docs connector (T7) plus the DingTalk connector (T17a,
+  // test_connection skeleton; doc actions in T17b/T17c). Both serve the
+  // same platform action set; the executor dispatches by connection.
+  const connectors = [new FeishuConnector(feishuBaseUrl), new DingTalkConnector(dingtalkApiBaseUrl)];
   const allowlists = new PostgresAllowlistStore(pool);
+  const connectionLookup = new PostgresConnectionStore(pool);
 
   // The executor resolves connections live from Postgres, so connections
-  // created by the OAuth flow (T6) are visible without a restart.
+  // created by the OAuth flow (T6) are visible without a restart. Token
+  // acquisition routes by connector id (T17a): one TokenProvider seam for
+  // the executor, per-connector managers behind it.
   const executor = createActionExecutor({
     actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
     connectors,
@@ -68,8 +107,11 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     allowlists,
     audit: new PostgresAuditSink(pool),
     auditPolicy: new PostgresAuditPolicyStore(pool),
-    tokenProvider: tokenManager,
-    connectionLookup: new PostgresConnectionStore(pool),
+    tokenProvider: new TokenRoutingProvider(connectionLookup, {
+      feishu_docs: tokenManager,
+      dingtalk_docs: dingtalkTokenManager,
+    }),
+    connectionLookup,
     defenderPolicy: new PostgresDefenderPolicyStore(pool),
   });
 
@@ -78,6 +120,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     adminKey: env.adminKey,
     production: env.production ?? false,
     oauth: flow,
+    dingtalkOauth: dingtalkFlow,
     secretCipher: {
       encrypt: (tenantId, secret) => encryptValue(tenantId, secret, masterKey),
     },

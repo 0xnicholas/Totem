@@ -8,6 +8,7 @@ import {
   type AuditFilters,
   type AuditRow,
   type ConnectionView,
+  type DingTalkCreds,
   type FeishuCreds,
   type Tenant,
   type TenantAuditPolicy,
@@ -39,6 +40,7 @@ export class InMemoryAdminRepository implements AdminRepository {
   private readonly tenants = new Map<string, Tenant>();
   private readonly apiKeys = new Map<string, ApiKeyRecord>();
   private readonly creds = new Map<string, FeishuCreds>();
+  private readonly dingtalkCreds = new Map<string, DingTalkCreds>();
   private readonly allowlists = new Map<string, Set<string>>();
   private readonly connections = new Map<string, MemoryConnection>();
   private readonly policies = new Map<string, TenantAuditPolicy>();
@@ -209,6 +211,21 @@ export class InMemoryAdminRepository implements AdminRepository {
 
   getFeishuCreds(tenantId: string): FeishuCreds | undefined {
     return this.creds.get(tenantId);
+  }
+
+  async setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void> {
+    this.requireTenant(tenantId);
+    this.dingtalkCreds.set(tenantId, creds);
+    // The secret stays out of the audit trail (param_hash covers appKey only).
+    this.writeAudit({
+      tenantId,
+      actionName: ADMIN_AUDIT_ACTIONS.dingtalkCredsUpdated,
+      params: { appKey: creds.appKey },
+    });
+  }
+
+  getDingTalkCreds(tenantId: string): DingTalkCreds | undefined {
+    return this.dingtalkCreds.get(tenantId);
   }
 
   async setAllowlist(connectionId: string, actions: string[]): Promise<void> {

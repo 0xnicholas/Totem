@@ -26,6 +26,12 @@ export interface AdminAppConfig {
    */
   oauth?: OAuthFlow;
   /**
+   * The DingTalk OAuth flow (T17a). When present, `oauth-start` accepts
+   * `connectorId: dingtalk_docs` and `/oauth/callback/dingtalk` is
+   * registered.
+   */
+  dingtalkOauth?: OAuthFlow;
+  /**
    * Encrypts tenant secrets before storage (issue #15). When absent,
    * secrets are stored as given (test/dev convenience only; the server
    * entry always wires the real cipher).
@@ -122,6 +128,29 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json({ ok: true });
   });
 
+  app.post('/admin/tenants/:tenantId/dingtalk-creds', async (c) => {
+    const body = await readJson(c);
+    if (
+      !isRecord(body) ||
+      typeof body.appKey !== 'string' ||
+      body.appKey === '' ||
+      typeof body.appSecret !== 'string' ||
+      body.appSecret === ''
+    ) {
+      return badRequest(c, 'body must include non-empty "appKey" and "appSecret"');
+    }
+    // Encrypt at rest with the per-tenant key when the cipher is wired
+    // (ADR-0004); the plaintext never reaches the repository.
+    const storedSecret = config.secretCipher
+      ? config.secretCipher.encrypt(c.req.param('tenantId'), body.appSecret)
+      : body.appSecret;
+    await repo.setDingTalkCreds(c.req.param('tenantId'), {
+      appKey: body.appKey,
+      appSecret: storedSecret,
+    });
+    return c.json({ ok: true });
+  });
+
   app.put('/admin/connections/:connectionId/allowlist', async (c) => {
     const body = await readJson(c);
     if (
@@ -205,7 +234,6 @@ export function createAdminApp(config: AdminAppConfig): Hono {
   });
 
   app.post('/admin/tenants/:tenantId/oauth/start', async (c) => {
-    if (!config.oauth) return notFound(c, 'route not found');
     const body = await readJson(c);
     const redirectUri =
       isRecord(body) && typeof body.redirectUri === 'string' && body.redirectUri !== ''
@@ -218,8 +246,22 @@ export function createAdminApp(config: AdminAppConfig): Hono {
       isRecord(body) && typeof body.connectionId === 'string' && body.connectionId !== ''
         ? body.connectionId
         : undefined;
+    // Connector-aware start (T17a): `connectorId` picks the flow; omitted
+    // means Feishu (the v1 default). Unknown ids are the caller's error;
+    // a known connector whose flow is not configured is a missing route.
+    const connectorId =
+      isRecord(body) && typeof body.connectorId === 'string' && body.connectorId !== ''
+        ? body.connectorId
+        : 'feishu_docs';
+    const flow = pickOAuthFlow(config, connectorId);
+    if (!flow) {
+      if (connectorId === 'feishu_docs' || connectorId === 'dingtalk_docs') {
+        return notFound(c, 'route not found');
+      }
+      return badRequest(c, `unknown connector "${connectorId}"`);
+    }
     try {
-      const { authorizationUrl } = await config.oauth.start(
+      const { authorizationUrl } = await flow.start(
         c.req.param('tenantId'),
         redirectUri,
         connectionId !== undefined ? { connectionId } : undefined,
@@ -236,26 +278,17 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json({ connections });
   });
 
-  // Public callback: Feishu redirects the user's browser here after
+  // Public callbacks: the system redirects the user's browser here after
   // authorization. State validation is the flow's job; no admin key is
   // involved (the browser cannot carry one).
   app.get('/oauth/callback/feishu', async (c) => {
     if (!config.oauth) return notFound(c, 'route not found');
-    const code = c.req.query('code') ?? '';
-    const state = c.req.query('state') ?? '';
-    if (code === '' || state === '') {
-      return badRequest(c, 'missing "code" or "state" query parameters');
-    }
-    try {
-      await config.oauth.handleCallback(code, state);
-    } catch (err) {
-      if (err instanceof FlowError) return c.json({ error: err.message }, flowStatus(err));
-      throw err;
-    }
-    return c.html(
-      '<html><body><h2>Authorization complete</h2>' +
-        '<p>You can close this window and return to the terminal.</p></body></html>',
-    );
+    return handleOAuthCallback(config.oauth, c);
+  });
+
+  app.get('/oauth/callback/dingtalk', async (c) => {
+    if (!config.dingtalkOauth) return notFound(c, 'route not found');
+    return handleOAuthCallback(config.dingtalkOauth, c);
   });
 
   app.notFound((c) => notFound(c, 'route not found'));
@@ -275,6 +308,32 @@ async function readJson(c: Context): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/** Resolves the OAuth flow for a connector id (T17a): dingtalk or the v1 feishu default; unknown ids resolve to nothing. */
+function pickOAuthFlow(config: AdminAppConfig, connectorId: string): OAuthFlow | undefined {
+  if (connectorId === 'dingtalk_docs') return config.dingtalkOauth;
+  if (connectorId === 'feishu_docs') return config.oauth;
+  return undefined;
+}
+
+/** Shared callback handling for the public OAuth redirect routes. */
+async function handleOAuthCallback(flow: OAuthFlow, c: Context): Promise<Response> {
+  const code = c.req.query('code') ?? '';
+  const state = c.req.query('state') ?? '';
+  if (code === '' || state === '') {
+    return badRequest(c, 'missing "code" or "state" query parameters');
+  }
+  try {
+    await flow.handleCallback(code, state);
+  } catch (err) {
+    if (err instanceof FlowError) return c.json({ error: err.message }, flowStatus(err));
+    throw err;
+  }
+  return c.html(
+    '<html><body><h2>Authorization complete</h2>' +
+      '<p>You can close this window and return to the terminal.</p></body></html>',
+  );
 }
 
 function isAuditSource(value: string): value is AuditSource {

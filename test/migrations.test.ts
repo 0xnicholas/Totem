@@ -40,7 +40,7 @@ describe.runIf(hasDb)('migrations', () => {
     await migrateUp(dbUrl!);
 
     const tables = await publicTables();
-    for (const table of ['tenants', 'connections', 'api_keys', 'allowlists', 'audit_logs', 'tokens', 'feishu_credentials', 'schema_migrations']) {
+    for (const table of ['tenants', 'connections', 'api_keys', 'allowlists', 'audit_logs', 'tokens', 'feishu_credentials', 'dingtalk_credentials', 'schema_migrations']) {
       expect(tables, `table ${table}`).toContain(table);
     }
 

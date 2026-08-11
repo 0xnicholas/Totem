@@ -65,6 +65,7 @@ export TOTEM_ADMIN_URL=http://localhost:3000
 npm run totemctl -- create-tenant acme
 npm run totemctl -- create-key <tenant-id> --scope admin   # prints the key once
 npm run totemctl -- set-feishu-creds <tenant-id> <app-id> <app-secret>
+npm run totemctl -- set-dingtalk-creds <tenant-id> <app-key> <app-secret>
 npm run totemctl -- set-allowlist <connection-id> create_doc read_doc
 npm run totemctl -- suspend-connection <connection-id>
 npm run totemctl -- query-audit <tenant-id> --action admin.tenant_created
@@ -75,7 +76,8 @@ npm run totemctl -- purge-audit <tenant-id>          # delete rows past retentio
 
 Admin API routes: `POST /admin/tenants`, `POST /admin/tenants/:id/keys`,
 `POST /admin/tenants/:id/keys/:keyId/disable`, `POST
-/admin/tenants/:id/feishu-creds`, `PUT /admin/connections/:id/allowlist`,
+/admin/tenants/:id/feishu-creds`, `POST
+/admin/tenants/:id/dingtalk-creds`, `PUT /admin/connections/:id/allowlist`,
 `POST /admin/connections/:id/suspend|resume`, `GET
 /admin/tenants/:id/audit` (filters: `user`, `action`, `since`, `source`,
 `success`), `GET|PUT /admin/tenants/:id/audit-policy` (retention days,

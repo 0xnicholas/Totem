@@ -69,6 +69,13 @@ export class AdminApiClient {
     });
   }
 
+  setDingTalkCreds(tenantId: string, appKey: string, appSecret: string): Promise<{ ok: true }> {
+    return this.request('POST', `/admin/tenants/${encodeURIComponent(tenantId)}/dingtalk-creds`, {
+      appKey,
+      appSecret,
+    });
+  }
+
   setAllowlist(connectionId: string, actions: string[]): Promise<{ ok: true }> {
     return this.request('PUT', `/admin/connections/${encodeURIComponent(connectionId)}/allowlist`, {
       actions,
@@ -90,10 +97,12 @@ export class AdminApiClient {
     tenantId: string,
     redirectUri?: string,
     connectionId?: string,
+    connectorId?: string,
   ): Promise<{ authorizationUrl: string }> {
     const body: Record<string, string> = {};
     if (redirectUri !== undefined) body.redirectUri = redirectUri;
     if (connectionId !== undefined) body.connectionId = connectionId;
+    if (connectorId !== undefined) body.connectorId = connectorId;
     return this.request(
       'POST',
       `/admin/tenants/${encodeURIComponent(tenantId)}/oauth/start`,

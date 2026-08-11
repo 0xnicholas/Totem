@@ -67,6 +67,17 @@ export { TokenManager } from './feishu/token-manager.js';
 export type { ConnectionStateStore, TokenProvider } from './feishu/token-manager.js';
 export { FlowError, createOAuthFlow } from './feishu/flow.js';
 export type { ConnectionCreator, OAuthFlow } from './feishu/flow.js';
+export type { DingTalkAppCredentials, DingTalkCredsStore } from './dingtalk/creds-store.js';
+export { PostgresDingTalkCredsStore } from './dingtalk/pg-creds-store.js';
+export { DingTalkApiError, createDingTalkOAuthClient } from './dingtalk/oauth.js';
+export type { DingTalkOAuthClient } from './dingtalk/oauth.js';
+export { DingTalkConnector, mapDingtalkError } from './dingtalk/connector.js';
+export { DingTalkTokenManager } from './dingtalk/token-manager.js';
+export { createDingTalkOAuthFlow } from './dingtalk/flow.js';
+export { TokenRoutingProvider } from './token-routing.js';
+export { MockDingTalkServer } from './testing/mock-dingtalk-server.js';
+export type { MockDingTalkServerOptions } from './testing/mock-dingtalk-server.js';
+export { InMemoryDingTalkCredsStore } from './testing/memory-dingtalk.js';
 export { MockFeishuServer } from './testing/mock-feishu-server.js';
 export type { MockFeishuDoc, MockFeishuServerOptions } from './testing/mock-feishu-server.js';
 export {

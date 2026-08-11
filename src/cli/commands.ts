@@ -24,10 +24,12 @@ commands:
   create-key <tenant-id> [--scope actions|admin]        (prints the key once)
   disable-key <tenant-id> <key-id>                      (alias: revoke-key)
   set-feishu-creds <tenant-id> <app-id> <app-secret>
-  oauth-start <tenant-id> [redirect-uri] [--connection <id>]
-                                      (prints the Feishu authorization URL;
+  set-dingtalk-creds <tenant-id> <app-key> <app-secret>
+  oauth-start <tenant-id> [redirect-uri] [--connection <id>] [--connector feishu_docs|dingtalk_docs]
+                                      (prints the authorization URL;
                                        --connection re-authorizes an existing
-                                       connection instead of creating one)
+                                       connection instead of creating one;
+                                       --connector picks the flow, default feishu_docs)
   set-allowlist <connection-id> <action> [action...]
   suspend-connection <connection-id>
   resume-connection <connection-id>
@@ -103,6 +105,16 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         return 0;
       }
 
+      case 'set-dingtalk-creds': {
+        const [tenantId, appKey, appSecret] = rest;
+        if (!tenantId || !appKey || !appSecret) {
+          throw new UsageError('set-dingtalk-creds <tenant-id> <app-key> <app-secret>');
+        }
+        await io.client.setDingTalkCreds(tenantId, appKey, appSecret);
+        io.stdout(`DingTalk credentials updated for tenant ${tenantId}`);
+        return 0;
+      }
+
       case 'oauth-start': {
         const { positionals, flags } = parseFlags(rest);
         const [tenantId] = positionals;
@@ -115,13 +127,22 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
           );
         }
         const connectionId = flags.connection;
+        const connectorId = flags.connector;
+        if (connectorId !== undefined && connectorId !== 'feishu_docs' && connectorId !== 'dingtalk_docs') {
+          throw new UsageError('--connector must be "feishu_docs" or "dingtalk_docs"');
+        }
         const { authorizationUrl } = await io.client.startOAuth(
           tenantId,
           redirectUri,
           connectionId,
+          connectorId,
         );
         io.stdout(authorizationUrl);
-        io.stdout('Open the URL above in a browser and authorize with Feishu.');
+        io.stdout(
+          connectorId === 'dingtalk_docs'
+            ? 'Open the URL above in a browser and authorize with DingTalk.'
+            : 'Open the URL above in a browser and authorize with Feishu.',
+        );
         return 0;
       }
 
