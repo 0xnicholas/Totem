@@ -27,6 +27,16 @@ export interface ActionContext {
 export type ActionEffect = 'read' | 'write' | 'destructive';
 
 /**
+ * The provider tokens of the systems with connectors (ADR-0013): a small
+ * closed union, extended only when a connector family is added — never an
+ * open string registry. Provider-native action names carry `<token>_` as
+ * their prefix, and a canonical action's name must not carry any of them.
+ */
+export const PROVIDER_TOKENS = ['feishu', 'dingtalk'] as const;
+
+export type ProviderToken = (typeof PROVIDER_TOKENS)[number];
+
+/**
  * A platform-defined action (ADR-0001): the registry is the single source of
  * truth for `name`, the agent-facing `description`, and the input/output
  * JSON Schemas. Connectors declare which actions they implement and
@@ -54,6 +64,16 @@ export interface Action {
    * actions.
    */
   hidden?: boolean;
+  /**
+   * Provider scope (ADR-0013). Present means provider-native: the name must
+   * carry the `<provider>_` prefix and only connectors of this provider may
+   * implement it. Absent means canonical: any connector may implement it,
+   * and the name must not carry a known provider prefix. The registry
+   * enforces both rules at registration, so scope is machine-checked, not
+   * reviewer convention. Governance (allowlist, audit, Defender) treats
+   * both kinds identically — scope limits availability and vocabulary only.
+   */
+  provider?: ProviderToken;
 }
 
 /**

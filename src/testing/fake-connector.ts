@@ -75,6 +75,10 @@ export class FakeConnector implements IConnector {
   ) {
     this.manifest = {
       id: FAKE_CONNECTOR_ID,
+      // The fake connector implements the feishu-native bitable actions, so
+      // its declared provider is feishu (ADR-0013): the registry enforces
+      // that pairing at registration.
+      provider: 'feishu',
       implements: [
         'test_connection',
         'create_doc',

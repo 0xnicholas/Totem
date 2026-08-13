@@ -143,6 +143,7 @@ describe('DingTalkConnector (Seam B)', () => {
 
   it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets, export_doc hidden)', () => {
     expect(connector.manifest.id).toBe('dingtalk_docs');
+    expect(connector.manifest.provider).toBe('dingtalk');
     expect(connector.manifest.implements).toEqual([
       'test_connection',
       'search_docs',

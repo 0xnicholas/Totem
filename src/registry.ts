@@ -1,7 +1,8 @@
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import type { AnySchemaObject } from 'ajv';
-import type { Action, ActionEffect } from './action.js';
+import type { Action, ActionEffect, ProviderToken } from './action.js';
+import { PROVIDER_TOKENS } from './action.js';
 import type { IConnector } from './connector.js';
 import type { ValidationIssue } from './errors.js';
 import { errorMessage } from './errors.js';
@@ -51,6 +52,7 @@ export class ActionRegistry {
           `must be one of ${ACTION_EFFECTS.join(', ')}`,
       );
     }
+    this.assertProviderScope(action.name, action.provider);
     if (this.actions.has(action.name)) {
       throw new Error(`Action "${action.name}" is already registered`);
     }
@@ -62,17 +64,70 @@ export class ActionRegistry {
   }
 
   /**
+   * The ADR-0013 scope rules, enforced at registration (fail fast, never at
+   * runtime): the provider token must be in the closed union; a
+   * provider-native name must carry the `<provider>_` prefix; a canonical
+   * name must not carry any known provider prefix.
+   */
+  private assertProviderScope(name: string, provider: ProviderToken | undefined): void {
+    if (provider !== undefined && !PROVIDER_TOKENS.includes(provider)) {
+      throw new Error(
+        `Invalid provider "${provider}" for action "${name}": ` +
+          `must be one of ${PROVIDER_TOKENS.join(', ')}`,
+      );
+    }
+    if (provider !== undefined) {
+      if (!name.startsWith(`${provider}_`)) {
+        throw new Error(
+          `Provider-native action "${name}" must start with "${provider}_" (ADR-0013)`,
+        );
+      }
+      return;
+    }
+    for (const token of PROVIDER_TOKENS) {
+      if (name.startsWith(`${token}_`)) {
+        throw new Error(
+          `Canonical action "${name}" must not carry the "${token}_" provider prefix (ADR-0013)`,
+        );
+      }
+    }
+  }
+
+  /**
    * Registers a connector and validates its manifest: every action name in
-   * `implements` must exist in the registry.
+   * `implements` must exist in the registry, the manifest must declare a
+   * known provider token, and a provider-native action may appear only in
+   * the `implements` list of connectors of the same provider (ADR-0013).
    */
   registerConnector(connector: IConnector): void {
     if (this.connectors.has(connector.manifest.id)) {
       throw new Error(`Connector "${connector.manifest.id}" is already registered`);
     }
+    // Cast: the manifest type declares `provider` required, but registration
+    // is a runtime boundary — a hand-built manifest may omit it, and the
+    // closed union (ADR-0013) is enforced here, not only by the compiler.
+    const provider = connector.manifest.provider as ProviderToken | undefined;
+    if (provider === undefined || !PROVIDER_TOKENS.includes(provider)) {
+      throw new Error(
+        provider === undefined
+          ? `Connector "${connector.manifest.id}" must declare a provider ` +
+              `(one of ${PROVIDER_TOKENS.join(', ')})`
+          : `Invalid provider "${provider}" for connector "${connector.manifest.id}": ` +
+              `must be one of ${PROVIDER_TOKENS.join(', ')}`,
+      );
+    }
     for (const actionName of connector.manifest.implements) {
-      if (!this.actions.has(actionName)) {
+      const registered = this.actions.get(actionName);
+      if (!registered) {
         throw new Error(
           `Connector "${connector.manifest.id}" implements unknown action "${actionName}"`,
+        );
+      }
+      const actionProvider = registered.action.provider;
+      if (actionProvider !== undefined && actionProvider !== provider) {
+        throw new Error(
+          `Connector "${connector.manifest.id}" (provider "${provider}") cannot implement ` +
+            `provider-native action "${actionName}" (provider "${actionProvider}")`,
         );
       }
     }

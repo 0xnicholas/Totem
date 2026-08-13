@@ -69,6 +69,13 @@ describe('FeishuConnector (Seam B)', () => {
 
   const ctx = { tenantId: TENANT, connectionId: CONNECTION, token: '' };
 
+  it('declares its provider scope in the manifest (ADR-0013)', () => {
+    expect(connector.manifest.id).toBe('feishu_docs');
+    expect(connector.manifest.provider).toBe('feishu');
+    expect(connector.manifest.implements).toContain('feishu_read_bitable_records');
+    expect(connector.manifest.implements).toContain('feishu_write_bitable_records');
+  });
+
   it('search_docs maps query + page size to the Feishu request and unifies the output', async () => {
     ctx.token = accessToken;
     const output = await connector.execute('search_docs', { query: 'strategy' }, ctx);

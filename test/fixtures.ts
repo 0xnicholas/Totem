@@ -1,4 +1,4 @@
-import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector } from '../src/index.js';
+import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector, ProviderToken } from '../src/index.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink, DefenderPolicyProvider } from '../src/governance.js';
 import type { TokenProvider } from '../src/feishu/token-manager.js';
@@ -107,9 +107,10 @@ export function makeConnector(
   id: string,
   implements_: string[],
   handlers: Record<string, ActionHandler>,
+  provider: ProviderToken = 'feishu',
 ): IConnector {
   return {
-    manifest: { id, implements: implements_ },
+    manifest: { id, provider, implements: implements_ },
     execute: (action, args, ctx) => {
       const handler = handlers[action];
       if (!handler) {

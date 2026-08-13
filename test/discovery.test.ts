@@ -70,6 +70,21 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(typeof testConnection?.description).toBe('string');
   });
 
+  it('GET /actions carries provider on provider-native actions and omits it on canonical ones', async () => {
+    const response = await discover('/actions');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      actions: Array<{ name: string; provider?: string }>;
+    };
+    for (const action of body.actions) {
+      if (action.name.startsWith('feishu_')) {
+        expect(action, action.name).toHaveProperty('provider', 'feishu');
+      } else {
+        expect(action, action.name).not.toHaveProperty('provider');
+      }
+    }
+  });
+
   it('hidden actions never leak through the discovery surface', async () => {
     const hidden: Action = {
       name: 'platform_internal',
@@ -129,6 +144,47 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     });
     const noneBody = (await none.json()) as { query: string; actions: unknown[] };
     expect(noneBody).toEqual({ query: 'zzz-nothing', actions: [] });
+  });
+
+  it('POST /actions/search carries provider metadata like the list endpoint', async () => {
+    // 'bitable' hits the two provider-native actions by name and
+    // get_doc_metadata (canonical) by description — one response mixing
+    // both scopes.
+    const native = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'bitable' }),
+    });
+    const nativeBody = (await native.json()) as {
+      actions: Array<{ name: string; provider?: string }>;
+    };
+    expect(nativeBody.actions.map((a) => a.name).sort()).toEqual([
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
+      'get_doc_metadata',
+    ]);
+    for (const action of nativeBody.actions) {
+      if (action.name.startsWith('feishu_')) {
+        expect(action).toHaveProperty('provider', 'feishu');
+      } else {
+        expect(action).not.toHaveProperty('provider');
+      }
+    }
+
+    // Canonical matches omit the key entirely.
+    const canonical = await discover('/actions/search', {
+      method: 'POST',
+      body: JSON.stringify({ query: 'append' }),
+    });
+    const canonicalBody = (await canonical.json()) as {
+      actions: Array<{ name: string; description: string; provider?: string }>;
+    };
+    expect(canonicalBody.actions).toHaveLength(1);
+    expect(canonicalBody.actions[0]).toMatchObject({
+      name: 'append_doc_content',
+      effects: 'write',
+    });
+    expect(typeof canonicalBody.actions[0]?.description).toBe('string');
+    expect(canonicalBody.actions[0]).not.toHaveProperty('provider');
   });
 
   it('rejects empty or missing search queries with 400', async () => {

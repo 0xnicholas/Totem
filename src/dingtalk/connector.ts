@@ -112,6 +112,7 @@ export function mapDingtalkError(err: DingTalkApiError): ActionError {
 export class DingTalkConnector implements IConnector {
   readonly manifest = {
     id: 'dingtalk_docs',
+    provider: 'dingtalk' as const,
     implements: [
       'test_connection',
       'search_docs',

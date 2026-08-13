@@ -594,6 +594,7 @@ export const DOCS_ACTIONS: Action[] = [
     inputSchema: readBitableRecordsInputSchema,
     outputSchema: readBitableRecordsOutputSchema,
     effects: 'read',
+    provider: 'feishu',
   },
   {
     name: 'feishu_write_bitable_records',
@@ -603,6 +604,7 @@ export const DOCS_ACTIONS: Action[] = [
     inputSchema: writeBitableRecordsInputSchema,
     outputSchema: writeBitableRecordsOutputSchema,
     effects: 'write',
+    provider: 'feishu',
   },
 ];
 

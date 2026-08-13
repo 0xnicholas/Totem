@@ -106,7 +106,7 @@ describe('executor with routed token acquisition (two connectors)', () => {
 /** A minimal `dingtalk_docs` manifest stub for the routing test. */
 function dingtalkStubConnector(): IConnector {
   return {
-    manifest: { id: 'dingtalk_docs', implements: ['test_connection'] },
+    manifest: { id: 'dingtalk_docs', provider: 'dingtalk', implements: ['test_connection'] },
     execute: (_action, _args, ctx) => Promise.resolve({
       connection_id: ctx.connectionId,
       status: 'ok',

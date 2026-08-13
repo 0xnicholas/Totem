@@ -113,7 +113,7 @@ totem 自定枚举——这就是 totem 的枚举):
 
 | 端点 | 用途 | 认证 |
 |---|---|---|
-| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`,🚧 +`provider`/`deprecated` 见 §11),hidden 动作不出现 | actions key(Bearer),无需 connection |
+| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`,✅ +`provider` 见 §11;🚧 +`deprecated` 见 §11),hidden 动作不出现 | actions key(Bearer),无需 connection |
 | `POST {TOTEM_URL}/actions/search` | 文本搜索,body `{query}`(大小写不敏感子串匹配;⚠️ StackOne 是语义搜索,BM25+embedding,totem v2) | 同上 |
 | `GET {TOTEM_URL}/openapi.json` | 机器可读契约(OpenAPI 3.1):每个动作 `components.schemas.<action>_input/_output` + `ActionError` 错误组件 | **无认证**(平台级契约元数据,非租户数据) |
 
@@ -244,7 +244,8 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 - **provider-native 动作**:`<provider>_` 前缀名(`feishu_read_bitable_records`),
   只有该 provider 的 connector 能实现;输出仍是 curated schema(opaque ID、统一
   错误词表、全量校验),scope 只限制可用性与词汇,不动治理不变量;
-- agent 信号 = 名称前缀;`GET /actions` 暴露结构化 `provider` 字段(🚧);
+- agent 信号 = 名称前缀;`GET /actions` 暴露结构化 `provider` 字段(✅,T19a),
+  canonical 动作省略该键;
 - 覆盖缺口 ≠ scope:canonical 动作某 provider 未实现(如 dingtalk 暂无
   `export_doc`),只是该 provider connection 的工具列表里没有它(§6)。
 

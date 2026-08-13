@@ -1,4 +1,4 @@
-import type { ActionContext } from './action.js';
+import type { ActionContext, ProviderToken } from './action.js';
 import type { RateLimitDeclaration } from './rate-limit.js';
 
 /**
@@ -9,6 +9,14 @@ import type { RateLimitDeclaration } from './rate-limit.js';
 export interface ConnectorManifest {
   /** Stable identifier used by connection records, e.g. `feishu_docs`. */
   id: string;
+  /**
+   * The provider token of the system this connector talks to (ADR-0013):
+   * the registry rejects any provider-native action in `implements` whose
+   * `provider` differs, so scope violations fail at startup, never at
+   * runtime. Canonical actions are unrestricted — any connector may
+   * implement them.
+   */
+  provider: ProviderToken;
   /** Names of platform actions this connector implements. */
   implements: string[];
   /**

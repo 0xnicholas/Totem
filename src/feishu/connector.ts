@@ -83,6 +83,7 @@ export interface FeishuConnectorOptions {
 export class FeishuConnector implements IConnector {
   readonly manifest = {
     id: 'feishu_docs',
+    provider: 'feishu' as const,
     implements: [
       'test_connection',
       'create_doc',

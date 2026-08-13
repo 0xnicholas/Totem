@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AnySchemaObject } from 'ajv';
-import type { Action } from '../action.js';
+import { PROVIDER_TOKENS, type Action } from '../action.js';
 import { ACTION_ERROR_CODES, type ActionErrorCode } from '../errors.js';
 import { TOTEM_VERSION } from '../version.js';
 import { STATUS_BY_ERROR_CODE } from './rpc.js';
@@ -105,6 +105,14 @@ const actionMetadataSchema = {
     name: { type: 'string' },
     description: { type: 'string' },
     effects: { type: 'string' },
+    provider: {
+      type: 'string',
+      description:
+        "The action's provider scope (ADR-0013): present on provider-native " +
+        'actions only; canonical actions omit the key.',
+      // Derived, never re-listed by hand: the closed provider-token union.
+      enum: [...PROVIDER_TOKENS],
+    },
   },
   required: ['name', 'description', 'effects'],
 } as const;
@@ -271,12 +279,15 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
         get: {
           operationId: 'list_actions',
           description:
-            'List the platform action set as metadata (name, description, effects); ' +
-            'hidden actions are excluded.',
+            'List the platform action set as metadata (name, description, effects; ' +
+            'provider on provider-native actions only — ADR-0013); hidden actions ' +
+            'are excluded.',
           security: BEARER_SECURITY,
           responses: {
             '200': {
-              description: 'The platform action set as metadata (hidden excluded).',
+              description:
+                'The platform action set as metadata (hidden excluded; ' +
+                'provider present on provider-native actions only).',
               content: { 'application/json': { schema: actionsListSchema } },
             },
           },

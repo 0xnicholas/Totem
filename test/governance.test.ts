@@ -18,7 +18,7 @@ function makeRecordingConnector(calls: string[]): IConnector {
     return { doc_id: 'doc_1', title };
   };
   return {
-    manifest: { id: RECORDING_CONNECTOR_ID, implements: ['create_doc'] },
+    manifest: { id: RECORDING_CONNECTOR_ID, provider: 'feishu', implements: ['create_doc'] },
     execute: (action, args, ctx) => Promise.resolve(createDocHandler(args, ctx)),
   };
 }

@@ -108,6 +108,13 @@ describe('buildOpenApiDocument (T24, generator)', () => {
               name: { type: 'string' },
               description: { type: 'string' },
               effects: { type: 'string' },
+              provider: {
+                type: 'string',
+                description:
+                  "The action's provider scope (ADR-0013): present on provider-native " +
+                  'actions only; canonical actions omit the key.',
+                enum: ['feishu', 'dingtalk'],
+              },
             },
             required: ['name', 'description', 'effects'],
           },
@@ -139,6 +146,13 @@ describe('buildOpenApiDocument (T24, generator)', () => {
               name: { type: 'string' },
               description: { type: 'string' },
               effects: { type: 'string' },
+              provider: {
+                type: 'string',
+                description:
+                  "The action's provider scope (ADR-0013): present on provider-native " +
+                  'actions only; canonical actions omit the key.',
+                enum: ['feishu', 'dingtalk'],
+              },
             },
             required: ['name', 'description', 'effects'],
           },
