@@ -2,10 +2,10 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:
 
 /**
  * Secret encryption at rest (ADR-0004, issue #15): every stored secret —
- * Feishu tokens and app secrets — is AES-256-GCM encrypted with a
- * per-tenant key derived from the `TOTEM_TOKEN_ENC_KEY` master key, so one
- * leaked row does not decrypt with another tenant's key and a leaked master
- * key alone is not enough.
+ * tokens and app secrets for any provider — is AES-256-GCM encrypted with
+ * a per-tenant key derived from the `TOTEM_TOKEN_ENC_KEY` master key, so
+ * one leaked row does not decrypt with another tenant's key and a leaked
+ * master key alone is not enough.
  *
  * Storage format: `v1:<iv (base64url)>:<ciphertext+tag (base64url)>`.
  * GCM authenticates the ciphertext, so tampered rows fail decryption
@@ -14,6 +14,11 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:
 
 /** HMAC-SHA256 key derivation: master key + tenant context → 32-byte key. */
 export function deriveTenantKey(masterKey: string, tenantId: string): Buffer {
+  // The `totem:feishu:v1:` context is FROZEN for backward compatibility:
+  // rows encrypted before the crypto moved out of the feishu module (v0.1)
+  // were derived with it, and changing the context would make every stored
+  // secret undecryptable. The context is a key-derivation label, not a
+  // provider claim — DingTalk rows use it too.
   return createHmac('sha256', masterKey).update(`totem:feishu:v1:${tenantId}`).digest();
 }
 

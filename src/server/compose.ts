@@ -1,20 +1,20 @@
 import { Hono } from 'hono';
 import pg from 'pg';
+import { encryptValue } from '../crypto.js';
 import { createAdminApp } from '../admin/server.js';
 import { PostgresAdminRepository } from '../admin/pg-repo.js';
 import { DingTalkConnector } from '../dingtalk/connector.js';
-import { createDingTalkOAuthFlow } from '../dingtalk/flow.js';
+import { createDingTalkOAuthFlow } from '../dingtalk/flows.js';
 import { createDingTalkOAuthClient } from '../dingtalk/oauth.js';
 import { PostgresDingTalkCredsStore } from '../dingtalk/pg-creds-store.js';
-import { DingTalkTokenManager } from '../dingtalk/token-manager.js';
+import { createDingTalkTokenProvider } from '../dingtalk/tokens.js';
 import { FeishuConnector } from '../feishu/connector.js';
-import { encryptValue } from '../feishu/crypto.js';
-import { createOAuthFlow } from '../feishu/flow.js';
+import { createFeishuOAuthFlow } from '../feishu/flows.js';
 import { createFeishuOAuthClient } from '../feishu/oauth.js';
-import { PostgresConnectionStateStore } from '../feishu/pg-connection-state.js';
 import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
-import { PostgresTokenStore } from '../feishu/pg-token-store.js';
-import { TokenManager } from '../feishu/token-manager.js';
+import { createFeishuTokenProvider } from '../feishu/tokens.js';
+import { PostgresConnectionStateStore } from '../oauth/pg-connection-state.js';
+import { PostgresTokenStore } from '../oauth/pg-token-store.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
 import { createOpenApiApp, DEFAULT_OPENAPI_META } from '../rest/openapi.js';
 import { createRpcApp } from '../rest/rpc.js';
@@ -55,17 +55,17 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
 
   const credsStore = new PostgresFeishuCredsStore(pool, masterKey);
   const tokenStore = new PostgresTokenStore(pool);
-  const tokenManager = new TokenManager({
+  const tokenManager = createFeishuTokenProvider({
     tokenStore,
     credsStore,
     oauth,
     connectionState: new PostgresConnectionStateStore(pool),
     masterKey,
   });
-  const flow = createOAuthFlow({ credsStore, tokenStore, oauth, connections: repo, masterKey });
+  const flow = createFeishuOAuthFlow({ credsStore, tokenStore, oauth, connections: repo, masterKey });
 
   // DingTalk (T17a): same wiring shape as Feishu — per-tenant app
-  // credentials (encrypted), its own OAuth client + token manager + flow —
+  // credentials (encrypted), its own OAuth client + token provider + flow —
   // routed alongside Feishu by the composition root's token provider.
   const dingtalkApiBaseUrl = env.dingtalkApiBaseUrl ?? 'https://api.dingtalk.com';
   const dingtalkAuthorizeBaseUrl = env.dingtalkAuthorizeBaseUrl ?? 'https://login.dingtalk.com';
@@ -74,7 +74,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     authorizeBaseUrl: dingtalkAuthorizeBaseUrl,
   });
   const dingtalkCredsStore = new PostgresDingTalkCredsStore(pool, masterKey);
-  const dingtalkTokenManager = new DingTalkTokenManager({
+  const dingtalkTokenManager = createDingTalkTokenProvider({
     tokenStore,
     credsStore: dingtalkCredsStore,
     oauth: dingtalkOauth,

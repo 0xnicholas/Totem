@@ -1,14 +1,13 @@
 import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { decryptValue } from '../src/feishu/crypto.js';
+import { decryptValue } from '../src/crypto.js';
 import { createFeishuOAuthClient, type FeishuOAuthClient } from '../src/feishu/oauth.js';
-import { createOAuthFlow, FlowError, type OAuthFlow } from '../src/feishu/flow.js';
+import { createFeishuOAuthFlow } from '../src/feishu/flows.js';
+import { FlowError, type OAuthFlow } from '../src/oauth/authorize-flow.js';
 import { InMemoryAdminRepository } from '../src/testing/memory-admin-repo.js';
-import {
-  InMemoryFeishuCredsStore,
-  InMemoryTokenStore,
-} from '../src/testing/memory-feishu.js';
+import { InMemoryFeishuCredsStore } from '../src/testing/memory-feishu.js';
+import { InMemoryTokenStore } from '../src/testing/memory-oauth.js';
 import { MockFeishuServer } from '../src/testing/mock-feishu-server.js';
 
 const APP_ID = 'flow_app_id';
@@ -19,13 +18,14 @@ const REDIRECT_URI = 'https://totem.example.com/oauth/callback/feishu';
 const START = Date.parse('2026-01-01T00:00:00Z');
 
 /**
- * The OAuth flow (T6 AC-1): the admin starts the flow (authorization URL
- * with state), the user authorizes in Feishu, and the callback exchanges
- * the code, creates the connection record (owner server-set, redirect URI
- * recorded for re-auth) and stores the tokens encrypted. All against the
- * mock Feishu server — no real credentials.
+ * The Feishu Authorize Flow adapter (ADR-0015): provider identity (the
+ * feishu_docs connector, connection name 'feishu') and the Feishu profile
+ * — authorize URL shape, redirect-bound code exchange, caller-error
+ * classification — against the mock Feishu server. The state machine is
+ * owned by test/oauth/authorize-flow.test.ts; this suite covers what only
+ * Feishu can decide.
  */
-describe('OAuthFlow', () => {
+describe('Feishu authorize flow (adapter)', () => {
   let server: ServerType;
   let mock: MockFeishuServer;
   let oauth: FeishuOAuthClient;
@@ -48,7 +48,7 @@ describe('OAuthFlow', () => {
     TENANT = (await repo.createTenant('flow-tenant')).id;
     credsStore.set(TENANT, { appId: APP_ID, appSecret: APP_SECRET });
     repo.addConnection(TENANT, 'existing-conn');
-    flow = createOAuthFlow({
+    flow = createFeishuOAuthFlow({
       credsStore,
       tokenStore,
       oauth,
@@ -62,7 +62,7 @@ describe('OAuthFlow', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('start returns an authorization URL carrying app_id, redirect_uri and state', async () => {
+  it('start returns a Feishu authorize URL carrying app_id, redirect_uri and state', async () => {
     const { authorizationUrl } = await flow.start(TENANT, REDIRECT_URI);
     const url = new URL(authorizationUrl);
     expect(url.pathname).toBe('/open-apis/authen/v1/authorize');
@@ -75,19 +75,18 @@ describe('OAuthFlow', () => {
     await expect(flow.start('tenant-no-creds', REDIRECT_URI)).rejects.toBeInstanceOf(FlowError);
     await expect(flow.start('tenant-no-creds', REDIRECT_URI)).rejects.toMatchObject({
       status: 400,
+      message: 'Tenant "tenant-no-creds" has no Feishu credentials configured (set-feishu-creds)',
     });
   });
 
-  it('callback exchanges the code, creates the connection and stores encrypted tokens', async () => {
+  it('callback creates a feishu_docs connection named feishu and stores encrypted tokens', async () => {
     const { authorizationUrl } = await flow.start(TENANT, REDIRECT_URI);
     const state = new URL(authorizationUrl).searchParams.get('state')!;
     const code = await mock.authorizeCode(REDIRECT_URI, state);
 
     await flow.handleCallback(code, state);
 
-    // The connection record: owner server-set, redirect recorded, active.
-    const connections = repo.listConnectionsSync(TENANT);
-    const created = connections.find((c) => c.id !== 'existing-conn');
+    const created = repo.listConnectionsSync(TENANT).find((c) => c.id !== 'existing-conn');
     expect(created).toMatchObject({
       tenantId: TENANT,
       connectorId: 'feishu_docs',
@@ -97,47 +96,11 @@ describe('OAuthFlow', () => {
       oauthRedirectUri: REDIRECT_URI,
     });
 
-    // Tokens stored encrypted with the per-tenant key; expiry matches the
-    // mock's access-token TTL (2h default).
     const stored = tokenStore.list()[0]!;
     expect(stored.connectionId).toBe(created!.id);
     expect(stored.accessTokenCiphertext.startsWith('v1:')).toBe(true);
     expect(decryptValue(TENANT, stored.accessTokenCiphertext, MASTER_KEY)).toMatch(/^mock_access_/);
-    expect(decryptValue(TENANT, stored.refreshTokenCiphertext, MASTER_KEY)).toMatch(
-      /^mock_refresh_/,
-    );
     expect(stored.expiresAt).toBe(new Date(START + 2 * 60 * 60 * 1000).toISOString());
-  });
-
-  it('rejects an unknown or consumed state with 400 and creates nothing', async () => {
-    const unknownErr = await flow
-      .handleCallback('some-code', 'never-issued')
-      .catch((e: unknown) => e);
-    expect(unknownErr).toBeInstanceOf(FlowError);
-    expect(unknownErr).toMatchObject({ status: 400 });
-
-    const { authorizationUrl } = await flow.start(TENANT, REDIRECT_URI);
-    const state = new URL(authorizationUrl).searchParams.get('state')!;
-    const code = await mock.authorizeCode(REDIRECT_URI, state);
-    await flow.handleCallback(code, state);
-    // Replay of the same state (e.g. a retried browser redirect) fails.
-    const replayErr = await flow.handleCallback(code, state).catch((e: unknown) => e);
-    expect(replayErr).toBeInstanceOf(FlowError);
-    expect(replayErr).toMatchObject({ status: 400 });
-    expect(tokenStore.list()).toHaveLength(1);
-  });
-
-  it('rejects expired states with 400 (state TTL)', async () => {
-    const { authorizationUrl } = await flow.start(TENANT, REDIRECT_URI);
-    const state = new URL(authorizationUrl).searchParams.get('state')!;
-    now += 11 * 60 * 1000; // 11 minutes later; default TTL is 10
-
-    const code = await mock.authorizeCode(REDIRECT_URI, state);
-    await expect(flow.handleCallback(code, state)).rejects.toMatchObject({
-      name: 'FlowError',
-      status: 400,
-    });
-    expect(tokenStore.list()).toHaveLength(0);
   });
 
   it('rejects a bad authorization code with 400', async () => {
@@ -151,46 +114,17 @@ describe('OAuthFlow', () => {
     expect(tokenStore.list()).toHaveLength(0);
   });
 
-  it('a second flow creates a second connection (multi-connection)', async () => {
-    const first = await flow.start(TENANT, REDIRECT_URI);
-    await flow.handleCallback(
-      await mock.authorizeCode(REDIRECT_URI, new URL(first.authorizationUrl).searchParams.get('state')!),
-      new URL(first.authorizationUrl).searchParams.get('state')!,
-    );
-    const second = await flow.start(TENANT, REDIRECT_URI);
-    await flow.handleCallback(
-      await mock.authorizeCode(REDIRECT_URI, new URL(second.authorizationUrl).searchParams.get('state')!),
-      new URL(second.authorizationUrl).searchParams.get('state')!,
-    );
-
-    const connections = repo.listConnectionsSync(TENANT).filter((c) => c.id !== 'existing-conn');
-    expect(connections).toHaveLength(2);
-    expect(new Set(connections.map((c) => c.id)).size).toBe(2);
-  });
-
   it('re-authorizes an existing connection in place (auth_expired → active)', async () => {
-    const first = await flow.start(TENANT, REDIRECT_URI);
-    const firstState = new URL(first.authorizationUrl).searchParams.get('state')!;
-    await flow.handleCallback(await mock.authorizeCode(REDIRECT_URI, firstState), firstState);
-    const created = repo
-      .listConnectionsSync(TENANT)
-      .find((c) => c.id !== 'existing-conn')!;
-    await repo.suspendConnection(created.id, true); // simulate auth_expired-ish state
-    const beforeCiphertext = tokenStore.list()[0]!.accessTokenCiphertext;
+    const { authorizationUrl } = await flow.start(TENANT, REDIRECT_URI, {
+      connectionId: 'existing-conn',
+    });
+    const state = new URL(authorizationUrl).searchParams.get('state')!;
+    await flow.handleCallback(await mock.authorizeCode(REDIRECT_URI, state), state);
 
-    const reauth = await flow.start(TENANT, REDIRECT_URI, { connectionId: created.id });
-    const reauthState = new URL(reauth.authorizationUrl).searchParams.get('state')!;
-    await flow.handleCallback(await mock.authorizeCode(REDIRECT_URI, reauthState), reauthState);
-
-    // Same connection, reactivated; tokens replaced; no new connection.
-    const after = repo.listConnectionsSync(TENANT).filter((c) => c.id !== 'existing-conn');
-    expect(after).toHaveLength(1);
-    expect(after[0]?.id).toBe(created.id);
-    expect(after[0]?.status).toBe('active');
+    // No new connection; tokens replaced on the existing row.
+    expect(repo.listConnectionsSync(TENANT)).toHaveLength(1);
     const stored = tokenStore.list()[0]!;
-    expect(stored.connectionId).toBe(created.id);
-    // Tokens were replaced by the re-authorization.
-    expect(stored.accessTokenCiphertext).not.toBe(beforeCiphertext);
+    expect(stored.connectionId).toBe('existing-conn');
     expect(decryptValue(TENANT, stored.refreshTokenCiphertext, MASTER_KEY)).toMatch(
       /^mock_refresh_/,
     );

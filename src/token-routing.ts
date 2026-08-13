@@ -1,6 +1,6 @@
 import { ActionError } from './errors.js';
 import type { ConnectionLookup } from './executor.js';
-import type { TokenProvider } from './feishu/token-manager.js';
+import type { TokenProvider } from './oauth/token-lifecycle.js';
 
 /**
  * Composition-root token routing (T17a): one `TokenProvider` seam for the

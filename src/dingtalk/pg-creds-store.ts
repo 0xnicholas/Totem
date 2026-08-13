@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { decryptValue, encryptValue, isCiphertext } from '../feishu/crypto.js';
+import { decryptValue, encryptValue, isCiphertext } from '../crypto.js';
 import type { DingTalkAppCredentials, DingTalkCredsStore } from './creds-store.js';
 
 /**

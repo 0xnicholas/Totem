@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
 import { AdminApiClient } from '../src/admin/client.js';
-import { decryptValue, isCiphertext } from '../src/feishu/crypto.js';
+import { decryptValue, isCiphertext } from '../src/crypto.js';
 import { composeServer } from '../src/server/compose.js';
 import { MockDingTalkServer } from '../src/testing/mock-dingtalk-server.js';
 

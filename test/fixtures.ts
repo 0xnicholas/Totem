@@ -1,7 +1,7 @@
 import type { Action, ActionDeprecation, ActionExecutor, ActionHandler, ConnectionRecord, IConnector, ProviderToken } from '../src/index.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink, DefenderPolicyProvider } from '../src/governance.js';
-import type { TokenProvider } from '../src/feishu/token-manager.js';
+import type { TokenProvider } from '../src/oauth/token-lifecycle.js';
 import type { RateLimiter } from '../src/rate-limit.js';
 import { FAKE_CONNECTOR_ID, FakeConnector } from '../src/testing/fake-connector.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';

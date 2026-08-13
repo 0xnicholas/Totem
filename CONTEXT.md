@@ -39,8 +39,12 @@ The OAuth application a tenant registers for a system (v1: a Feishu custom app):
 _Avoid_: Client secrets, OAuth app config, setup fields
 
 **Authorize Flow**:
-The minimal OAuth dance that opens a connection: the tenant registers App Credentials, the platform returns an authorize URL, the tenant's user grants access in the system's consent screen, and the callback creates the Connection. Deliberately not a StackOne-style connect session/Hub: no session tokens, no origin_owner, one redirect.
+The minimal OAuth dance that opens a connection: the tenant registers App Credentials, the platform returns an authorize URL, the tenant's user grants access in the system's consent screen, and the callback creates the Connection. Deliberately not a StackOne-style connect session/Hub: no session tokens, no origin_owner, one redirect. The state machine lives in the platform's Token Lifecycle module; providers contribute thin adapters (ADR-0015).
 _Avoid_: Connect session, Hub, linking flow
+
+**Token Lifecycle**:
+The platform-owned module (`src/oauth/`) behind a connection's OAuth tokens (ADR-0015): the refresh discipline (early-refresh window, single-flight, fail-fast auth-expired marking) and the Authorize Flow state machine, one platform implementation with thin provider adapters (feishu/, dingtalk/). The execution seam stays ADR-0004's one-method `TokenProvider`; provider app-level tokens (DingTalk) are an adapter detail the executor never sees.
+_Avoid_: Token manager (when meaning a per-provider copy — there is one platform lifecycle, providers contribute adapters)
 
 **Allowlist**:
 The per-connection list of action names that may be executed. Enforced at the execution boundary; also filters which tools the MCP server advertises to the agent (hide, don't reject).

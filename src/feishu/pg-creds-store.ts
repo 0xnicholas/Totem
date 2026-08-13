@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { decryptValue, encryptValue, isCiphertext } from './crypto.js';
+import { decryptValue, encryptValue, isCiphertext } from '../crypto.js';
 import type { FeishuAppCredentials, FeishuCredsStore } from './creds-store.js';
 
 /**

@@ -3,7 +3,7 @@ import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { createAdminApp } from '../src/admin/server.js';
 import { hashApiKey } from '../src/admin/keys.js';
-import { FlowError } from '../src/feishu/flow.js';
+import { FlowError } from '../src/oauth/authorize-flow.js';
 import { InMemoryAdminRepository } from '../src/testing/memory-admin-repo.js';
 
 const ADMIN_KEY = 'test-admin-key';

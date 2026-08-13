@@ -4,12 +4,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
 import { AdminApiClient } from '../src/admin/client.js';
-import { decryptValue, isCiphertext } from '../src/feishu/crypto.js';
+import { decryptValue, isCiphertext } from '../src/crypto.js';
 import { createFeishuOAuthClient } from '../src/feishu/oauth.js';
-import { PostgresConnectionStateStore } from '../src/feishu/pg-connection-state.js';
+import { createFeishuTokenProvider } from '../src/feishu/tokens.js';
+import { PostgresConnectionStateStore } from '../src/oauth/pg-connection-state.js';
 import { PostgresFeishuCredsStore } from '../src/feishu/pg-creds-store.js';
-import { PostgresTokenStore } from '../src/feishu/pg-token-store.js';
-import { TokenManager } from '../src/feishu/token-manager.js';
+import { PostgresTokenStore } from '../src/oauth/pg-token-store.js';
 import { composeServer } from '../src/server/compose.js';
 import { MockFeishuServer } from '../src/testing/mock-feishu-server.js';
 
@@ -165,7 +165,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     const { connections } = await client.listConnections(tenantId);
     const connection = connections[0]!;
 
-    const tokenManager = new TokenManager({
+    const tokenManager = createFeishuTokenProvider({
       tokenStore: new PostgresTokenStore(pool),
       credsStore: new PostgresFeishuCredsStore(pool, MASTER_KEY),
       oauth: createFeishuOAuthClient(feishuBaseUrl),

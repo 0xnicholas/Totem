@@ -1,11 +1,11 @@
 import pg from 'pg';
-import type { ConnectionStateStore } from './token-manager.js';
+import type { ConnectionStateStore } from './connection-state.js';
 
 /**
  * Marks a connection `auth_expired` in Postgres (the first-class status
- * from the StackOne research amendment). Called by the TokenManager when a
- * refresh fails with a dead grant; the admin surface and MCP exposure then
- * report the connection as needing re-authorization.
+ * from the StackOne research amendment). Called by the token lifecycle
+ * when a refresh fails with a dead grant; the admin surface and MCP
+ * exposure then report the connection as needing re-authorization.
  */
 export class PostgresConnectionStateStore implements ConnectionStateStore {
   constructor(private readonly pool: pg.Pool) {}

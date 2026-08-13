@@ -4,7 +4,7 @@ import {
   deriveTenantKey,
   encryptValue,
   isCiphertext,
-} from '../src/feishu/crypto.js';
+} from '../src/crypto.js';
 
 const MASTER_KEY = 'test-master-key-0123456789abcdef';
 

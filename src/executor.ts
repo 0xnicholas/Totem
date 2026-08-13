@@ -4,7 +4,7 @@ import type { IConnector } from './connector.js';
 import type { ActionErrorCode } from './errors.js';
 import { ActionError, errorMessage, isActionError } from './errors.js';
 import { scanDefender, type DefenderMetadata } from './defender.js';
-import type { TokenProvider } from './feishu/token-manager.js';
+import type { TokenProvider } from './oauth/token-lifecycle.js';
 import {
   DEFAULT_DEFENDER_POLICY,
   type AllowlistStore,

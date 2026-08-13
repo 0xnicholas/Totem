@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { FlowError, type OAuthFlow } from '../feishu/flow.js';
+import { FlowError, type OAuthFlow } from '../oauth/authorize-flow.js';
 import { generateApiKey, hashApiKey, keyPrefixForEnv } from './keys.js';
 import {
   NotFoundError,

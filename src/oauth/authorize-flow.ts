@@ -1,8 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { encryptValue } from './crypto.js';
-import type { FeishuAppCredentials, FeishuCredsStore } from './creds-store.js';
 import { errorMessage } from '../errors.js';
-import { FeishuApiError, type FeishuOAuthClient } from './oauth.js';
+import { encryptValue } from '../crypto.js';
 import type { TokenStore } from './token-store.js';
 
 /**
@@ -35,11 +33,16 @@ export class FlowError extends Error {
   }
 }
 
+/**
+ * The Authorize Flow (CONTEXT.md): the minimal OAuth dance that opens a
+ * connection. Provider adapters satisfy this interface by composing the
+ * state machine below with their endpoint client.
+ */
 export interface OAuthFlow {
   /**
-   * Starts the authorization-code flow: verifies the tenant has Feishu
-   * credentials, records the pending state, and returns the Feishu
-   * authorization URL for the user's browser.
+   * Starts the authorization-code flow: verifies the tenant has
+   * credentials, records the pending state, and returns the authorization
+   * URL for the user's browser.
    * @param connectionId when given, the callback re-authorizes this
    * existing connection in place (replacing its tokens) instead of
    * creating a new one — the re-auth path for `auth_expired` connections.
@@ -51,7 +54,7 @@ export interface OAuthFlow {
     options?: { connectionId?: string },
   ): Promise<{ authorizationUrl: string }>;
   /**
-   * Handles the Feishu redirect: validates the state, exchanges the code,
+   * Handles the redirect: validates the state, exchanges the code,
    * creates (or re-authorizes) the connection, and stores the token pair
    * encrypted.
    * @throws FlowError(400) for bad state/code/missing creds, FlowError(500)
@@ -60,9 +63,35 @@ export interface OAuthFlow {
   handleCallback(code: string, state: string): Promise<void>;
 }
 
-const DEFAULT_CONNECTOR_ID = 'feishu_docs';
-const DEFAULT_CONNECTION_NAME = 'feishu';
-const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000;
+/** The provider-specific half of the Authorize Flow — the adapter side of the seam (ADR-0015). */
+export interface AuthorizeProfile<TCreds> {
+  /** Provider display name in failure messages ("Feishu", "DingTalk"). */
+  providerName: string;
+  /** Reads the tenant's app credentials; undefined means the tenant never configured them. */
+  getCreds(tenantId: string): Promise<TCreds | undefined>;
+  /** The FlowError(400) message when the tenant has no credentials. */
+  noCredsMessage(tenantId: string): string;
+  /** Builds the provider's authorization URL (creds + redirect + state). */
+  buildAuthorizationUrl(creds: TCreds, redirectUri: string, state: string): string;
+  /**
+   * Exchanges the callback code for a token pair. `redirectUri` is passed
+   * through for providers that bind the code to it; providers that don't
+   * (DingTalk) ignore it.
+   */
+  exchangeCode(creds: TCreds, code: string, redirectUri: string): Promise<TokenPair>;
+  /** True for failures the caller can fix (bad code/creds, rate limits) → FlowError(400). */
+  isCallerError(err: unknown): boolean;
+}
+
+/** A fresh pair as returned by the code exchange. */
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  /** ISO timestamp when the access token expires. */
+  expiresAt: string;
+}
+
+export const DEFAULT_STATE_TTL_MS = 10 * 60 * 1000;
 
 interface PendingFlow {
   tenantId: string;
@@ -73,27 +102,32 @@ interface PendingFlow {
 }
 
 /**
- * The OAuth authorization-code flow (T6 AC-1): CLI/admin starts the flow,
- * the user authorizes in Feishu, the callback exchanges the code for
+ * The Authorize Flow state machine (ADR-0015): the admin starts the flow,
+ * the user authorizes in the provider, the callback exchanges the code for
  * tokens, and a connection record is created. Pending states live in
  * memory with a TTL (v1: a restart mid-flow simply invalidates the state —
  * the operator restarts the flow).
+ *
+ * Provider adapters (feishu, dingtalk) supply the profile; the machine
+ * owns everything else — state recording and TTL, connection-first-then-
+ * tokens ordering, and encrypted storage.
  */
-export function createOAuthFlow(deps: {
-  credsStore: FeishuCredsStore;
-  tokenStore: TokenStore;
-  oauth: FeishuOAuthClient;
-  connections: ConnectionCreator;
-  masterKey: string;
-  connectorId?: string;
-  connectionName?: string;
-  stateTtlMs?: number;
-  now?: () => number;
-}): OAuthFlow {
+export function createOAuthFlow<TCreds>(
+  profile: AuthorizeProfile<TCreds>,
+  deps: {
+    tokenStore: TokenStore;
+    connections: ConnectionCreator;
+    masterKey: string;
+    /** The connector the flow creates connections for (provider identity). */
+    connectorId: string;
+    /** The connection name recorded on create (provider identity). */
+    connectionName: string;
+    stateTtlMs?: number;
+    now?: () => number;
+  },
+): OAuthFlow {
   const pending = new Map<string, PendingFlow>();
   const now = deps.now ?? Date.now;
-  const connectorId = deps.connectorId ?? DEFAULT_CONNECTOR_ID;
-  const connectionName = deps.connectionName ?? DEFAULT_CONNECTION_NAME;
   const stateTtlMs = deps.stateTtlMs ?? DEFAULT_STATE_TTL_MS;
 
   return {
@@ -107,11 +141,7 @@ export function createOAuthFlow(deps: {
         ...(options?.connectionId !== undefined ? { connectionId: options.connectionId } : {}),
       });
       return {
-        authorizationUrl: deps.oauth.buildAuthorizationUrl({
-          appId: creds.appId,
-          redirectUri,
-          state,
-        }),
+        authorizationUrl: profile.buildAuthorizationUrl(creds, redirectUri, state),
       };
     },
 
@@ -126,19 +156,16 @@ export function createOAuthFlow(deps: {
 
       const creds = await requireCreds(flow.tenantId);
 
-      let pair: Awaited<ReturnType<FeishuOAuthClient['exchangeCode']>>;
+      let pair: TokenPair;
       try {
-        pair = await deps.oauth.exchangeCode({ creds, code, redirectUri: flow.redirectUri });
+        pair = await profile.exchangeCode(creds, code, flow.redirectUri);
       } catch (err) {
-        if (err instanceof FeishuApiError) {
+        if (profile.isCallerError(err)) {
           // Grant rejections (bad code, bad creds) and rate limits are the
-          // caller's problem (400); network and non-envelope failures are
-          // ours (500).
-          if (err.invalidGrant || err.httpStatus === 429) {
-            throw new FlowError(400, `Feishu authorization failed: ${err.message}`);
-          }
+          // caller's problem (400); network and other failures are ours (500).
+          throw new FlowError(400, `${profile.providerName} authorization failed: ${errorMessage(err)}`);
         }
-        throw new FlowError(500, `Feishu authorization failed: ${errorMessage(err)}`);
+        throw new FlowError(500, `${profile.providerName} authorization failed: ${errorMessage(err)}`);
       }
 
       // Connection first, tokens second: a token-store failure leaves a
@@ -157,8 +184,8 @@ export function createOAuthFlow(deps: {
       } else {
         try {
           const created = await deps.connections.createConnection(flow.tenantId, {
-            connectorId,
-            name: connectionName,
+            connectorId: deps.connectorId,
+            name: deps.connectionName,
             oauthRedirectUri: flow.redirectUri,
           });
           connectionId = created.id;
@@ -178,13 +205,10 @@ export function createOAuthFlow(deps: {
   };
 
   /** One creds check shared by start and callback. */
-  async function requireCreds(tenantId: string): Promise<FeishuAppCredentials> {
-    const creds = await deps.credsStore.get(tenantId);
+  async function requireCreds(tenantId: string): Promise<TCreds> {
+    const creds = await profile.getCreds(tenantId);
     if (!creds) {
-      throw new FlowError(
-        400,
-        `Tenant "${tenantId}" has no Feishu credentials configured (set-feishu-creds)`,
-      );
+      throw new FlowError(400, profile.noCredsMessage(tenantId));
     }
     return creds;
   }
