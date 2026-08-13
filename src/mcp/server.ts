@@ -10,7 +10,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { Hono } from 'hono';
-import { hashApiKey } from '../admin/keys.js';
+import {
+  getCaller,
+  getConnectionId,
+  requireConnectionId,
+  requireTenantKey,
+} from '../auth.js';
 import { isRecord } from '../admin/util.js';
 import { TOTEM_VERSION } from '../version.js';
 import type { McpAdapter } from './adapter.js';
@@ -48,28 +53,23 @@ export function createMcpApp(config: McpAppConfig): Hono {
   const sessions = new McpSessionManager(() => createSessionServer(adapter));
   const app = new Hono();
 
+  // Caller identity resolves in the auth module (tenant from the API key,
+  // connection from x-connection-id); this handler only wires the session.
+  app.use('*', requireTenantKey(keys), requireConnectionId());
   app.all('*', async (c) => {
-    const header = c.req.header('authorization');
-    const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-    if (!presented) return c.json({ error: 'unauthorized' }, 401);
+    const caller = getCaller(c);
+    const connectionId = getConnectionId(c);
 
-    const resolved = await keys.findKey(hashApiKey(presented));
-    if (!resolved) return c.json({ error: 'unauthorized' }, 401);
-
-    const connectionId = c.req.header('x-connection-id') ?? c.req.query('x-connection-id');
-    if (!connectionId) {
-      return c.json({ error: 'missing x-connection-id (header or query param)' }, 400);
-    }
-    const connection = await adapter.resolveConnection(resolved.tenantId, connectionId);
+    const connection = await adapter.resolveConnection(caller.tenantId, connectionId);
     if (!connection) {
       return c.json({ error: `unknown connection "${connectionId}" for this tenant` }, 400);
     }
 
     const authInfo: AuthInfo = {
-      token: presented,
-      clientId: resolved.tenantId,
+      token: caller.presented,
+      clientId: caller.tenantId,
       scopes: ['actions'],
-      extra: { tenantId: resolved.tenantId, connectionId },
+      extra: { tenantId: caller.tenantId, connectionId },
     };
     return sessions.handleRequest(c.req.raw, authInfo);
   });

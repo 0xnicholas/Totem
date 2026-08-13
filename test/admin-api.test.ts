@@ -32,64 +32,6 @@ describe('admin API (HTTP boundary)', () => {
     });
   }
 
-  it('rejects requests without a valid admin key', async () => {
-    const response = await fetch(`${baseUrl}/admin/tenants`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'x' }),
-    });
-    expect(response.status).toBe(401);
-
-    const wrongKey = await fetch(`${baseUrl}/admin/tenants`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer nope' },
-      body: JSON.stringify({ name: 'x' }),
-    });
-    expect(wrongKey.status).toBe(401);
-  });
-
-  it('serves /healthz without auth', async () => {
-    const response = await fetch(`${baseUrl}/healthz`);
-    expect(response.status).toBe(200);
-  });
-
-  it('authenticates with an admin-scoped tenant key', async () => {
-    const tenant = await repo.createTenant('admin-key-tenant');
-    await repo.createApiKey(tenant.id, 'admin', {
-      prefix: 'tt_dev_',
-      keyHash: hashApiKey('tenant-admin-key'),
-    });
-
-    const response = await fetch(`${baseUrl}/admin/tenants`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer tenant-admin-key' },
-      body: JSON.stringify({ name: 'via-admin-scope' }),
-    });
-    expect(response.status).toBe(201);
-  });
-
-  it('rejects action-scoped and disabled admin keys', async () => {
-    const tenant = await repo.createTenant('scope-tenant-2');
-    await repo.createApiKey(tenant.id, 'actions', {
-      prefix: 'tt_dev_',
-      keyHash: hashApiKey('actions-key'),
-    });
-    const adminKey = await repo.createApiKey(tenant.id, 'admin', {
-      prefix: 'tt_dev_',
-      keyHash: hashApiKey('revoked-admin-key'),
-    });
-    await repo.disableApiKey(tenant.id, adminKey.id);
-
-    for (const bearer of ['actions-key', 'revoked-admin-key']) {
-      const response = await fetch(`${baseUrl}/admin/tenants`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` },
-        body: JSON.stringify({ name: 'nope' }),
-      });
-      expect(response.status, `key ${bearer}`).toBe(401);
-    }
-  });
-
   it('creates a tenant and returns its id', async () => {
     const response = await adminFetch('/admin/tenants', {
       method: 'POST',

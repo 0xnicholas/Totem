@@ -1,9 +1,9 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { requireAdminKey } from '../auth.js';
 import { FlowError, type OAuthFlow } from '../oauth/authorize-flow.js';
-import { generateApiKey, hashApiKey, keyPrefixForEnv } from './keys.js';
+import { generateApiKey, keyPrefixForEnv } from './keys.js';
 import {
   NotFoundError,
   type AdminRepository,
@@ -48,25 +48,13 @@ export interface AdminAppConfig {
  */
 export function createAdminApp(config: AdminAppConfig): Hono {
   const { repo } = config;
-  const adminKeyHash = createHash('sha256').update(config.adminKey).digest();
   const production = config.production ?? false;
 
   const app = new Hono();
 
-  app.use('/admin/*', async (c, next) => {
-    const header = c.req.header('authorization');
-    const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-    if (!presented) return c.json({ error: 'unauthorized' }, 401);
-    const presentedHash = createHash('sha256').update(presented).digest();
-    if (timingSafeEqual(presentedHash, adminKeyHash)) {
-      await next();
-      return;
-    }
-    // Admin-scoped tenant keys are also admin credentials (T3 amendment).
-    const adminKey = await repo.findAdminKey(hashApiKey(presented));
-    if (!adminKey) return c.json({ error: 'unauthorized' }, 401);
-    await next();
-  });
+  // All /admin routes require the bootstrap admin key or an admin-scoped
+  // tenant key — the gate lives in the auth module.
+  app.use('/admin/*', requireAdminKey({ adminKey: config.adminKey, repo }));
 
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 

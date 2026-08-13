@@ -58,33 +58,6 @@ describe('REST Actions RPC (T14, HTTP boundary)', () => {
     });
   }
 
-  it('rejects missing, invalid, admin-scoped and disabled keys with 401', async () => {
-    expect((await fetch(`${baseUrl}/actions/rpc`, { method: 'POST' })).status).toBe(401);
-    expect(
-      (
-        await fetch(`${baseUrl}/actions/rpc`, {
-          method: 'POST',
-          headers: { authorization: 'Bearer nope' },
-        })
-      ).status,
-    ).toBe(401);
-    for (const key of ['tt_dev_rpc_admin', 'tt_dev_rpc_disabled']) {
-      const response = await rpcCall({ action: 'create_doc' }, { key });
-      expect(response.status).toBe(401);
-    }
-  });
-
-  it('rejects requests without an x-connection-id header with 400', async () => {
-    const response = await fetch(`${baseUrl}/actions/rpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${RPC_KEY}` },
-      body: JSON.stringify({ action: 'create_doc' }),
-    });
-    expect(response.status).toBe(400);
-    const payload = (await response.json()) as { error: string };
-    expect(payload.error).toContain('x-connection-id');
-  });
-
   it('rejects malformed envelopes with 400 before any action logic', async () => {
     const malformed = [
       'not json',

@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
-import { hashApiKey } from '../admin/keys.js';
+import { getCaller, getConnectionId, requireConnectionId, requireTenantKey } from '../auth.js';
 import { isRecord } from '../admin/util.js';
 import type { ActionExecutor } from '../executor.js';
 import type { ActionErrorCode } from '../errors.js';
@@ -54,15 +53,9 @@ export function createRpcApp(config: RpcAppConfig): Hono {
   const { executor, keys } = config;
   const app = new Hono();
 
-  app.post('/actions/rpc', async (c) => {
-    const tenantId = await resolveTenant(c, keys);
-    if (!tenantId) return c.json({ error: 'unauthorized' }, 401);
-
-    // Same per-request connection addressing as the MCP surface.
-    const connectionId = c.req.header('x-connection-id') ?? c.req.query('x-connection-id');
-    if (!connectionId) {
-      return c.json({ error: 'missing x-connection-id (header or query param)' }, 400);
-    }
+  app.post('/actions/rpc', requireTenantKey(keys), requireConnectionId(), async (c) => {
+    const tenantId = getCaller(c).tenantId;
+    const connectionId = getConnectionId(c);
 
     const body: unknown = await c.req.json().catch(() => undefined);
     const envelope = parseEnvelope(body);
@@ -86,15 +79,6 @@ export function createRpcApp(config: RpcAppConfig): Hono {
   });
 
   return app;
-}
-
-/** Authenticates a tenant actions-scope key; undefined → 401 (like MCP/discovery). */
-async function resolveTenant(c: Context, keys: MCPKeyStore): Promise<string | undefined> {
-  const header = c.req.header('authorization');
-  const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-  if (!presented) return undefined;
-  const resolved = await keys.findKey(hashApiKey(presented));
-  return resolved?.tenantId;
 }
 
 /**

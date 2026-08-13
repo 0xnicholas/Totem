@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
+import { requireTenantKey } from '../auth.js';
 import type { Action, ActionDeprecation, ProviderToken } from '../action.js';
-import { hashApiKey } from '../admin/keys.js';
 import { isRecord } from '../admin/util.js';
 import type { MCPKeyStore } from '../mcp/key-store.js';
 
@@ -35,21 +34,11 @@ export function createDiscoveryApp(config: DiscoveryAppConfig): Hono {
     .sort((a, b) => a.name.localeCompare(b.name));
   const app = new Hono();
 
-  async function authenticated(c: Context): Promise<boolean> {
-    const header = c.req.header('authorization');
-    const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-    if (!presented) return false;
-    const resolved = await keys.findKey(hashApiKey(presented));
-    return resolved !== undefined;
-  }
-
-  app.get('/actions', async (c) => {
-    if (!(await authenticated(c))) return c.json({ error: 'unauthorized' }, 401);
+  app.get('/actions', requireTenantKey(keys), (c) => {
     return c.json({ actions: visible.map(toMetadata) });
   });
 
-  app.post('/actions/search', async (c) => {
-    if (!(await authenticated(c))) return c.json({ error: 'unauthorized' }, 401);
+  app.post('/actions/search', requireTenantKey(keys), async (c) => {
     const body: unknown = await c.req.json().catch(() => undefined);
     const query = isRecord(body) && typeof body.query === 'string' ? body.query.trim() : '';
     if (query === '') {

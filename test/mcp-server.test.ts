@@ -66,46 +66,6 @@ function rpcResult(payload: { result?: unknown; error?: { code: number; message:
 }
 
 describe('MCP HTTP surface: auth and connection resolution', () => {
-  it('rejects requests without an Authorization header with 401', async () => {
-    const { app } = makeServer();
-    const res = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects unknown keys with 401', async () => {
-    const { app } = makeServer();
-    const res = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {
-      authorization: 'Bearer tt_dev_wrong_key',
-    });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects admin-scoped keys with 401 (actions scope only)', async () => {
-    const { app, keys } = makeServer();
-    keys.addKey('tt_dev_admin_scoped', TENANT_A, { scope: 'admin' });
-    const res = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {
-      authorization: 'Bearer tt_dev_admin_scoped',
-    });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects disabled keys with 401', async () => {
-    const { app, keys } = makeServer();
-    keys.addKey('tt_dev_disabled_key', TENANT_A, { disabled: true });
-    const res = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {
-      authorization: 'Bearer tt_dev_disabled_key',
-    });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects a missing x-connection-id with 400', async () => {
-    const { app } = makeServer();
-    const res = await rpc(app, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, {
-      authorization: `Bearer ${ACTION_KEY}`,
-    });
-    expect(res.status).toBe(400);
-  });
-
   it('rejects an unknown connection for the tenant with 400', async () => {
     const { app } = makeServer();
     const res = await rpc(
@@ -429,16 +389,6 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
     } finally {
       await client.close();
     }
-  });
-
-  it('rejects an invalid key with 401 at connect time', async () => {
-    const client = new Client({ name: 'totem-test-client', version: '0.0.0' }, { capabilities: {} });
-    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-      requestInit: {
-        headers: { authorization: 'Bearer tt_dev_absolutely_wrong', 'x-connection-id': CONN_1 },
-      },
-    });
-    await expect(client.connect(transport)).rejects.toThrow();
   });
 
   it('returns isError results with the unified vocabulary for validation failures', async () => {

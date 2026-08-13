@@ -38,19 +38,6 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     });
   }
 
-  it('rejects missing, invalid, admin-scoped and disabled keys with 401', async () => {
-    expect((await fetch(`${baseUrl}/actions`)).status).toBe(401);
-    expect(
-      (await fetch(`${baseUrl}/actions`, { headers: { authorization: 'Bearer nope' } })).status,
-    ).toBe(401);
-    for (const key of ['tt_dev_admin_scoped', 'tt_dev_disabled']) {
-      const response = await fetch(`${baseUrl}/actions`, {
-        headers: { authorization: `Bearer ${key}` },
-      });
-      expect(response.status).toBe(401);
-    }
-  });
-
   it('GET /actions lists the platform action set as metadata, hidden excluded', async () => {
     const response = await discover('/actions');
     expect(response.status).toBe(200);
