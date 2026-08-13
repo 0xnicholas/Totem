@@ -1,6 +1,5 @@
 import type { ActionExecutor, ActionResult, ConnectionRecord } from '../executor.js';
-import type { AllowlistStore } from '../governance.js';
-import type { ActionEffect, ActionDeprecation } from '../action.js';
+import type { ActionEffect, ActionDeprecation, VisibleAction } from '../action.js';
 
 /** MCP tool annotations: the protocol hints about an action's consequences. */
 export interface McpToolAnnotations {
@@ -28,23 +27,16 @@ export interface McpToolDefinition {
 
 /**
  * The protocol-agnostic MCP adapter (T5): the thin view of the action layer
- * that the MCP transport hangs off. It owns the two per-(tenant, connection)
- * questions the MCP surface must answer:
- *
- * - **what tools can this caller see** — registry ∩ allowlist ∩ connector
- *   `implements` (ADR-0002 hide-don't-reject; a connection cannot use tools
- *   its connector doesn't implement, mirroring the executor's capability
- *   check);
- * - **how does a call execute** — by routing through `executeAction`, so
- *   allowlist enforcement and audit logging (T4) apply unchanged.
- *
- * All action logic lives in the executor; this adapter adds none.
+ * that the MCP transport hangs off. The tool-list question lives at Seam A
+ * (`executor.listAllowedTools` — registry ∩ allowlist ∩ connector
+ * `implements`, ADR-0002 hide-don't-reject); this adapter translates only
+ * the MCP wire format: tool definitions, effect annotations, the
+ * deprecation marker. Calls route through `executeAction`, so allowlist
+ * enforcement and audit logging (T4) apply unchanged — the adapter carries
+ * no governance data.
  */
 export class McpAdapter {
-  constructor(
-    private readonly executor: ActionExecutor,
-    private readonly allowlists: AllowlistStore,
-  ) {}
+  constructor(private readonly executor: ActionExecutor) {}
 
   /**
    * Resolves a connection for the authenticated tenant. Undefined when the
@@ -59,35 +51,15 @@ export class McpAdapter {
   }
 
   /**
-   * The tool list for a (tenant, connection): registry actions the
-   * connection's allowlist permits, its connector implements, and that are
-   * visible (ADR-0002 hide-don't-reject; the hidden rule lives once in
-   * `ActionRegistry.visibleActions()` — the executor's
-   * `listVisibleActions()` view — hidden actions are never advertised).
-   * Deprecated actions (ADR-0014) stay advertised until sunset, with the
-   * `[DEPRECATED …]` marker on the projected description only. Empty for
-   * unknown connections.
+   * The tool list for a (tenant, connection): the executor's
+   * `listAllowedTools` view, translated to MCP tool definitions —
+   * effect-derived annotations, and the ADR-0014 `[DEPRECATED …]` marker
+   * on the projected description (deprecated actions stay advertised until
+   * sunset). Empty for unknown connections.
    */
   async listTools(tenantId: string, connectionId: string): Promise<McpToolDefinition[]> {
-    const connection = await this.executor.getConnection(tenantId, connectionId);
-    if (!connection) return [];
-    const connector = this.executor.getConnector(connection.connectorId);
-    if (!connector) return [];
-    const allowed = new Set(await this.allowlists.getAllowedActions(tenantId, connectionId));
-    return this.executor
-      .listVisibleActions()
-      .filter(
-        (action) =>
-          allowed.has(action.name) && connector.manifest.implements.includes(action.name),
-      )
-      .map((action) => ({
-        name: action.name,
-        description: toolDescription(action),
-        inputSchema: action.inputSchema,
-        ...(annotationsFor(action.effects) !== undefined
-          ? { annotations: annotationsFor(action.effects) }
-          : {}),
-      }));
+    const actions = await this.executor.listAllowedTools(tenantId, connectionId);
+    return actions.map((action) => this.toToolDefinition(action));
   }
 
   /** The tool definition for one action, or undefined when it is not visible. */
@@ -96,8 +68,9 @@ export class McpAdapter {
     connectionId: string,
     actionName: string,
   ): Promise<McpToolDefinition | undefined> {
-    const tools = await this.listTools(tenantId, connectionId);
-    return tools.find((tool) => tool.name === actionName);
+    const actions = await this.executor.listAllowedTools(tenantId, connectionId);
+    const action = actions.find((candidate) => candidate.name === actionName);
+    return action === undefined ? undefined : this.toToolDefinition(action);
   }
 
   /**
@@ -107,6 +80,18 @@ export class McpAdapter {
    */
   callTool(tenantId: string, connectionId: string, actionName: string, args: unknown): Promise<ActionResult> {
     return this.executor.executeAction(tenantId, connectionId, actionName, args);
+  }
+
+  /** The MCP wire projection of one visible action (the adapter's translation step). */
+  private toToolDefinition(action: VisibleAction): McpToolDefinition {
+    return {
+      name: action.name,
+      description: toolDescription(action),
+      inputSchema: action.inputSchema,
+      ...(annotationsFor(action.effects) !== undefined
+        ? { annotations: annotationsFor(action.effects) }
+        : {}),
+    };
   }
 }
 

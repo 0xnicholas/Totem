@@ -18,7 +18,7 @@ function makeServer(initialDocs?: FakeDoc[], connector?: FakeConnector) {
   });
   const keys = new InMemoryMCPKeyStore();
   keys.addKey(ACTION_KEY, TENANT_A);
-  const adapter = new McpAdapter(harness.executor, harness.allowlists);
+  const adapter = new McpAdapter(harness.executor);
   const app = createMcpApp({ adapter, keys });
   return { ...harness, keys, app };
 }

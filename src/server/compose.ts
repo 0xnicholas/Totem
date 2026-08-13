@@ -135,7 +135,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     },
   });
   const mcpApp = createMcpApp({
-    adapter: new McpAdapter(executor, allowlists),
+    adapter: new McpAdapter(executor),
     keys: new PostgresMCPKeyStore(pool),
   });
   const discoveryApp = createDiscoveryApp({

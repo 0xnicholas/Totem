@@ -67,7 +67,7 @@ The external system a connector talks to (v1: Feishu Open Platform). The source 
 _Avoid_: Backend, third-party API, provider
 
 **Execution Boundary**:
-The single orchestration point (`executeAction`) through which every action call passes: allowlist check, schema validation, token acquisition, dispatch, audit write. The primary test seam (Seam A).
+The single orchestration point (`executeAction`) through which every action call passes: allowlist check, schema validation, token acquisition, dispatch, audit write. It also answers the tool-list question the surfaces ask (`listAllowedTools` — visible view ∩ allowlist ∩ connector `implements`, ADR-0002 hide-don't-reject), so governance data never crosses a second seam. The primary test seam (Seam A).
 _Avoid_: Service layer, use case, controller
 
 **Retryable**:

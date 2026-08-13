@@ -9,10 +9,9 @@ import type { TokenProvider } from './oauth/token-lifecycle.js';
  * this provider resolves the Connection's connector and delegates to that
  * connector's token manager (Feishu, DingTalk, …).
  *
- * Connection resolution uses the lookup's `list()` — an indexed-in-memory
- * scan of the connection set (internal-platform scale, sub-millisecond);
- * a call-site lookup by id would need a new lookup method, which no second
- * consumer has justified yet.
+ * Resolution is the lookup's by-id path (`getByConnectionId`): connection
+ * ids are globally unique (migration 001), so one indexed lookup per
+ * acquisition replaces the old full-set scan.
  */
 export class TokenRoutingProvider implements TokenProvider {
   constructor(
@@ -21,8 +20,7 @@ export class TokenRoutingProvider implements TokenProvider {
   ) {}
 
   async getValidAccessToken(connectionId: string): Promise<string> {
-    const records = await this.connections.list();
-    const record = records.find((candidate) => candidate.connectionId === connectionId);
+    const record = await this.connections.getByConnectionId(connectionId);
     if (!record) {
       throw new ActionError(
         'upstream_error',

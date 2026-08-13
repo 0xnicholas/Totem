@@ -22,14 +22,14 @@ export class PostgresConnectionStore implements ConnectionLookup {
     return row ? { tenantId, connectionId, connectorId: row.connector_id } : undefined;
   }
 
-  async list(): Promise<ConnectionRecord[]> {
-    const rows = await this.pool.query<{ id: string; tenant_id: string; connector_id: string }>(
-      'SELECT id, tenant_id, connector_id FROM connections',
-    );
-    return rows.rows.map((row) => ({
-      tenantId: row.tenant_id,
-      connectionId: row.id,
-      connectorId: row.connector_id,
-    }));
+  /** By-id lookup (ids are globally unique, migration 001) — the token-routing path. */
+  async getByConnectionId(connectionId: string): Promise<ConnectionRecord | undefined> {
+    const row = (
+      await this.pool.query<{ tenant_id: string; connector_id: string }>(
+        'SELECT tenant_id, connector_id FROM connections WHERE id = $1',
+        [connectionId],
+      )
+    ).rows[0];
+    return row ? { tenantId: row.tenant_id, connectionId, connectorId: row.connector_id } : undefined;
   }
 }

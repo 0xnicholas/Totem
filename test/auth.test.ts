@@ -52,7 +52,7 @@ describe('tenant-key auth module (through every surface)', () => {
     await repo.disableApiKey(tenant.id, revokedAdmin.id);
 
     mcpApp = createMcpApp({
-      adapter: new McpAdapter(harness.executor, harness.allowlists),
+      adapter: new McpAdapter(harness.executor),
       keys,
     });
     rpcApp = createRpcApp({ executor: harness.executor, keys });

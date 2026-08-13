@@ -75,7 +75,7 @@ describe.runIf(hasDb)('MCP server end to end (Postgres)', () => {
       allowlists: new PostgresAllowlistStore(pool),
       audit: new PostgresAuditSink(pool),
     });
-    const adapter = new McpAdapter(executor, new PostgresAllowlistStore(pool));
+    const adapter = new McpAdapter(executor);
     const app = createMcpApp({ adapter, keys: new PostgresMCPKeyStore(pool) });
     server = serve({ fetch: app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));

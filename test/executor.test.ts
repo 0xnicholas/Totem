@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ActionError, type TokenProvider } from '../src/index.js';
+import { ActionError, createActionExecutor, type TokenProvider } from '../src/index.js';
 import type { CreateDocOutput } from '../src/index.js';
+import { DOCS_ACTIONS } from '../src/actions.js';
+import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import {
   CONN_1,
   CONN_1_A,
-  FAKE_CONNECTOR_ID,
   TENANT_A,
   TENANT_B,
   makeConnector,
@@ -232,11 +233,118 @@ describe('read-only lookups for transport adapters (T5)', () => {
     await expect(executor.getConnection(TENANT_B, CONN_1)).resolves.toBeUndefined();
     await expect(executor.getConnection(TENANT_A, 'conn-nope')).resolves.toBeUndefined();
   });
+});
 
-  it('getConnector returns the connection\'s registered connector', () => {
-    const executor = makeExecutor();
-    expect(executor.getConnector(FAKE_CONNECTOR_ID)?.manifest.id).toBe(FAKE_CONNECTOR_ID);
-    expect(executor.getConnector('no-such-connector')).toBeUndefined();
+describe('listAllowedTools (the tool-list question at Seam A)', () => {
+  it('returns registry ∩ allowlist ∩ connector implements ∩ visible', async () => {
+    const { executor, allowlists } = makeHarness();
+    // Default harness: every registered action allowed; the fake connector
+    // implements all of them — the full visible view, name-sorted.
+    const all = await executor.listAllowedTools(TENANT_A, CONN_1);
+    expect(all.map((a) => a.name)).toEqual([
+      'append_doc_content',
+      'create_doc',
+      'export_doc',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
+      'get_doc_content',
+      'get_doc_metadata',
+      'move_doc',
+      'read_sheet_cells',
+      'rename_doc',
+      'search_docs',
+      'test_connection',
+      'write_sheet_cells',
+    ]);
+
+    // An allowlist subset hides the rest.
+    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
+    await expect(executor.listAllowedTools(TENANT_A, CONN_1)).resolves.toEqual([
+      expect.objectContaining({ name: 'get_doc_content' }),
+    ]);
+  });
+
+  it('limits the list to what the connection\'s connector implements', async () => {
+    // A connector implementing only create_doc, with a fully permissive
+    // allowlist: the list is still limited to what can execute.
+    const subsetConnector = makeConnector('subset', ['create_doc'], {
+      create_doc: (args) => {
+        const input = args as { title: string };
+        return { doc_id: 'doc-1', title: input.title };
+      },
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(
+      TENANT_A,
+      CONN_1,
+      DOCS_ACTIONS.map((a) => a.name),
+    );
+    const executor = createActionExecutor({
+      actions: DOCS_ACTIONS,
+      connectors: [subsetConnector],
+      connections: [{ ...CONN_1_A, connectorId: 'subset' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    await expect(executor.listAllowedTools(TENANT_A, CONN_1)).resolves.toEqual([
+      expect.objectContaining({ name: 'create_doc' }),
+    ]);
+  });
+
+  it('returns [] for an empty allowlist (fail-closed)', async () => {
+    const { executor, allowlists } = makeHarness();
+    allowlists.setAllowed(TENANT_A, CONN_1, []);
+    await expect(executor.listAllowedTools(TENANT_A, CONN_1)).resolves.toEqual([]);
+  });
+
+  it('returns [] for unknown connections and unknown tenants', async () => {
+    const { executor } = makeHarness();
+    await expect(executor.listAllowedTools(TENANT_A, 'conn-unknown')).resolves.toEqual([]);
+    await expect(executor.listAllowedTools(TENANT_B, CONN_1)).resolves.toEqual([]);
+  });
+
+  it('never lists hidden actions, which remain executable (T10)', async () => {
+    const hiddenAction = {
+      name: 'platform_internal',
+      description: 'Platform internal bookkeeping.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { done: { type: 'boolean' } },
+        required: ['done'],
+      },
+      effects: 'write' as const,
+      hidden: true,
+    };
+    const connector = makeConnector('with-hidden', ['create_doc', 'platform_internal'], {
+      create_doc: (args) => {
+        const input = args as { title: string };
+        return { doc_id: 'doc-1', title: input.title };
+      },
+      platform_internal: () => ({ done: true }),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc', 'platform_internal']);
+    const executor = createActionExecutor({
+      actions: [hiddenAction, ...DOCS_ACTIONS],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'with-hidden' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+
+    await expect(executor.listAllowedTools(TENANT_A, CONN_1)).resolves.toEqual([
+      expect.objectContaining({ name: 'create_doc' }),
+    ]);
+    // Hidden is not advertised — but the executor itself still runs it.
+    const result = await executor.executeAction(TENANT_A, CONN_1, 'platform_internal', {});
+    expect(result).toMatchObject({ ok: true, output: { done: true } });
   });
 });
 

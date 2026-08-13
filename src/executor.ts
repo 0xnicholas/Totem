@@ -28,16 +28,22 @@ export interface ConnectionRecord {
  * in-memory `ConnectionStore` backs tests and the Postgres-backed store
  * backs the composed server, where the OAuth flow creates connections at
  * runtime (T6) — a static snapshot would never see them.
+ *
+ * `getByConnectionId` is the token-routing lookup: connection ids are
+ * globally unique (migration 001: `connections.id` UUID PK), so the
+ * per-execution token acquisition resolves one record by id instead of
+ * scanning the whole connection set.
  */
 export interface ConnectionLookup {
   get(tenantId: string, connectionId: string): Promise<ConnectionRecord | undefined>;
-  list(): Promise<ConnectionRecord[]>;
+  getByConnectionId(connectionId: string): Promise<ConnectionRecord | undefined>;
 }
 
 /** In-memory `ConnectionLookup` for tests and local wiring. */
 /* eslint-disable @typescript-eslint/require-await -- in-memory store: implements an async interface synchronously */
 export class ConnectionStore implements ConnectionLookup {
   private readonly connections = new Map<string, ConnectionRecord>();
+  private readonly byId = new Map<string, ConnectionRecord>();
 
   constructor(connections: ConnectionRecord[]) {
     for (const record of connections) {
@@ -47,6 +53,13 @@ export class ConnectionStore implements ConnectionLookup {
           `Duplicate connection "${record.connectionId}" for tenant "${record.tenantId}"`,
         );
       }
+      // Upstream (migration 001), connection ids are globally unique; the
+      // in-memory harness deliberately reuses an id across tenants to test
+      // tenant isolation (CONN_1_A / CONN_1_B), so this index is first-wins
+      // and never fails on duplicates.
+      if (!this.byId.has(record.connectionId)) {
+        this.byId.set(record.connectionId, record);
+      }
       this.connections.set(key, record);
     }
   }
@@ -55,8 +68,8 @@ export class ConnectionStore implements ConnectionLookup {
     return this.connections.get(connectionKey(tenantId, connectionId));
   }
 
-  async list(): Promise<ConnectionRecord[]> {
-    return [...this.connections.values()];
+  async getByConnectionId(connectionId: string): Promise<ConnectionRecord | undefined> {
+    return this.byId.get(connectionId);
   }
 }
 
@@ -368,17 +381,37 @@ export class ActionExecutor {
   }
 
   /**
+   * The tool-list question at Seam A: the actions a
+   * connection's agent may see — the registry's visible view ∩ the
+   * connection's allowlist ∩ its connector's `implements` (ADR-0002
+   * hide-don't-reject). Empty for unknown connections and unregistered
+   * connectors; hidden actions never appear (they stay executable through
+   * `executeAction`). The platform-level `VisibleAction` shape, so
+   * surfaces translate only their wire formats — governance
+   * data never crosses a second seam.
+   */
+  async listAllowedTools(tenantId: string, connectionId: string): Promise<VisibleAction[]> {
+    const connection = await this.connections.get(tenantId, connectionId);
+    if (!connection) return [];
+    const connector = this.registry.getConnector(connection.connectorId);
+    // Guaranteed by the constructor wiring check; defensive for direct misuse.
+    if (!connector) return [];
+    const allowed = new Set(await this.allowlists.getAllowedActions(tenantId, connectionId));
+    return this.registry
+      .visibleActions()
+      .filter(
+        (action) =>
+          allowed.has(action.name) && connector.manifest.implements.includes(action.name),
+      );
+  }
+
+  /**
    * Read-only connection resolution (tenant-isolated), for transport
    * adapters that must resolve the caller's connection before listing
    * tools (ADR-0002).
    */
   async getConnection(tenantId: string, connectionId: string): Promise<ConnectionRecord | undefined> {
     return this.connections.get(tenantId, connectionId);
-  }
-
-  /** Read-only connector lookup, for transport adapters (manifest reads). */
-  getConnector(id: string): IConnector | undefined {
-    return this.registry.getConnector(id);
   }
 }
 

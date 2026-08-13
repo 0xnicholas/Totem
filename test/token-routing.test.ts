@@ -10,6 +10,38 @@ const FEISHU_CONN = 'conn-feishu';
 const DINGTALK_CONN = 'conn-dingtalk';
 
 /**
+ * The by-id lookup seam: connection ids are globally unique (migration 001:
+ * `connections.id` UUID PK), so the token routing path resolves one record
+ * by id instead of scanning the whole connection set per acquisition.
+ */
+describe('ConnectionStore.getByConnectionId', () => {
+  it('resolves a connection by its globally unique id', async () => {
+    const store = new ConnectionStore([
+      { tenantId: TENANT, connectionId: FEISHU_CONN, connectorId: 'feishu_docs' },
+      { tenantId: 'another-tenant', connectionId: DINGTALK_CONN, connectorId: 'dingtalk_docs' },
+    ]);
+
+    await expect(store.getByConnectionId(DINGTALK_CONN)).resolves.toEqual({
+      tenantId: 'another-tenant',
+      connectionId: DINGTALK_CONN,
+      connectorId: 'dingtalk_docs',
+    });
+    await expect(store.getByConnectionId(FEISHU_CONN)).resolves.toEqual({
+      tenantId: TENANT,
+      connectionId: FEISHU_CONN,
+      connectorId: 'feishu_docs',
+    });
+  });
+
+  it('returns undefined for an unknown id', async () => {
+    const store = new ConnectionStore([
+      { tenantId: TENANT, connectionId: FEISHU_CONN, connectorId: 'feishu_docs' },
+    ]);
+    await expect(store.getByConnectionId('no-such-conn')).resolves.toBeUndefined();
+  });
+});
+
+/**
  * The composition-root token routing (T17a AC-3): one TokenProvider seam
  * for the executor, dispatching per Connection by connector id — Feishu
  * and DingTalk connections each reach their own token manager.

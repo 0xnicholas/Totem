@@ -1181,7 +1181,7 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
       'write_sheet_cells',
       'export_doc',
     ]);
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
     const tools = await adapter.listTools(TENANT, DINGTALK_CONN);
     const names = tools.map((tool) => tool.name).sort();
     // T18a: the two sheet Actions now join implements ∩ allowlist.

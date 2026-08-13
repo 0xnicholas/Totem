@@ -14,84 +14,17 @@ import {
 
 /**
  * The MCP adapter (T5): the thin protocol-agnostic view of the action layer
- * that the MCP transport hangs off. Tool listing is registry ∩ allowlist ∩
- * connector implements (ADR-0002 hide-don't-reject); calls route through
- * executeAction, so allowlist + audit (T4) apply unchanged.
+ * that the MCP transport hangs off. The tool-list question lives at Seam A
+ * (ADR-0002 hide-don't-reject: `executor.listAllowedTools` — registry ∩
+ * allowlist ∩ connector implements ∩ visible), so this adapter translates
+ * only the MCP wire format: tool definitions, annotations, the deprecation
+ * marker. Calls route through executeAction, so allowlist + audit (T4)
+ * apply unchanged.
  */
 describe('McpAdapter', () => {
-  it('lists tools as the intersection of registry, allowlist and connector implements', async () => {
-    const { executor, allowlists } = makeHarness();
-    const adapter = new McpAdapter(executor, allowlists);
-
-    // Default harness allowlist permits every registered action, and the
-    // fake connector implements all of them: the full registry is exposed,
-    // name-sorted (the registry's visible view — ADR-0002's filter now
-    // starts from ActionRegistry.visibleActions()).
-    const all = await adapter.listTools(TENANT_A, CONN_1);
-    expect(all.map((t) => t.name)).toEqual([
-      'append_doc_content',
-      'create_doc',
-      'export_doc',
-      'feishu_read_bitable_records',
-      'feishu_write_bitable_records',
-      'get_doc_content',
-      'get_doc_metadata',
-      'move_doc',
-      'read_sheet_cells',
-      'rename_doc',
-      'search_docs',
-      'test_connection',
-      'write_sheet_cells',
-    ]);
-    const createDoc = all.find((t) => t.name === 'create_doc');
-    expect(createDoc?.description).toBeTruthy();
-    expect(createDoc?.inputSchema).toMatchObject({ type: 'object' });
-
-    // An allowlist subset hides the rest — the agent never sees tools it
-    // cannot use.
-    allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
-    await expect(adapter.listTools(TENANT_A, CONN_1)).resolves.toEqual([
-      expect.objectContaining({ name: 'get_doc_content' }),
-    ]);
-  });
-
-  it('hides actions the connection\'s connector does not implement', async () => {
-    // A connector implementing only create_doc, with a fully permissive
-    // allowlist: the tool list is still limited to what can execute.
-    const subsetConnector = makeConnector('subset', ['create_doc'], {
-      create_doc: (args) => {
-        const input = args as { title: string };
-        return { doc_id: 'doc-1', title: input.title, url: 'https://fake.totem.local/docs/doc-1' };
-      },
-    });
-    const allowlists = new InMemoryAllowlistStore();
-    allowlists.setAllowed(
-      TENANT_A,
-      CONN_1,
-      DOCS_ACTIONS.map((a) => a.name),
-    );
-    const executor = createActionExecutor({
-      actions: DOCS_ACTIONS,
-      connectors: [subsetConnector],
-      connections: [{ ...CONN_1_A, connectorId: 'subset' }],
-      allowlists,
-      audit: new InMemoryAuditSink(),
-    });
-    const adapter = new McpAdapter(executor, allowlists);
-    const tools = await adapter.listTools(TENANT_A, CONN_1);
-    expect(tools.map((t) => t.name)).toEqual(['create_doc']);
-  });
-
-  it('hides every tool when the allowlist is empty (fail-closed)', async () => {
-    const { executor, allowlists } = makeHarness();
-    allowlists.setAllowed(TENANT_A, CONN_1, []);
-    const adapter = new McpAdapter(executor, allowlists);
-    await expect(adapter.listTools(TENANT_A, CONN_1)).resolves.toEqual([]);
-  });
-
   it('annotates tools from the action effects class (T10)', async () => {
-    const { executor, allowlists } = makeHarness();
-    const adapter = new McpAdapter(executor, allowlists);
+    const { executor } = makeHarness();
+    const adapter = new McpAdapter(executor);
 
     const tools = await adapter.listTools(TENANT_A, CONN_1);
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
@@ -136,7 +69,7 @@ describe('McpAdapter', () => {
       allowlists,
       audit: new InMemoryAuditSink(),
     });
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     const tools = await adapter.listTools(TENANT_A, CONN_1);
     expect(tools).toEqual([
@@ -144,56 +77,10 @@ describe('McpAdapter', () => {
     ]);
   });
 
-  it('never advertises hidden actions, which remain executable (T10)', async () => {
-    const hiddenAction = {
-      name: 'platform_internal',
-      description: 'Platform internal bookkeeping.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-        required: [],
-      },
-      outputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: { done: { type: 'boolean' } },
-        required: ['done'],
-      },
-      effects: 'write' as const,
-      hidden: true,
-    };
-    const connector = makeConnector('with-hidden', ['create_doc', 'platform_internal'], {
-      create_doc: (args) => {
-        const input = args as { title: string };
-        return { doc_id: 'doc-1', title: input.title };
-      },
-      platform_internal: () => ({ done: true }),
-    });
-    const allowlists = new InMemoryAllowlistStore();
-    allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc', 'platform_internal']);
-    const executor = createActionExecutor({
-      actions: [hiddenAction, ...DOCS_ACTIONS],
-      connectors: [connector],
-      connections: [{ ...CONN_1_A, connectorId: 'with-hidden' }],
-      allowlists,
-      audit: new InMemoryAuditSink(),
-    });
-    const adapter = new McpAdapter(executor, allowlists);
-
-    const tools = await adapter.listTools(TENANT_A, CONN_1);
-    expect(tools.map((t) => t.name)).toEqual(['create_doc']);
-    // Not visible and not callable over MCP — a stale client calling it is
-    // invalid params, but the executor itself still runs it.
-    await expect(adapter.getTool(TENANT_A, CONN_1, 'platform_internal')).resolves.toBeUndefined();
-    const result = await executor.executeAction(TENANT_A, CONN_1, 'platform_internal', {});
-    expect(result).toMatchObject({ ok: true, output: { done: true } });
-  });
-
   it('isolates tool lists per (tenant, connection)', async () => {
     const { executor, allowlists } = makeHarness();
     allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc']);
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     // Same connection id under another tenant does not exist.
     await expect(adapter.listTools(TENANT_B, CONN_1)).resolves.toEqual([]);
@@ -205,7 +92,7 @@ describe('McpAdapter', () => {
   it('getTool returns the definition only for visible tools', async () => {
     const { executor, allowlists } = makeHarness();
     allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc']);
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     await expect(adapter.getTool(TENANT_A, CONN_1, 'create_doc')).resolves.toMatchObject({
       name: 'create_doc',
@@ -215,8 +102,8 @@ describe('McpAdapter', () => {
   });
 
   it('callTool routes through executeAction: success writes a source-mcp audit row', async () => {
-    const { executor, allowlists, audit } = makeHarness();
-    const adapter = new McpAdapter(executor, allowlists);
+    const { executor, audit } = makeHarness();
+    const adapter = new McpAdapter(executor);
 
     const result = await adapter.callTool(TENANT_A, CONN_1, 'create_doc', { title: 'MCP draft' });
     expect(result.ok).toBe(true);
@@ -238,7 +125,7 @@ describe('McpAdapter', () => {
   it('callTool preserves the unified vocabulary when the allowlist denies (defense in depth)', async () => {
     const { executor, allowlists, audit } = makeHarness();
     allowlists.setAllowed(TENANT_A, CONN_1, ['get_doc_content']);
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     const result = await adapter.callTool(TENANT_A, CONN_1, 'create_doc', { title: 'nope' });
     expect(result).toMatchObject({ ok: false, error: { code: 'forbidden', retryable: false } });
@@ -246,8 +133,8 @@ describe('McpAdapter', () => {
   });
 
   it('callTool surfaces validation errors with details', async () => {
-    const { executor, allowlists } = makeHarness();
-    const adapter = new McpAdapter(executor, allowlists);
+    const { executor } = makeHarness();
+    const adapter = new McpAdapter(executor);
 
     const result = await adapter.callTool(TENANT_A, CONN_1, 'create_doc', {});
     expect(result).toMatchObject({ ok: false, error: { code: 'validation_error' } });
@@ -257,8 +144,8 @@ describe('McpAdapter', () => {
   });
 
   it('callTool on an unknown connection fails without an audit row (FK boundary)', async () => {
-    const { executor, allowlists, audit } = makeHarness();
-    const adapter = new McpAdapter(executor, allowlists);
+    const { executor, audit } = makeHarness();
+    const adapter = new McpAdapter(executor);
 
     const result = await adapter.callTool(TENANT_A, 'conn-unknown', 'create_doc', { title: 'x' });
     expect(result).toMatchObject({ ok: false, error: { code: 'not_found' } });
@@ -290,7 +177,7 @@ describe('McpAdapter', () => {
       allowlists,
       audit: new InMemoryAuditSink(),
     });
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     const marker = '[DEPRECATED — use export_doc, sunset 2026-09-01]';
     const tools = await adapter.listTools(TENANT_A, CONN_1);
@@ -362,7 +249,7 @@ describe('McpAdapter', () => {
       allowlists,
       audit: new InMemoryAuditSink(),
     });
-    const adapter = new McpAdapter(executor, allowlists);
+    const adapter = new McpAdapter(executor);
 
     const tools = await adapter.listTools(TENANT_A, CONN_1);
     expect(tools.find((t) => t.name === 'old_search')?.description).toBe(
