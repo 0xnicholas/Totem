@@ -43,6 +43,8 @@ exact is pre-recorded there; `^`/`~` rejected).
 
 `Action` gains `deprecated?: { replacement?: string; sunset?: string (ISO
 date); note?: string }`. Declaring a `replacement` makes `sunset` required.
+Both invariants are enforced at registration (T19b): `sunset` must be a
+`YYYY-MM-DD` calendar date.
 
 - Until sunset, a deprecated action stays advertised and stays executable —
   hiding it would silently break existing allowlists.

@@ -8,7 +8,7 @@ import { createDiscoveryApp } from '../src/rest/discovery.js';
 import type { Action } from '../src/action.js';
 import { InMemoryMCPKeyStore } from '../src/testing/memory-key-store.js';
 import { PostgresMCPKeyStore } from '../src/mcp/pg-key-store.js';
-import { PLATFORM_ACTIONS } from './fixtures.js';
+import { EXPORT_DEPRECATION, PLATFORM_ACTIONS, makeDeprecatedAction } from './fixtures.js';
 
 const DISCOVERY_KEY = 'tt_dev_discovery_key';
 
@@ -105,19 +105,8 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
   });
 
   it('GET /actions exposes deprecated when present and omits it when absent', async () => {
-    const deprecation = {
-      replacement: 'export_doc',
-      sunset: '2026-09-01',
-      note: 'Migrate at leisure.',
-    };
-    const deprecated: Action = {
-      name: 'legacy_export',
-      description: 'The old export shape.',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      effects: 'read',
-      deprecated: deprecation,
-    };
+    const deprecation = { ...EXPORT_DEPRECATION, note: 'Migrate at leisure.' };
+    const deprecated = makeDeprecatedAction({ deprecated: deprecation });
     const keys = new InMemoryMCPKeyStore();
     keys.addKey('tt_dev_deprecated_test', 'tenant-a');
     const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, deprecated], keys });
@@ -141,14 +130,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
   });
 
   it('POST /actions/search carries deprecated metadata like the list endpoint', async () => {
-    const deprecated: Action = {
-      name: 'legacy_export',
-      description: 'The old export shape.',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      effects: 'read',
-      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
-    };
+    const deprecated = makeDeprecatedAction();
     const keys = new InMemoryMCPKeyStore();
     keys.addKey('tt_dev_deprecated_search', 'tenant-a');
     const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, deprecated], keys });
@@ -166,7 +148,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(body.actions).toHaveLength(1);
     expect(body.actions[0]).toMatchObject({
       name: 'legacy_export',
-      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
+      deprecated: EXPORT_DEPRECATION,
     });
   });
 
@@ -228,13 +210,15 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
       'feishu_write_bitable_records',
       'get_doc_metadata',
     ]);
-    for (const action of nativeBody.actions) {
-      if (action.name.startsWith('feishu_')) {
-        expect(action).toHaveProperty('provider', 'feishu');
-      } else {
-        expect(action).not.toHaveProperty('provider');
-      }
-    }
+    expect(
+      nativeBody.actions.find((a) => a.name === 'feishu_read_bitable_records'),
+    ).toHaveProperty('provider', 'feishu');
+    expect(
+      nativeBody.actions.find((a) => a.name === 'feishu_write_bitable_records'),
+    ).toHaveProperty('provider', 'feishu');
+    expect(nativeBody.actions.find((a) => a.name === 'get_doc_metadata')).not.toHaveProperty(
+      'provider',
+    );
 
     // Canonical matches omit the key entirely.
     const canonical = await discover('/actions/search', {

@@ -126,11 +126,14 @@ function toolDescription(action: {
 }): string {
   const { deprecated } = action;
   if (deprecated === undefined) return action.description;
-  const parts: string[] = [];
-  if (deprecated.replacement !== undefined) parts.push(`use ${deprecated.replacement}`);
-  if (deprecated.sunset !== undefined) parts.push(`sunset ${deprecated.sunset}`);
-  const marker = parts.length > 0 ? `[DEPRECATED — ${parts.join(', ')}]` : '[DEPRECATED]';
-  return `${marker} ${action.description}`;
+  if (deprecated.replacement !== undefined) {
+    // Registration guarantees a sunset accompanies a replacement (ADR-0014).
+    return `[DEPRECATED — use ${deprecated.replacement}, sunset ${deprecated.sunset}] ${action.description}`;
+  }
+  if (deprecated.sunset !== undefined) {
+    return `[DEPRECATED — sunset ${deprecated.sunset}] ${action.description}`;
+  }
+  return `[DEPRECATED] ${action.description}`;
 }
 
 /**

@@ -8,7 +8,9 @@ import {
   EMPTY_INPUT_SCHEMA,
   EMPTY_OUTPUT_SCHEMA,
   PLATFORM_ACTIONS,
+  EXPORT_DEPRECATION,
   makeConnector,
+  makeDeprecatedAction,
   makeExecutor,
 } from './fixtures.js';
 
@@ -22,17 +24,6 @@ function providerAction(name: string, provider: string | undefined): Action {
     // Deliberately outside the closed union in some cases: the registry,
     // not the type system, is the runtime guard here.
     provider: provider as Action['provider'],
-  };
-}
-
-function deprecatedAction(deprecated: Action['deprecated']): Action {
-  return {
-    name: 'legacy_export',
-    description: 'The old export shape, superseded by export_doc.',
-    inputSchema: EMPTY_INPUT_SCHEMA,
-    outputSchema: EMPTY_OUTPUT_SCHEMA,
-    effects: 'read',
-    deprecated,
   };
 }
 
@@ -144,11 +135,11 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
 
 describe('action registry (deprecation, ADR-0014)', () => {
   it('accepts a deprecation with replacement and sunset', () => {
-    const deprecated = deprecatedAction({ replacement: 'export_doc', sunset: '2026-09-01' });
+    const deprecated = makeDeprecatedAction();
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, deprecated] });
 
     const registered = executor.listActions().find((a) => a.name === 'legacy_export');
-    expect(registered?.deprecated).toEqual({ replacement: 'export_doc', sunset: '2026-09-01' });
+    expect(registered?.deprecated).toEqual(EXPORT_DEPRECATION);
   });
 
   it('accepts marker-only variants (sunset without replacement, note without either)', () => {
@@ -157,7 +148,7 @@ describe('action registry (deprecation, ADR-0014)', () => {
       { note: 'Prefer export_doc; removal per the execution contract (ADR-0014 §2).' },
     ]) {
       const executor = makeExecutor({
-        actions: [...PLATFORM_ACTIONS, deprecatedAction(deprecated)],
+        actions: [...PLATFORM_ACTIONS, makeDeprecatedAction({ deprecated })],
       });
       const registered = executor.listActions().find((a) => a.name === 'legacy_export');
       expect(registered?.deprecated).toEqual(deprecated);
@@ -167,7 +158,9 @@ describe('action registry (deprecation, ADR-0014)', () => {
   it('accepts a deprecation whose replacement is not yet registered (no referential-integrity check)', () => {
     // Spec story 18: deprecation may precede the successor's landing, so
     // the registry must not require the replacement action to exist.
-    const deprecated = deprecatedAction({ replacement: 'export_doc_v2', sunset: '2026-10-01' });
+    const deprecated = makeDeprecatedAction({
+      deprecated: { replacement: 'export_doc_v2', sunset: '2026-10-01' },
+    });
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, deprecated] });
 
     const registered = executor.listActions().find((a) => a.name === 'legacy_export');
@@ -176,11 +169,20 @@ describe('action registry (deprecation, ADR-0014)', () => {
   });
 
   it('rejects a replacement without a sunset', () => {
-    const bad = deprecatedAction({ replacement: 'export_doc' });
+    const bad = makeDeprecatedAction({ deprecated: { replacement: 'export_doc' } });
 
     expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] })).toThrow(
       /Deprecated action "legacy_export" declares a replacement without a sunset \(ADR-0014\)/,
     );
+  });
+
+  it('rejects a sunset that is not an ISO calendar date', () => {
+    for (const sunset of ['soon', '2026-13-01', '2026-02-31', '2026-9-1']) {
+      const bad = makeDeprecatedAction({ deprecated: { sunset } });
+      expect(() => makeExecutor({ actions: [...DOCS_ACTIONS, bad] }), sunset).toThrow(
+        /not an ISO calendar date/,
+      );
+    }
   });
 });
 

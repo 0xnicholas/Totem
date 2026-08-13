@@ -8,6 +8,7 @@ import {
   TENANT_A,
   TENANT_B,
   makeConnector,
+  makeDeprecatedAction,
   makeHarness,
 } from './fixtures.js';
 
@@ -263,24 +264,14 @@ describe('McpAdapter', () => {
   });
 
   it('prefixes a deprecated tool description with the ADR-0014 marker; the stored description stays clean', async () => {
-    const deprecated = {
-      name: 'legacy_export',
-      description: 'The old export shape.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-        required: [],
-      },
+    const deprecated = makeDeprecatedAction({
       outputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: { doc_id: { type: 'string' } },
         required: ['doc_id'],
       },
-      effects: 'read' as const,
-      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
-    };
+    });
     const connector = makeConnector('deprecation', ['create_doc', 'legacy_export'], {
       create_doc: (args) => {
         const input = args as { title: string };

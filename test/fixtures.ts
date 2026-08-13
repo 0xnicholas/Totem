@@ -1,4 +1,4 @@
-import type { Action, ActionExecutor, ActionHandler, ConnectionRecord, IConnector, ProviderToken } from '../src/index.js';
+import type { Action, ActionDeprecation, ActionExecutor, ActionHandler, ConnectionRecord, IConnector, ProviderToken } from '../src/index.js';
 import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink, DefenderPolicyProvider } from '../src/governance.js';
 import type { TokenProvider } from '../src/feishu/token-manager.js';
@@ -101,6 +101,29 @@ export const EMPTY_OUTPUT_SCHEMA = {
   properties: {},
   required: [],
 } as const;
+
+/** Canonical deprecation record for the `legacy_export` fixture (ADR-0014). */
+export const EXPORT_DEPRECATION: ActionDeprecation = {
+  replacement: 'export_doc',
+  sunset: '2026-09-01',
+};
+
+/**
+ * A deprecated fixture action. The defaults serve registry/discovery/adapter
+ * tests; seams that validate I/O (executor) override `outputSchema` to match
+ * their handler's return shape.
+ */
+export function makeDeprecatedAction(overrides: Partial<Action> = {}): Action {
+  return {
+    name: 'legacy_export',
+    description: 'The old export shape.',
+    inputSchema: EMPTY_INPUT_SCHEMA,
+    outputSchema: EMPTY_OUTPUT_SCHEMA,
+    effects: 'read',
+    deprecated: EXPORT_DEPRECATION,
+    ...overrides,
+  };
+}
 
 /** Minimal connector factory for registry-convention tests. */
 export function makeConnector(

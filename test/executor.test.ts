@@ -8,6 +8,7 @@ import {
   TENANT_A,
   TENANT_B,
   makeConnector,
+  makeDeprecatedAction,
   makeExecutor,
   makeHarness,
   makeMisbehavingExecutor,
@@ -329,24 +330,14 @@ describe('deprecated actions at the execution boundary (ADR-0014)', () => {
   // sunset a deprecated action stays advertised and stays executable. These
   // pins make a future branch that would reject/reroute deprecated actions
   // fail loudly.
-  const deprecated = {
-    name: 'legacy_export',
-    description: 'The old export shape.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {},
-      required: [],
-    },
+  const deprecated = makeDeprecatedAction({
     outputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: { done: { type: 'boolean' } },
       required: ['done'],
     },
-    effects: 'read' as const,
-    deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
-  };
+  });
   const sibling = { ...deprecated, name: 'export_probe', deprecated: undefined };
 
   function deprecationHarness() {

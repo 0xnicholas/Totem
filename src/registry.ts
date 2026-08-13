@@ -106,6 +106,12 @@ export class ActionRegistry {
         `Deprecated action "${name}" declares a replacement without a sunset (ADR-0014)`,
       );
     }
+    if (deprecated?.sunset !== undefined && !isIsoCalendarDate(deprecated.sunset)) {
+      throw new Error(
+        `Deprecated action "${name}" has a sunset that is not an ISO calendar date ` +
+          `(YYYY-MM-DD): "${deprecated.sunset}" (ADR-0014)`,
+      );
+    }
   }
 
   /**
@@ -193,6 +199,22 @@ export class ActionRegistry {
     if (validate(value)) return [];
     return (validate.errors ?? []).map(toIssue);
   }
+}
+
+/**
+ * Strict `YYYY-MM-DD` calendar-date check for deprecation sunsets (ADR-0014)
+ * — `Date.parse` alone is lenient and would roll 2026-02-31 over to March.
+ */
+function isIsoCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
 }
 
 /** Maps an Ajv error to an agent-friendly issue, pointing at the offending property. */

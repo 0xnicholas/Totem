@@ -61,7 +61,8 @@
                                 "type": "string"
                               },
                               "sunset": {
-                                "type": "string"
+                                "type": "string",
+                                "format": "date"
                               },
                               "note": {
                                 "type": "string"
@@ -160,7 +161,8 @@
                                 "type": "string"
                               },
                               "sunset": {
-                                "type": "string"
+                                "type": "string",
+                                "format": "date"
                               },
                               "note": {
                                 "type": "string"

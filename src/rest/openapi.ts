@@ -121,7 +121,7 @@ const actionMetadataSchema = {
       additionalProperties: false,
       properties: {
         replacement: { type: 'string' },
-        sunset: { type: 'string' },
+        sunset: { type: 'string', format: 'date' },
         note: { type: 'string' },
       },
     },

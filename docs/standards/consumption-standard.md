@@ -262,7 +262,8 @@ ADR-0010);目录无版本号,pin 机制 v2。
 ### 11.3 deprecation(ADR-0014,超越 StackOne——其无动作级政策)
 
 - `deprecated: { replacement?, sunset?, note? }`;有 `replacement` 必有 `sunset`
-  (注册期强制,T19b;replacement 无需已注册——废除可先于后继动作落地);
+  (✅ 注册期强制,T19b:replacement ⇒ sunset 必填、`sunset` 须为 `YYYY-MM-DD` 日历日期;
+  replacement 无需已注册——废除可先于后继动作落地);
 - sunset 前:动作照常广告、照常执行;MCP 工具描述自动加 `[DEPRECATED …]` 前缀
   (✅,T19b),注册表的存储描述保持干净——接入方应在 agent 侧把该前缀视为迁移指令;
 - sunset 到点:移除,按 major 流程;
