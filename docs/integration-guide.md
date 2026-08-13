@@ -281,7 +281,7 @@ curl -sS -X POST "$TOTEM_URL/actions/search" \
 | `move_doc` | write | 移动到文件夹 |
 | `export_doc` | write | 导出(docx/pdf/xlsx/csv/base/pptx;**无 markdown**) |
 | `read_sheet_cells` / `write_sheet_cells` | read / write | 表格单元格读写 |
-| `read_bitable_records` / `write_bitable_records` | read / write | Bitable 记录读写 |
+| `feishu_read_bitable_records` / `feishu_write_bitable_records` | read / write | Bitable 记录读写 |
 | `test_connection` | read | 连通性自检 |
 
 精确的输入/输出 schema 以 `tools/list`(MCP)或 `GET {TOTEM_URL}/openapi.json`

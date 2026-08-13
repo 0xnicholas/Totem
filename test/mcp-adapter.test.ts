@@ -36,8 +36,8 @@ describe('McpAdapter', () => {
       'export_doc',
       'read_sheet_cells',
       'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
       'test_connection',
     ]);
     const createDoc = all.find((t) => t.name === 'create_doc');

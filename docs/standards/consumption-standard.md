@@ -19,7 +19,8 @@
 | MCP | MCP 开放协议(Streamable HTTP) | ✅ 工具列表按 allowlist 过滤(隐藏而非拒绝) |
 | 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 语义 v2 |
 | 机器可读契约 | OpenAPI 3.1(生成于注册表,非手写) | ✅ `GET {TOTEM_URL}/openapi.json`(无认证)+ CI 漂移门禁 |
-| 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §9 |
+| 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §8 |
+| 目录演进 | StackOne connector semver + 破坏性变更分级(无动作级 deprecation) | 🚧 分级表 + deprecation + 覆盖缺口信号(ADR-0014),见 §11 |
 
 一条总则(照搬 StackOne 架构结论,ADR-0008):**注册表是唯一事实源,REST 与
 MCP 都是它的投影**——接入方在任何消费面上看到的行为(参数、错误、输出)必然一致,
@@ -112,7 +113,7 @@ totem 自定枚举——这就是 totem 的枚举):
 
 | 端点 | 用途 | 认证 |
 |---|---|---|
-| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`),hidden 动作不出现 | actions key(Bearer),无需 connection |
+| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`,🚧 +`provider`/`deprecated` 见 §11),hidden 动作不出现 | actions key(Bearer),无需 connection |
 | `POST {TOTEM_URL}/actions/search` | 文本搜索,body `{query}`(大小写不敏感子串匹配;⚠️ StackOne 是语义搜索,BM25+embedding,totem v2) | 同上 |
 | `GET {TOTEM_URL}/openapi.json` | 机器可读契约(OpenAPI 3.1):每个动作 `components.schemas.<action>_input/_output` + `ActionError` 错误组件 | **无认证**(平台级契约元数据,非租户数据) |
 
@@ -215,6 +216,8 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 | Webhooks | 生产可用 | v2 预记录(§8);签名契约同构,header 为 `x-totem-signature` | 🚧 |
 | A2A / Agent SDK | 开放协议 + SDK | 不提供(内部平台,研究已排除) | — |
 | 连接器版本化 | semver pin per profile | 约定已记录,机制 v2 | 🚧 |
+| provider-native 动作 | `custom` actionType,裸上游输出 | `<provider>_` 前缀 + curated 输出(平台惯例不破,ADR-0013) | ⚠️ 有意更强 |
+| 动作级 deprecation | 无政策(pin 即安全网) | `deprecated` 字段 + sunset + MCP 描述警告(ADR-0014) | ✅ 超越 |
 
 ## 10. 接入方对照调整指南(怎么用本标准)
 
@@ -231,8 +234,48 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 4. **迁移承诺**:平台在 v2 落地 §7/§8 时,已按本标准实现的接入方**零改动**
    或仅改入口;契约变更走 ADR 流程并在此文档同步,不静默修改。
 
+## 11. 目录演进政策(🚧 契约定死,registry 机制落地中;ADR-0013 / ADR-0014)
+
+动作目录会生长(provider-native 动作、晋升、废除),本节是接入方的稳定性契约。
+
+### 11.1 canonical 与 provider-native 动作(ADR-0013)
+
+- **canonical 动作**:裸名(`create_doc`),任何 connector 均可实现;
+- **provider-native 动作**:`<provider>_` 前缀名(`feishu_read_bitable_records`),
+  只有该 provider 的 connector 能实现;输出仍是 curated schema(opaque ID、统一
+  错误词表、全量校验),scope 只限制可用性与词汇,不动治理不变量;
+- agent 信号 = 名称前缀;`GET /actions` 暴露结构化 `provider` 字段(🚧);
+- 覆盖缺口 ≠ scope:canonical 动作某 provider 未实现(如 dingtalk 暂无
+  `export_doc`),只是该 provider connection 的工具列表里没有它(§6)。
+
+### 11.2 变更分级(ADR-0014)
+
+| 级别 | 变更 | 接入方 |
+|---|---|---|
+| **minor(安全)** | 新增动作(两种 scope);新增可选 input 参数 / 可选 output 字段;挂 `deprecated` flag;description 修订 | 无需动作 |
+| **major(破坏性)** | 移除 / 改名动作;移除 / 改名字段;行为变化(分页 / 过滤 / 错误语义 / 默认值);`effects` 分类变化 | 提前通告 + 迁移窗口 |
+
+major 变更一律走 issue 通告 + 逐案约定迁移窗口(当前消费方为两个互信内部项目,
+ADR-0010);目录无版本号,pin 机制 v2。
+
+### 11.3 deprecation(ADR-0014,超越 StackOne——其无动作级政策)
+
+- `deprecated: { replacement?, sunset?, note? }`;有 `replacement` 必有 `sunset`;
+- sunset 前:动作照常广告、照常执行;MCP 工具描述自动加 `[DEPRECATED …]` 前缀
+  (🚧)——接入方应在 agent 侧把该前缀视为迁移指令;
+- sunset 到点:移除,按 major 流程;
+- provider-native 晋升路径:第二 provider 长出可统一的等价能力时,**新增**
+  canonical 动作并 deprecate 旧 native 动作;native 名永不复用、永不改名。
+
+### 11.4 覆盖缺口信号(ADR-0014)
+
+- **output**:provider 给不了的可选字段 = `null`,不报错(对齐 StackOne
+  null-for-unsupported);
+- **input**:provider 兑现不了的可选参数 = `validation` 错误,**不会静默忽略**
+  (否则 agent 误以为参数已生效)。
+
 ---
 
 *标准来源:StackOne 官方文档(webhooks / platform-events / Actions RPC OpenAPI /
 MCP / A2A,研究快照见 `docs/research/`);totem 侧契约以代码 + ADR
-(0002、0005、0008、0011)为准。*
+(0002、0005、0008、0011、0013、0014)为准。*

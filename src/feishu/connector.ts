@@ -95,8 +95,8 @@ export class FeishuConnector implements IConnector {
       'export_doc',
       'read_sheet_cells',
       'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
     ],
   };
 
@@ -342,7 +342,7 @@ export class FeishuConnector implements IConnector {
         return output;
       },
 
-      read_bitable_records: async (args: ReadBitableRecordsInput, ctx) => {
+      feishu_read_bitable_records: async (args: ReadBitableRecordsInput, ctx) => {
         const input = args;
         const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
         const response = await docsRequest<BitableRecordsData>(
@@ -365,7 +365,7 @@ export class FeishuConnector implements IConnector {
         return output;
       },
 
-      write_bitable_records: async (args: WriteBitableRecordsInput, ctx) => {
+      feishu_write_bitable_records: async (args: WriteBitableRecordsInput, ctx) => {
         const input = args;
         const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
         const response = await docsRequest<BitableCreateData>(

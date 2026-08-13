@@ -255,8 +255,8 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       'export_doc',
       'read_sheet_cells',
       'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
     ]);
     const issued = await client.createKey(tenantId, 'actions');
 
@@ -284,8 +284,8 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
         'export_doc',
         'read_sheet_cells',
         'write_sheet_cells',
-        'read_bitable_records',
-        'write_bitable_records',
+        'feishu_read_bitable_records',
+        'feishu_write_bitable_records',
       ]);
 
       // The call only succeeds if the TokenManager retrieved a valid token
@@ -378,7 +378,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
 
       const bitableRead = await mcpClient.callTool({
-        name: 'read_bitable_records',
+        name: 'feishu_read_bitable_records',
         arguments: { doc_id: 'e2e-bit', table_name: 'Leads' },
       });
       expect(bitableRead.structuredContent).toMatchObject({
@@ -387,7 +387,7 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
       });
 
       const bitableWrite = await mcpClient.callTool({
-        name: 'write_bitable_records',
+        name: 'feishu_write_bitable_records',
         arguments: { doc_id: 'e2e-bit', table_name: 'Leads', fields: { name: 'Grace' } },
       });
       expect(bitableWrite.isError).toBeUndefined();

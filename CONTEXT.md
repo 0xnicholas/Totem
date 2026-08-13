@@ -8,6 +8,14 @@ Totem is a multi-tenant action layer for AI agents: a curated, schema-first set 
 A platform-defined, schema-first operation (`create_doc`, `search_docs`) with a name, LLM-facing description, input schema, and output schema. The unit of agent capability and the unit of governance.
 _Avoid_: Tool, tool call, endpoint, operation
 
+**Canonical Action**:
+An Action with no provider scope — any connector may implement it, and the same name across connectors has identical schemas. The default kind; what "Action" meant before ADR-0013.
+_Avoid_: Unified action, standard action
+
+**Provider-native Action**:
+An Action scoped to one provider (`Action.provider`, ADR-0013): named `<provider>_verb_noun` (e.g. `feishu_read_bitable_records`), implementable only by that provider's connectors, with a curated provider-shaped output schema that keeps every platform invariant (opaque IDs, unified errors, validation). Enters the catalog when a capability is genuinely provider-specific; promoted by adding a new canonical Action and deprecating the native one (ADR-0014) — never by renaming.
+_Avoid_: Custom action (StackOne's `custom` actionType returns raw provider output; totem's provider-native output stays curated), connector-specific action, passthrough
+
 **Action Registry**:
 The single source of truth for action definitions. Owned by the platform; connectors declare which actions they implement.
 _Avoid_: Tool registry, action catalog

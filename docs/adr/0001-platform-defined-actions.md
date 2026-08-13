@@ -16,7 +16,7 @@ If connectors define their own actions, the registry merely collects them, and t
 - **Connectors declare what they implement.** Each connector carries a manifest: `{ id, implements: string[] }`. The same action name across connectors (v2: DingTalk, etc.) has identical input/output schemas — only the translation differs.
 - **Allowlists are configured by unified action name**, never by connector-specific names.
 - **IDs exposed to agents are unified opaque IDs.** The platform exposes `doc_id: string` (opaque); the connector translates it to system-internal tokens (Feishu docx token). v1 may trivially use the Feishu token as the opaque ID, but the contract is platform-level: the connector is responsible for parse/format.
-- **v1 action schemas do not support connector-specific extension parameters** (no `x-connector-params` escape hatch). Connector-specific needs are either mapped into unified concepts (`folder_id`) or handled in connection configuration/ctx. If the platform vocabulary genuinely cannot express something, the correct move is to upgrade the platform schema — not open a bypass.
+- **v1 action schemas do not support connector-specific extension parameters** (no `x-connector-params` escape hatch). Connector-specific needs are either mapped into unified concepts (`folder_id`) or handled in connection configuration/ctx. If the platform vocabulary genuinely cannot express something, the correct move is to upgrade the platform schema — not open a bypass. (Amended 2026-08-13: the upgrade path is now defined — ADR-0013 provider-native actions: a platform-owned, provider-scoped definition in this same registry. The no-bypass rule stands; provider-native actions keep every platform invariant.)
 
 ## Consequences
 

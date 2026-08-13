@@ -650,9 +650,9 @@ describe('FeishuConnector advanced actions (T9)', () => {
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('read_bitable_records returns field-name-based values', async () => {
+  it('feishu_read_bitable_records returns field-name-based values', async () => {
     const result = await connector.execute(
-      'read_bitable_records',
+      'feishu_read_bitable_records',
       { doc_id: 'adv-bit', table_name: 'Leads' },
       withToken(),
     );
@@ -667,9 +667,9 @@ describe('FeishuConnector advanced actions (T9)', () => {
     });
   });
 
-  it('read_bitable_records respects the limit', async () => {
+  it('feishu_read_bitable_records respects the limit', async () => {
     const result = await connector.execute(
-      'read_bitable_records',
+      'feishu_read_bitable_records',
       { doc_id: 'adv-bit', table_name: 'Leads', limit: 1 },
       withToken(),
     );
@@ -677,9 +677,9 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(items).toHaveLength(1);
   });
 
-  it('write_bitable_records creates a record and returns its id', async () => {
+  it('feishu_write_bitable_records creates a record and returns its id', async () => {
     const result = await connector.execute(
-      'write_bitable_records',
+      'feishu_write_bitable_records',
       { doc_id: 'adv-bit', table_name: 'Leads', fields: { name: 'Katherine', stage: 'new' } },
       withToken(),
     );
@@ -688,7 +688,7 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(recordId).toBeTruthy();
 
     const read = await connector.execute(
-      'read_bitable_records',
+      'feishu_read_bitable_records',
       { doc_id: 'adv-bit', table_name: 'Leads' },
       withToken(),
     );
@@ -698,7 +698,7 @@ describe('FeishuConnector advanced actions (T9)', () => {
 
   it('maps a missing bitable table to not_found', async () => {
     await expect(
-      connector.execute('read_bitable_records', { doc_id: 'adv-bit', table_name: 'Nope' }, withToken()),
+      connector.execute('feishu_read_bitable_records', { doc_id: 'adv-bit', table_name: 'Nope' }, withToken()),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 
@@ -779,8 +779,8 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
       'export_doc',
       'read_sheet_cells',
       'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
     ]);
 
     const exported = await executor.executeAction(TENANT, CONNECTION, 'export_doc', {
@@ -816,14 +816,14 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     const bitableWrite = await executor.executeAction(
       TENANT,
       CONNECTION,
-      'write_bitable_records',
+      'feishu_write_bitable_records',
       { doc_id: 'life-bit', table_name: 'Leads', fields: { name: 'Grace' } },
     );
     expect(bitableWrite).toMatchObject({ ok: true });
     const recordId = (bitableWrite as { ok: true; output: { record_id: string } }).output
       .record_id;
 
-    const bitableRead = await executor.executeAction(TENANT, CONNECTION, 'read_bitable_records', {
+    const bitableRead = await executor.executeAction(TENANT, CONNECTION, 'feishu_read_bitable_records', {
       doc_id: 'life-bit',
       table_name: 'Leads',
     });
@@ -843,8 +843,8 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
       ['export_doc', true, null],
       ['write_sheet_cells', true, null],
       ['read_sheet_cells', true, null],
-      ['write_bitable_records', true, null],
-      ['read_bitable_records', true, null],
+      ['feishu_write_bitable_records', true, null],
+      ['feishu_read_bitable_records', true, null],
     ]);
   });
 
@@ -940,7 +940,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       },
     });
 
-    const records = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+    const records = await executor.executeAction(TENANT_A, CONN_1, 'feishu_read_bitable_records', {
       doc_id: 'f-bit',
       table_name: 'Leads',
     });
@@ -949,7 +949,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       output: { data: [{ record_id: 'rec_1', fields: { name: 'Ada', active: true } }], next: null },
     });
 
-    const created = await executor.executeAction(TENANT_A, CONN_1, 'write_bitable_records', {
+    const created = await executor.executeAction(TENANT_A, CONN_1, 'feishu_write_bitable_records', {
       doc_id: 'f-bit',
       table_name: 'Leads',
       fields: { name: 'Grace', active: false },
@@ -958,7 +958,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     const recordId = (created as { ok: true; output: { record_id: string } }).output.record_id;
     expect(recordId).toBeTruthy();
 
-    const after = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+    const after = await executor.executeAction(TENANT_A, CONN_1, 'feishu_read_bitable_records', {
       doc_id: 'f-bit',
       table_name: 'Leads',
     });
@@ -973,9 +973,9 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       ['read_sheet_cells', true, null],
       ['write_sheet_cells', true, null],
       ['read_sheet_cells', true, null],
-      ['read_bitable_records', true, null],
-      ['write_bitable_records', true, null],
-      ['read_bitable_records', true, null],
+      ['feishu_read_bitable_records', true, null],
+      ['feishu_write_bitable_records', true, null],
+      ['feishu_read_bitable_records', true, null],
     ]);
   });
 
@@ -1005,7 +1005,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     });
     expect(unknownSheetName).toMatchObject({ ok: false, error: { code: 'not_found' } });
 
-    const missingTable = await executor.executeAction(TENANT_A, CONN_1, 'read_bitable_records', {
+    const missingTable = await executor.executeAction(TENANT_A, CONN_1, 'feishu_read_bitable_records', {
       doc_id: 'f-sheet',
       table_name: 'Nope',
     });

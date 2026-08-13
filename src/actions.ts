@@ -586,7 +586,7 @@ export const DOCS_ACTIONS: Action[] = [
     effects: 'write',
   },
   {
-    name: 'read_bitable_records',
+    name: 'feishu_read_bitable_records',
     description:
       "Read records from a Bitable table by its app's opaque doc_id and the table's display " +
       'name. Records come back with their field-name-based values; cap the result count with ' +
@@ -596,7 +596,7 @@ export const DOCS_ACTIONS: Action[] = [
     effects: 'read',
   },
   {
-    name: 'write_bitable_records',
+    name: 'feishu_write_bitable_records',
     description:
       "Create one record in a Bitable table by its app's opaque doc_id and the table's display " +
       "name, with field-name-based values. Returns the new record's opaque id.",

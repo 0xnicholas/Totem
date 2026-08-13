@@ -452,6 +452,121 @@
           "url"
         ]
       },
+      "feishu_read_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name"
+        ]
+      },
+      "feishu_read_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "record_id": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "record_id",
+                "fields"
+              ]
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "data",
+          "next"
+        ]
+      },
+      "feishu_write_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "fields"
+        ]
+      },
+      "feishu_write_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "record_id"
+        ]
+      },
       "get_doc_content_input": {
         "type": "object",
         "additionalProperties": false,
@@ -551,79 +666,6 @@
         "required": [
           "doc_id",
           "folder_id"
-        ]
-      },
-      "read_bitable_records_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "table_name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "limit": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 1,
-            "maximum": 100
-          }
-        },
-        "required": [
-          "doc_id",
-          "table_name"
-        ]
-      },
-      "read_bitable_records_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "table_name": {
-            "type": "string"
-          },
-          "data": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "record_id": {
-                  "type": "string"
-                },
-                "fields": {
-                  "type": "object",
-                  "additionalProperties": true
-                }
-              },
-              "required": [
-                "record_id",
-                "fields"
-              ]
-            }
-          },
-          "next": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "doc_id",
-          "table_name",
-          "data",
-          "next"
         ]
       },
       "read_sheet_cells_input": {
@@ -820,48 +862,6 @@
         "required": [
           "connection_id",
           "status"
-        ]
-      },
-      "write_bitable_records_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "table_name": {
-            "type": "string",
-            "minLength": 1
-          },
-          "fields": {
-            "type": "object",
-            "additionalProperties": true
-          }
-        },
-        "required": [
-          "doc_id",
-          "table_name",
-          "fields"
-        ]
-      },
-      "write_bitable_records_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "table_name": {
-            "type": "string"
-          },
-          "record_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "table_name",
-          "record_id"
         ]
       },
       "write_sheet_cells_input": {

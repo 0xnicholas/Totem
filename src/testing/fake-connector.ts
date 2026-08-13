@@ -87,8 +87,8 @@ export class FakeConnector implements IConnector {
         'export_doc',
         'read_sheet_cells',
         'write_sheet_cells',
-        'read_bitable_records',
-        'write_bitable_records',
+        'feishu_read_bitable_records',
+        'feishu_write_bitable_records',
       ],
       ...(opts.rateLimit !== undefined ? { rateLimit: opts.rateLimit } : {}),
     };
@@ -105,8 +105,8 @@ export class FakeConnector implements IConnector {
       export_doc: (args: ExportDocInput) => this.exportDoc(args),
       read_sheet_cells: (args: ReadSheetCellsInput) => this.readSheetCells(args),
       write_sheet_cells: (args: WriteSheetCellsInput) => this.writeSheetCells(args),
-      read_bitable_records: (args: ReadBitableRecordsInput) => this.readBitableRecords(args),
-      write_bitable_records: (args: WriteBitableRecordsInput) => this.writeBitableRecords(args),
+      feishu_read_bitable_records: (args: ReadBitableRecordsInput) => this.readBitableRecords(args),
+      feishu_write_bitable_records: (args: WriteBitableRecordsInput) => this.writeBitableRecords(args),
     };
   }
 

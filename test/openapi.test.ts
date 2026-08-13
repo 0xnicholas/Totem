@@ -209,7 +209,7 @@ describe('buildOpenApiDocument (T24, generator)', () => {
     };
     expect(writeSheetInput.properties.sheet_name).toEqual({ type: ['string', 'null'], minLength: 1 });
 
-    const bitableInput = doc.components.schemas.read_bitable_records_input as {
+    const bitableInput = doc.components.schemas.feishu_read_bitable_records_input as {
       properties: Record<string, unknown>;
     };
     expect(bitableInput.properties.limit).toEqual({ type: ['integer', 'null'], minimum: 1, maximum: 100 });

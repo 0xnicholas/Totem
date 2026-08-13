@@ -111,7 +111,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(descBody.actions.map((a) => a.name)).toEqual(['append_doc_content']);
 
     // Case-insensitive: 'CREATE' hits create_doc by name and
-    // append_doc_content / write_bitable_records by description.
+    // append_doc_content / feishu_write_bitable_records by description.
     const mixed = await discover('/actions/search', {
       method: 'POST',
       body: JSON.stringify({ query: 'CREATE' }),
@@ -120,7 +120,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(mixedBody.actions.map((a) => a.name).sort()).toEqual([
       'append_doc_content',
       'create_doc',
-      'write_bitable_records',
+      'feishu_write_bitable_records',
     ]);
 
     const none = await discover('/actions/search', {

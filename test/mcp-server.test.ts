@@ -169,8 +169,8 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
           { name: 'export_doc' },
           { name: 'read_sheet_cells' },
           { name: 'write_sheet_cells' },
-          { name: 'read_bitable_records' },
-          { name: 'write_bitable_records' },
+          { name: 'feishu_read_bitable_records' },
+          { name: 'feishu_write_bitable_records' },
           { name: 'test_connection' },
         ],
       },
@@ -354,8 +354,8 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       'export_doc',
       'read_sheet_cells',
       'write_sheet_cells',
-      'read_bitable_records',
-      'write_bitable_records',
+      'feishu_read_bitable_records',
+      'feishu_write_bitable_records',
       'test_connection',
       ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
@@ -412,7 +412,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       expect(sheetWrite.structuredContent).toMatchObject({ updated_cells: 1 });
 
       const bitableRead = await client.callTool({
-        name: 'read_bitable_records',
+        name: 'feishu_read_bitable_records',
         arguments: { doc_id: 'mcp-bit', table_name: 'Leads' },
       });
       expect(bitableRead.structuredContent).toMatchObject({
@@ -421,7 +421,7 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       });
 
       const bitableWrite = await client.callTool({
-        name: 'write_bitable_records',
+        name: 'feishu_write_bitable_records',
         arguments: { doc_id: 'mcp-bit', table_name: 'Leads', fields: { name: 'Grace' } },
       });
       expect(bitableWrite.isError).toBeUndefined();
