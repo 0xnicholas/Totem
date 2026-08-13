@@ -28,6 +28,7 @@ import type {
 import type { IConnector } from '../connector.js';
 import { ActionError, errorMessage } from '../errors.js';
 import { FeishuApiError } from './oauth.js';
+import { createUpstreamHttp, type UpstreamRequest, type UpstreamRequestOptions } from '../upstream-http.js';
 
 /**
  * Feishu error-code families (T7, live-verified in the T9 demo pass):
@@ -101,9 +102,18 @@ export class FeishuConnector implements IConnector {
     ],
   };
 
+  /**
+   * One Feishu request: the kernel call with the DocsEnvelope return type
+   * bound (the envelope is Feishu's response shape — handlers read `.data`).
+   */
+  private docsRequest<T>(path: string, opts: UpstreamRequestOptions): Promise<DocsEnvelope<T>> {
+    return this.request<DocsEnvelope<T>>(path, opts);
+  }
+
   private readonly handlers: Record<string, ActionHandler>;
   private readonly exportPollMs: number;
   private readonly exportMaxAttempts: number;
+  private readonly request: UpstreamRequest;
 
   constructor(
     private readonly baseUrl: string,
@@ -113,6 +123,31 @@ export class FeishuConnector implements IConnector {
     // walk, so the default budget is 2 minutes (60 polls × 2s).
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
+
+    // The Upstream HTTP Kernel (CONTEXT.md): the shared request stack, with
+    // Feishu's envelope convention (HTTP 200 with code !== 0 is the failure
+    // signal — not the HTTP status) as this profile's handleResponse.
+    this.request = createUpstreamHttp({
+      baseUrl,
+      label: 'Feishu Docs API',
+      authHeaderName: 'authorization',
+      tokenPrefix: 'Bearer ',
+      allowEmptyBody: false,
+      handleResponse: (response, body) => {
+        const envelope = (body ?? {}) as DocsEnvelope<never>;
+        if (envelope.code !== 0) {
+          throw mapFeishuError(
+            new FeishuApiError(
+              envelope.code ?? 0,
+              envelope.msg ?? `Feishu Docs API error (HTTP ${response.status})`,
+              response.status,
+              false,
+            ),
+          );
+        }
+        return envelope;
+      },
+    });
     this.handlers = {
       test_connection: async (_args, ctx) => {
         // The cheapest call in the connector's proven scope (drive:drive
@@ -120,7 +155,7 @@ export class FeishuConnector implements IConnector {
         // list succeeds iff the connection's access token is valid and
         // API access works. The token manager has already refreshed an
         // expiring token (ADR-0004), so this call is the live proof.
-        await docsRequest<FilesListData>(this.baseUrl, '/open-apis/drive/v1/files', {
+        await this.docsRequest<FilesListData>( '/open-apis/drive/v1/files', {
           token: ctx.token,
           query: { page_size: '1' },
         });
@@ -129,8 +164,7 @@ export class FeishuConnector implements IConnector {
 
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
-        const response = await docsRequest<SearchFilesData>(
-          this.baseUrl,
+        const response = await this.docsRequest<SearchFilesData>(
           '/open-apis/drive/v1/files/search',
           {
             method: 'POST',
@@ -154,8 +188,7 @@ export class FeishuConnector implements IConnector {
 
       get_doc_content: async (args: GetDocContentInput, ctx) => {
         const input = args;
-        const response = await docsRequest<RawContentData>(
-          this.baseUrl,
+        const response = await this.docsRequest<RawContentData>(
           `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/raw_content`,
           { token: ctx.token },
         );
@@ -168,8 +201,7 @@ export class FeishuConnector implements IConnector {
 
       create_doc: async (args: CreateDocInput, ctx) => {
         const input = args;
-        const response = await docsRequest<CreateDocData>(
-          this.baseUrl,
+        const response = await this.docsRequest<CreateDocData>(
           '/open-apis/docx/v1/documents',
           {
             method: 'POST',
@@ -191,7 +223,7 @@ export class FeishuConnector implements IConnector {
         // says so, so the agent does not blindly retry the create.
         if (input.content !== undefined && input.content !== '') {
           try {
-            await appendBlocks(this.baseUrl, docId, input.content, ctx.token);
+            await appendBlocks(this.request, docId, input.content, ctx.token);
           } catch (err) {
             throw new ActionError(
               'upstream_error',
@@ -210,15 +242,14 @@ export class FeishuConnector implements IConnector {
 
       append_doc_content: async (args: AppendDocContentInput, ctx) => {
         const input = args;
-        await appendBlocks(this.baseUrl, input.doc_id, input.content, ctx.token);
+        await appendBlocks(this.request, input.doc_id, input.content, ctx.token);
         // The AC promises the updated state: re-read the full content. The
         // append itself has landed by now, so a re-read failure says so —
         // a retry would duplicate the append.
         let content: RawContentData;
         try {
           content = (
-            await docsRequest<RawContentData>(
-              this.baseUrl,
+            await this.docsRequest<RawContentData>(
               `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/raw_content`,
               { token: ctx.token },
             )
@@ -242,8 +273,7 @@ export class FeishuConnector implements IConnector {
         // PATCH /docx/v1/documents/{id} with a title returns 1770001. The
         // title is the root Page block's text, so renaming patches the root
         // block (block_id == document_id) with update_text_elements.
-        const response = await docsRequest<UpdateBlockData>(
-          this.baseUrl,
+        const response = await this.docsRequest<UpdateBlockData>(
           `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/blocks/${encodeURIComponent(input.doc_id)}`,
           {
             method: 'PATCH',
@@ -264,8 +294,7 @@ export class FeishuConnector implements IConnector {
         const input = args;
         // Feishu's move is async (returns a task id); the platform contract
         // confirms the target, which is all the agent needs.
-        await docsRequest(
-          this.baseUrl,
+        await this.docsRequest(
           `/open-apis/drive/v1/files/${encodeURIComponent(input.doc_id)}/move`,
           {
             method: 'POST',
@@ -281,8 +310,7 @@ export class FeishuConnector implements IConnector {
         const input = args;
         // Feishu exports are async: create a task, then poll the ticket
         // until the exported drive file exists.
-        const task = await docsRequest<ExportTaskData>(
-          this.baseUrl,
+        const task = await this.docsRequest<ExportTaskData>(
           '/open-apis/drive/v1/export_tasks',
           {
             method: 'POST',
@@ -306,10 +334,9 @@ export class FeishuConnector implements IConnector {
 
       read_sheet_cells: async (args: ReadSheetCellsInput, ctx) => {
         const input = args;
-        const sheetId = await resolveSheetId(this.baseUrl, input.doc_id, input.sheet_name, ctx.token);
+        const sheetId = await resolveSheetId(this.request, input.doc_id, input.sheet_name, ctx.token);
         const range = `${sheetId}!${input.range}`;
-        const response = await docsRequest<SheetReadData>(
-          this.baseUrl,
+        const response = await this.docsRequest<SheetReadData>(
           `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values/${encodeURIComponent(range)}`,
           { token: ctx.token },
         );
@@ -324,10 +351,9 @@ export class FeishuConnector implements IConnector {
 
       write_sheet_cells: async (args: WriteSheetCellsInput, ctx) => {
         const input = args;
-        const sheetId = await resolveSheetId(this.baseUrl, input.doc_id, input.sheet_name, ctx.token);
+        const sheetId = await resolveSheetId(this.request, input.doc_id, input.sheet_name, ctx.token);
         const range = `${sheetId}!${input.range}`;
-        const response = await docsRequest<SheetWriteData>(
-          this.baseUrl,
+        const response = await this.docsRequest<SheetWriteData>(
           `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.doc_id)}/values`,
           {
             method: 'PUT',
@@ -345,9 +371,8 @@ export class FeishuConnector implements IConnector {
 
       feishu_read_bitable_records: async (args: ReadBitableRecordsInput, ctx) => {
         const input = args;
-        const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
-        const response = await docsRequest<BitableRecordsData>(
-          this.baseUrl,
+        const tableId = await resolveBitableTable(this.request, input.doc_id, input.table_name, ctx.token);
+        const response = await this.docsRequest<BitableRecordsData>(
           `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
           {
             token: ctx.token,
@@ -368,9 +393,8 @@ export class FeishuConnector implements IConnector {
 
       feishu_write_bitable_records: async (args: WriteBitableRecordsInput, ctx) => {
         const input = args;
-        const tableId = await resolveBitableTable(this.baseUrl, input.doc_id, input.table_name, ctx.token);
-        const response = await docsRequest<BitableCreateData>(
-          this.baseUrl,
+        const tableId = await resolveBitableTable(this.request, input.doc_id, input.table_name, ctx.token);
+        const response = await this.docsRequest<BitableCreateData>(
           `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
           {
             method: 'POST',
@@ -391,8 +415,7 @@ export class FeishuConnector implements IConnector {
         // v1 boundary: the docs actions address Feishu docx documents — the
         // opaque doc_id carries no type, so non-docx metadata (sheets,
         // bitables) fails on the live API until T9's dedicated actions.
-        const response = await docsRequest<MetasData>(
-          this.baseUrl,
+        const response = await this.docsRequest<MetasData>(
           '/open-apis/drive/v1/metas/batch_query',
           {
             method: 'POST',
@@ -427,8 +450,7 @@ export class FeishuConnector implements IConnector {
     for (let attempt = 0; attempt < this.exportMaxAttempts; attempt++) {
       // Live finding (T9 demo pass): the poll endpoint requires the source
       // document's token as a query parameter (99992402 without it).
-      const poll = await docsRequest<ExportPollData>(
-        this.baseUrl,
+      const poll = await this.docsRequest<ExportPollData>(
         `/open-apis/drive/v1/export_tasks/${encodeURIComponent(ticket)}`,
         { token, query: { token: docId } },
       );
@@ -545,73 +567,17 @@ interface MetasData {
 }
 
 /**
- * One Feishu Docs API call: Bearer auth with the connection's token,
- * envelope parsing, and vocabulary mapping of every failure. Network and
- * non-envelope failures are upstream errors — Feishu told us nothing.
- */
-async function docsRequest<T>(
-  baseUrl: string,
-  path: string,
-  opts: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT'; token?: string; query?: Record<string, string>; body?: unknown },
-): Promise<DocsEnvelope<T>> {
-  const url = new URL(`${baseUrl}${path}`);
-  for (const [key, value] of Object.entries(opts.query ?? {})) {
-    url.searchParams.set(key, value);
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: opts.method ?? 'GET',
-      headers: {
-        authorization: `Bearer ${opts.token ?? ''}`,
-        ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
-  } catch (err) {
-    throw new ActionError(
-      'upstream_error',
-      `Feishu Docs API unreachable: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  let envelope: DocsEnvelope<never>;
-  try {
-    envelope = (await response.json()) as DocsEnvelope<never>;
-  } catch {
-    throw new ActionError(
-      'upstream_error',
-      `Feishu Docs API returned non-JSON (HTTP ${response.status})`,
-    );
-  }
-
-  if (envelope.code !== 0) {
-    throw mapFeishuError(
-      new FeishuApiError(
-        envelope.code ?? 0,
-        envelope.msg ?? `Feishu Docs API error (HTTP ${response.status})`,
-        response.status,
-        false,
-      ),
-    );
-  }
-  return envelope;
-}
-
-/**
  * Appends one text block to a document via Feishu's blocks API: resolves
  * the document's root block, then posts a text block (block_type 2) as its
  * child. Shared by create_doc's initial content and append_doc_content.
  */
 async function appendBlocks(
-  baseUrl: string,
+  request: UpstreamRequest,
   docId: string,
   content: string,
   token: string | undefined,
 ): Promise<void> {
-  const blocks = await docsRequest<BlocksData>(
-    baseUrl,
+  const blocks = await request<DocsEnvelope<BlocksData>>(
     `/open-apis/docx/v1/documents/${encodeURIComponent(docId)}/blocks`,
     { token },
   );
@@ -621,8 +587,7 @@ async function appendBlocks(
   if (!root) {
     throw new ActionError('upstream_error', `Feishu document "${docId}" has no root block`);
   }
-  await docsRequest(
-    baseUrl,
+  await request(
     `/open-apis/docx/v1/documents/${encodeURIComponent(docId)}/blocks/${encodeURIComponent(root.block_id)}/children`,
     {
       method: 'POST',
@@ -646,13 +611,12 @@ async function appendBlocks(
  * tables endpoint; throws not_found when the table does not exist.
  */
 async function resolveBitableTable(
-  baseUrl: string,
+  request: UpstreamRequest,
   appToken: string,
   tableName: string,
   token: string | undefined,
 ): Promise<string> {
-  const tables = await docsRequest<BitableTablesData>(
-    baseUrl,
+  const tables = await request<DocsEnvelope<BitableTablesData>>(
     `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables`,
     { token },
   );
@@ -673,13 +637,12 @@ async function resolveBitableTable(
  * return 90215 — so the platform's sheet_name must be resolved here.
  */
 async function resolveSheetId(
-  baseUrl: string,
+  request: UpstreamRequest,
   spreadsheetToken: string,
   sheetName: string | undefined,
   token: string | undefined,
 ): Promise<string> {
-  const response = await docsRequest<SheetListData>(
-    baseUrl,
+  const response = await request<DocsEnvelope<SheetListData>>(
     `/open-apis/sheets/v3/spreadsheets/${encodeURIComponent(spreadsheetToken)}/sheets/query`,
     { token },
   );

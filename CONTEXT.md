@@ -66,6 +66,10 @@ _Avoid_: Document token, docx token (when exposed to agents), resource URL
 The external system a connector talks to (v1: Feishu Open Platform). The source of `not_found`, `rate_limited`, and `upstream_error` failures.
 _Avoid_: Backend, third-party API, provider
 
+**Upstream HTTP Kernel**:
+The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, auth header, empty-body policy, and the envelope convention (success check + error mapping) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003).
+_Avoid_: HTTP client, fetch helper
+
 **Execution Boundary**:
 The single orchestration point (`executeAction`) through which every action call passes: allowlist check, schema validation, token acquisition, dispatch, audit write. It also answers the tool-list question the surfaces ask (`listAllowedTools` — visible view ∩ allowlist ∩ connector `implements`, ADR-0002 hide-don't-reject), so governance data never crosses a second seam. The primary test seam (Seam A).
 _Avoid_: Service layer, use case, controller

@@ -26,6 +26,7 @@ import type {
 import type { IConnector } from '../connector.js';
 import { ActionError, errorMessage } from '../errors.js';
 import { DingTalkApiError } from './oauth.js';
+import { createUpstreamHttp, type UpstreamRequest } from '../upstream-http.js';
 
 /**
  * Maps a DingTalk Open Platform API failure into the unified error
@@ -134,6 +135,7 @@ export class DingTalkConnector implements IConnector {
   private readonly handlers: Record<string, ActionHandler>;
   private readonly exportPollMs: number;
   private readonly exportMaxAttempts: number;
+  private readonly request: UpstreamRequest;
   private readonly getAppAccessToken: ((tenantId: string) => Promise<string>) | undefined;
   /**
    * DingTalk's doc APIs require the acting user's `unionId` as
@@ -161,6 +163,30 @@ export class DingTalkConnector implements IConnector {
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
 
+    // The Upstream HTTP Kernel (CONTEXT.md): the shared request stack, with
+    // DingTalk's envelope convention (the HTTP status is the failure signal;
+    // empty 2xx bodies are valid payloads) as this profile's handleResponse.
+    this.request = createUpstreamHttp({
+      baseUrl: apiBaseUrl,
+      label: 'DingTalk API',
+      authHeaderName: 'x-acs-dingtalk-access-token',
+      allowEmptyBody: true,
+      handleResponse: (response, body) => {
+        if (!response.ok) {
+          const errorBody = (body ?? {}) as { code?: string; message?: string };
+          throw mapDingtalkError(
+            new DingTalkApiError(
+              errorBody.code ?? 'UnknownError',
+              errorBody.message ?? `DingTalk API error (HTTP ${response.status})`,
+              response.status,
+              false,
+            ),
+          );
+        }
+        return body;
+      },
+    });
+
     this.handlers = {
       test_connection: async (_args, ctx) => {
         // The cheapest call in the connector's proven scope: the identity
@@ -169,7 +195,7 @@ export class DingTalkConnector implements IConnector {
         // expiring token (ADR-0004), so this call is the live proof. (The
         // app token is derived from tenant credentials, not the user grant;
         // a broken app secret surfaces on the first doc action instead.)
-        await dingtalkRequest(this.apiBaseUrl, '/v1.0/contact/users/me', {
+        await this.request( '/v1.0/contact/users/me', {
           token: ctx.token,
         });
         const output: TestConnectionOutput = {
@@ -525,7 +551,7 @@ export class DingTalkConnector implements IConnector {
     const operatorId = await this.resolveUnionId(ctx.connectionId, ctx.token);
     const appToken = await this.appToken(ctx.tenantId);
     try {
-      return await dingtalkRequest<T>(this.apiBaseUrl, path, {
+      return await this.request<T>( path, {
         method: opts.method,
         token: appToken,
         query: { operatorId, ...opts.query },
@@ -653,8 +679,7 @@ export class DingTalkConnector implements IConnector {
   private async resolveUnionId(connectionId: string, token: string | undefined): Promise<string> {
     const cached = this.unionIds.get(connectionId);
     if (cached) return cached;
-    const me = await dingtalkRequest<{ unionId: string }>(
-      this.apiBaseUrl,
+    const me = await this.request<{ unionId: string }>(
       '/v1.0/contact/users/me',
       { token },
     );
@@ -772,65 +797,3 @@ function stripAdocExtension(name: string): string {
   return name.endsWith('.adoc') ? name.slice(0, -'.adoc'.length) : name;
 }
 
-/**
- * One DingTalk Open Platform API call: `x-acs-dingtalk-access-token` auth,
- * JSON body parsing, and vocabulary mapping of every failure. Network and
- * non-JSON failures are upstream errors — DingTalk told us nothing.
- */
-async function dingtalkRequest<T>(
-  baseUrl: string,
-  path: string,
-  opts: {
-    method?: 'GET' | 'POST' | 'PUT';
-    token?: string;
-    query?: Record<string, string>;
-    body?: unknown;
-  },
-): Promise<T> {
-  const url = new URL(`${baseUrl}${path}`);
-  for (const [key, value] of Object.entries(opts.query ?? {})) {
-    url.searchParams.set(key, value);
-  }
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: opts.method ?? 'GET',
-      headers: {
-        'x-acs-dingtalk-access-token': opts.token ?? '',
-        ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
-      },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
-  } catch (err) {
-    throw new ActionError(
-      'upstream_error',
-      `DingTalk API unreachable: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
-  let body: unknown;
-  let rawBody = '';
-  try {
-    rawBody = await response.text();
-    body = rawBody === '' ? undefined : JSON.parse(rawBody);
-  } catch {
-    throw new ActionError(
-      'upstream_error',
-      `DingTalk API returned non-JSON (HTTP ${response.status})`,
-    );
-  }
-
-  if (!response.ok) {
-    const errorBody = (body ?? {}) as { code?: string; message?: string };
-    throw mapDingtalkError(
-      new DingTalkApiError(
-        errorBody.code ?? 'UnknownError',
-        errorBody.message ?? `DingTalk API error (HTTP ${response.status})`,
-        response.status,
-        false,
-      ),
-    );
-  }
-  return body as T;
-}

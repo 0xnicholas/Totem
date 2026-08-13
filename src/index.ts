@@ -97,6 +97,8 @@ export { createDingTalkOAuthFlow } from './dingtalk/flows.js';
 export { createDingTalkTokenProvider } from './dingtalk/tokens.js';
 export type { DingTalkTokenProvider } from './dingtalk/tokens.js';
 export { TokenRoutingProvider } from './token-routing.js';
+export { createUpstreamHttp } from './upstream-http.js';
+export type { UpstreamHttpProfile, UpstreamRequest, UpstreamRequestOptions } from './upstream-http.js';
 export { MockDingTalkServer } from './testing/mock-dingtalk-server.js';
 export type { MockDingTalkServerOptions } from './testing/mock-dingtalk-server.js';
 export { InMemoryDingTalkCredsStore } from './testing/memory-dingtalk.js';
