@@ -37,6 +37,24 @@ export const PROVIDER_TOKENS = ['feishu', 'dingtalk'] as const;
 export type ProviderToken = (typeof PROVIDER_TOKENS)[number];
 
 /**
+ * The deprecation status of an action (ADR-0014): totem's action-level
+ * policy, deliberately exceeding StackOne (which has none). Declaring a
+ * `replacement` makes `sunset` required — the registry enforces that at
+ * registration. The replacement need not be registered yet: deprecation
+ * may precede the successor's landing. Until sunset the action stays
+ * advertised and executable; removal at sunset is a major change and
+ * follows the execution contract (ADR-0014 §2).
+ */
+export interface ActionDeprecation {
+  /** The action agents should migrate to (e.g. the promoted canonical name). */
+  replacement?: string;
+  /** ISO date when removal happens (major change, execution contract). */
+  sunset?: string;
+  /** Human-readable migration guidance; surfaced through the discovery metadata. */
+  note?: string;
+}
+
+/**
  * A platform-defined action (ADR-0001): the registry is the single source of
  * truth for `name`, the agent-facing `description`, and the input/output
  * JSON Schemas. Connectors declare which actions they implement and
@@ -74,6 +92,15 @@ export interface Action {
    * both kinds identically — scope limits availability and vocabulary only.
    */
   provider?: ProviderToken;
+  /**
+   * Deprecation status (ADR-0014). Present means the action is deprecated:
+   * it stays advertised and executable until `sunset`, and the MCP adapter
+   * prefixes its tool description with the `[DEPRECATED …]` marker at
+   * listing time — the registry's stored description stays clean (the sole
+   * exception to ADR-0013's "descriptions carry no marking"). Omitted for
+   * non-deprecated actions.
+   */
+  deprecated?: ActionDeprecation;
 }
 
 /**

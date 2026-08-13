@@ -1,6 +1,6 @@
 import type { ActionExecutor, ActionResult, ConnectionRecord } from '../executor.js';
 import type { AllowlistStore } from '../governance.js';
-import type { ActionEffect } from '../action.js';
+import type { ActionEffect, ActionDeprecation } from '../action.js';
 
 /** MCP tool annotations: the protocol hints about an action's consequences. */
 export interface McpToolAnnotations {
@@ -62,7 +62,9 @@ export class McpAdapter {
    * The tool list for a (tenant, connection): registry actions the
    * connection's allowlist permits, its connector implements, and that are
    * not hidden (ADR-0002 hide-don't-reject; hidden actions exist for the
-   * platform's internal use and are never advertised). Empty for unknown
+   * platform's internal use and are never advertised). Deprecated actions
+   * (ADR-0014) stay advertised until sunset, with the `[DEPRECATED …]`
+   * marker on the projected description only. Empty for unknown
    * connections.
    */
   async listTools(tenantId: string, connectionId: string): Promise<McpToolDefinition[]> {
@@ -81,7 +83,7 @@ export class McpAdapter {
       )
       .map((action) => ({
         name: action.name,
-        description: action.description,
+        description: toolDescription(action),
         inputSchema: action.inputSchema,
         ...(annotationsFor(action.effects) !== undefined
           ? { annotations: annotationsFor(action.effects) }
@@ -107,6 +109,28 @@ export class McpAdapter {
   callTool(tenantId: string, connectionId: string, actionName: string, args: unknown): Promise<ActionResult> {
     return this.executor.executeAction(tenantId, connectionId, actionName, args);
   }
+}
+
+/**
+ * The tool description the adapter projects: the registry's stored
+ * description, prefixed with the ADR-0014 deprecation marker on deprecated
+ * actions — `[DEPRECATED — use <replacement>, sunset <date>]`, with
+ * marker-only variants when replacement or sunset is absent. This is the
+ * sole exception to ADR-0013's "descriptions carry no marking": deprecation
+ * is time-varying state, not identity, and agents must see it at
+ * tool-selection time. The stored description stays clean.
+ */
+function toolDescription(action: {
+  description: string;
+  deprecated?: ActionDeprecation;
+}): string {
+  const { deprecated } = action;
+  if (deprecated === undefined) return action.description;
+  const parts: string[] = [];
+  if (deprecated.replacement !== undefined) parts.push(`use ${deprecated.replacement}`);
+  if (deprecated.sunset !== undefined) parts.push(`sunset ${deprecated.sunset}`);
+  const marker = parts.length > 0 ? `[DEPRECATED — ${parts.join(', ')}]` : '[DEPRECATED]';
+  return `${marker} ${action.description}`;
 }
 
 /**

@@ -261,4 +261,122 @@ describe('McpAdapter', () => {
     expect(result).toMatchObject({ ok: false, error: { code: 'not_found' } });
     expect(audit.list()).toHaveLength(0);
   });
+
+  it('prefixes a deprecated tool description with the ADR-0014 marker; the stored description stays clean', async () => {
+    const deprecated = {
+      name: 'legacy_export',
+      description: 'The old export shape.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { doc_id: { type: 'string' } },
+        required: ['doc_id'],
+      },
+      effects: 'read' as const,
+      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
+    };
+    const connector = makeConnector('deprecation', ['create_doc', 'legacy_export'], {
+      create_doc: (args) => {
+        const input = args as { title: string };
+        return { doc_id: 'doc-1', title: input.title };
+      },
+      legacy_export: () => ({ doc_id: 'doc-1' }),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['create_doc', 'legacy_export']);
+    const executor = createActionExecutor({
+      actions: [deprecated, ...DOCS_ACTIONS],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'deprecation' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    const adapter = new McpAdapter(executor, allowlists);
+
+    const marker = '[DEPRECATED — use export_doc, sunset 2026-09-01]';
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    expect(tools.find((t) => t.name === 'legacy_export')?.description).toBe(
+      `${marker} The old export shape.`,
+    );
+    // The marker lives only in the adapter's projection: the registry's
+    // stored description is the single clean source (ADR-0014's sole
+    // exception to "descriptions carry no marking").
+    expect(
+      executor.listActions().find((a) => a.name === 'legacy_export')?.description,
+    ).toBe('The old export shape.');
+    // getTool resolves through the same projection.
+    await expect(adapter.getTool(TENANT_A, CONN_1, 'legacy_export')).resolves.toMatchObject({
+      name: 'legacy_export',
+      description: `${marker} The old export shape.`,
+    });
+    // A non-deprecated sibling in the same list carries no marker.
+    expect(tools.find((t) => t.name === 'create_doc')?.description).not.toMatch(/^\[DEPRECATED/);
+  });
+
+  it('falls back to marker-only forms when replacement or sunset is absent', async () => {
+    const sunsetOnly = {
+      name: 'old_search',
+      description: 'Search without relevance ranking.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      effects: 'read' as const,
+      deprecated: { sunset: '2026-09-01' },
+    };
+    const noteOnly = {
+      name: 'old_move',
+      description: 'Move without conflict handling.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
+      },
+      effects: 'write' as const,
+      deprecated: { note: 'Prefer move_doc.' },
+    };
+    const connector = makeConnector('markers', ['old_search', 'old_move'], {
+      old_search: () => ({}),
+      old_move: () => ({}),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['old_search', 'old_move']);
+    const executor = createActionExecutor({
+      actions: [sunsetOnly, noteOnly],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'markers' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    const adapter = new McpAdapter(executor, allowlists);
+
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    expect(tools.find((t) => t.name === 'old_search')?.description).toBe(
+      '[DEPRECATED — sunset 2026-09-01] Search without relevance ranking.',
+    );
+    expect(tools.find((t) => t.name === 'old_move')?.description).toBe(
+      '[DEPRECATED] Move without conflict handling.',
+    );
+  });
 });

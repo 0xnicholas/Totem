@@ -20,7 +20,7 @@
 | 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 语义 v2 |
 | 机器可读契约 | OpenAPI 3.1(生成于注册表,非手写) | ✅ `GET {TOTEM_URL}/openapi.json`(无认证)+ CI 漂移门禁 |
 | 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §8 |
-| 目录演进 | StackOne connector semver + 破坏性变更分级(无动作级 deprecation) | 🚧 分级表 + deprecation + 覆盖缺口信号(ADR-0014),见 §11 |
+| 目录演进 | StackOne connector semver + 破坏性变更分级(无动作级 deprecation) | ✅ 分级表 + deprecation + 覆盖缺口信号(ADR-0014),见 §11 |
 
 一条总则(照搬 StackOne 架构结论,ADR-0008):**注册表是唯一事实源,REST 与
 MCP 都是它的投影**——接入方在任何消费面上看到的行为(参数、错误、输出)必然一致,
@@ -113,7 +113,7 @@ totem 自定枚举——这就是 totem 的枚举):
 
 | 端点 | 用途 | 认证 |
 |---|---|---|
-| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`,✅ +`provider` 见 §11;🚧 +`deprecated` 见 §11),hidden 动作不出现 | actions key(Bearer),无需 connection |
+| `GET {TOTEM_URL}/actions` | 全部动作元数据(`name`/`description`/`effects`,✅ +`provider` 见 §11;✅ +`deprecated` 见 §11),hidden 动作不出现 | actions key(Bearer),无需 connection |
 | `POST {TOTEM_URL}/actions/search` | 文本搜索,body `{query}`(大小写不敏感子串匹配;⚠️ StackOne 是语义搜索,BM25+embedding,totem v2) | 同上 |
 | `GET {TOTEM_URL}/openapi.json` | 机器可读契约(OpenAPI 3.1):每个动作 `components.schemas.<action>_input/_output` + `ActionError` 错误组件 | **无认证**(平台级契约元数据,非租户数据) |
 
@@ -234,7 +234,7 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 4. **迁移承诺**:平台在 v2 落地 §7/§8 时,已按本标准实现的接入方**零改动**
    或仅改入口;契约变更走 ADR 流程并在此文档同步,不静默修改。
 
-## 11. 目录演进政策(🚧 契约定死,registry 机制落地中;ADR-0013 / ADR-0014)
+## 11. 目录演进政策(✅ 契约定死,registry 机制已落地;ADR-0013 / ADR-0014)
 
 动作目录会生长(provider-native 动作、晋升、废除),本节是接入方的稳定性契约。
 
@@ -261,9 +261,10 @@ ADR-0010);目录无版本号,pin 机制 v2。
 
 ### 11.3 deprecation(ADR-0014,超越 StackOne——其无动作级政策)
 
-- `deprecated: { replacement?, sunset?, note? }`;有 `replacement` 必有 `sunset`;
+- `deprecated: { replacement?, sunset?, note? }`;有 `replacement` 必有 `sunset`
+  (注册期强制,T19b;replacement 无需已注册——废除可先于后继动作落地);
 - sunset 前:动作照常广告、照常执行;MCP 工具描述自动加 `[DEPRECATED …]` 前缀
-  (🚧)——接入方应在 agent 侧把该前缀视为迁移指令;
+  (✅,T19b),注册表的存储描述保持干净——接入方应在 agent 侧把该前缀视为迁移指令;
 - sunset 到点:移除,按 major 流程;
 - provider-native 晋升路径:第二 provider 长出可统一的等价能力时,**新增**
   canonical 动作并 deprecate 旧 native 动作;native 名永不复用、永不改名。

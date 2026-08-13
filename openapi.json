@@ -14,7 +14,7 @@
     "/actions": {
       "get": {
         "operationId": "list_actions",
-        "description": "List the platform action set as metadata (name, description, effects; provider on provider-native actions only — ADR-0013); hidden actions are excluded.",
+        "description": "List the platform action set as metadata (name, description, effects; provider on provider-native actions only — ADR-0013; deprecated status on deprecated actions only — ADR-0014); hidden actions are excluded.",
         "security": [
           {
             "bearerAuth": []
@@ -22,7 +22,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The platform action set as metadata (hidden excluded; provider present on provider-native actions only).",
+            "description": "The platform action set as metadata (hidden excluded; provider present on provider-native actions only, deprecated status present on deprecated actions only).",
             "content": {
               "application/json": {
                 "schema": {
@@ -51,6 +51,22 @@
                               "feishu",
                               "dingtalk"
                             ]
+                          },
+                          "deprecated": {
+                            "type": "object",
+                            "description": "The action's deprecation status (ADR-0014): present on deprecated actions only; non-deprecated actions omit the key.",
+                            "additionalProperties": false,
+                            "properties": {
+                              "replacement": {
+                                "type": "string"
+                              },
+                              "sunset": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": "string"
+                              }
+                            }
                           }
                         },
                         "required": [
@@ -134,6 +150,22 @@
                               "feishu",
                               "dingtalk"
                             ]
+                          },
+                          "deprecated": {
+                            "type": "object",
+                            "description": "The action's deprecation status (ADR-0014): present on deprecated actions only; non-deprecated actions omit the key.",
+                            "additionalProperties": false,
+                            "properties": {
+                              "replacement": {
+                                "type": "string"
+                              },
+                              "sunset": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": "string"
+                              }
+                            }
                           }
                         },
                         "required": [

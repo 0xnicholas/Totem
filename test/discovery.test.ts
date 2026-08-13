@@ -104,6 +104,72 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(body.actions.map((a) => a.name)).not.toContain('platform_internal');
   });
 
+  it('GET /actions exposes deprecated when present and omits it when absent', async () => {
+    const deprecation = {
+      replacement: 'export_doc',
+      sunset: '2026-09-01',
+      note: 'Migrate at leisure.',
+    };
+    const deprecated: Action = {
+      name: 'legacy_export',
+      description: 'The old export shape.',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      effects: 'read',
+      deprecated: deprecation,
+    };
+    const keys = new InMemoryMCPKeyStore();
+    keys.addKey('tt_dev_deprecated_test', 'tenant-a');
+    const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, deprecated], keys });
+    const res = await app.fetch(new Request('http://localhost/actions', {
+      headers: { authorization: 'Bearer tt_dev_deprecated_test' },
+    }));
+    const body = (await res.json()) as {
+      actions: Array<{ name: string; deprecated?: unknown }>;
+    };
+    expect(body.actions.find((a) => a.name === 'legacy_export')).toHaveProperty(
+      'deprecated',
+      deprecation,
+    );
+    // Every non-deprecated action omits the key entirely — the flag is
+    // additive, like provider scope.
+    for (const action of body.actions) {
+      if (action.name !== 'legacy_export') {
+        expect(action, action.name).not.toHaveProperty('deprecated');
+      }
+    }
+  });
+
+  it('POST /actions/search carries deprecated metadata like the list endpoint', async () => {
+    const deprecated: Action = {
+      name: 'legacy_export',
+      description: 'The old export shape.',
+      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
+      effects: 'read',
+      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
+    };
+    const keys = new InMemoryMCPKeyStore();
+    keys.addKey('tt_dev_deprecated_search', 'tenant-a');
+    const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, deprecated], keys });
+    const res = await app.fetch(new Request('http://localhost/actions/search', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer tt_dev_deprecated_search',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ query: 'legacy' }),
+    }));
+    const body = (await res.json()) as {
+      actions: Array<{ name: string; deprecated?: unknown }>;
+    };
+    expect(body.actions).toHaveLength(1);
+    expect(body.actions[0]).toMatchObject({
+      name: 'legacy_export',
+      deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
+    });
+  });
+
   it('POST /actions/search matches names and descriptions, case-insensitive', async () => {
     // 'sheet' hits the two sheet actions by name and get_doc_metadata by
     // description ("docx, sheet, bitable, wiki").

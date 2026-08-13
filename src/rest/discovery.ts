@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { Action, ProviderToken } from '../action.js';
+import type { Action, ActionDeprecation, ProviderToken } from '../action.js';
 import { hashApiKey } from '../admin/keys.js';
 import { isRecord } from '../admin/util.js';
 import type { MCPKeyStore } from '../mcp/key-store.js';
@@ -69,21 +69,24 @@ export function createDiscoveryApp(config: DiscoveryAppConfig): Hono {
 
 /**
  * The wire shape of one action on the discovery surface: name, description
- * and effects, plus `provider` on provider-native actions only (ADR-0013) —
- * canonical actions omit the key, so scope is additive and minor.
+ * and effects, plus `provider` on provider-native actions only (ADR-0013)
+ * and `deprecated` on deprecated actions only (ADR-0014) — canonical /
+ * non-deprecated actions omit the keys, so both are additive and minor.
  */
 export interface ActionMetadata {
   name: string;
   description: string;
   effects: string;
   provider?: ProviderToken;
+  deprecated?: ActionDeprecation;
 }
 
 function toMetadata(action: Action): ActionMetadata {
-  const base: ActionMetadata = {
+  return {
     name: action.name,
     description: action.description,
     effects: action.effects,
+    ...(action.provider !== undefined ? { provider: action.provider } : {}),
+    ...(action.deprecated !== undefined ? { deprecated: action.deprecated } : {}),
   };
-  return action.provider !== undefined ? { ...base, provider: action.provider } : base;
 }

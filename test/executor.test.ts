@@ -324,6 +324,74 @@ describe('token acquisition at the execution boundary (T6, ADR-0004)', () => {
   });
 });
 
+describe('deprecated actions at the execution boundary (ADR-0014)', () => {
+  // The execution boundary has deliberately NO deprecation branch: until
+  // sunset a deprecated action stays advertised and stays executable. These
+  // pins make a future branch that would reject/reroute deprecated actions
+  // fail loudly.
+  const deprecated = {
+    name: 'legacy_export',
+    description: 'The old export shape.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { done: { type: 'boolean' } },
+      required: ['done'],
+    },
+    effects: 'read' as const,
+    deprecated: { replacement: 'export_doc', sunset: '2026-09-01' },
+  };
+  const sibling = { ...deprecated, name: 'export_probe', deprecated: undefined };
+
+  function deprecationHarness() {
+    const connector = makeConnector('deprecation', ['legacy_export', 'export_probe'], {
+      legacy_export: () => ({ done: true }),
+      export_probe: () => ({ done: true }),
+    });
+    return makeHarness({
+      actions: [deprecated, sibling],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'deprecation' }],
+    });
+  }
+
+  it('executes a deprecated action exactly like a normal one', async () => {
+    const { executor } = deprecationHarness();
+
+    const deprecatedResult = await executor.executeAction(TENANT_A, CONN_1, 'legacy_export', {});
+    expect(deprecatedResult).toMatchObject({ ok: true, output: { done: true } });
+    const normalResult = await executor.executeAction(TENANT_A, CONN_1, 'export_probe', {});
+    expect(normalResult).toMatchObject({ ok: true, output: { done: true } });
+  });
+
+  it('audits a deprecated action identically to a normal one', async () => {
+    const { executor, audit } = deprecationHarness();
+
+    await executor.executeAction(TENANT_A, CONN_1, 'legacy_export', {});
+    await executor.executeAction(TENANT_A, CONN_1, 'export_probe', {});
+
+    const rows = audit.list();
+    expect(rows).toHaveLength(2);
+    // Deprecation is advertising metadata, not an execution-policy branch:
+    // the two rows differ in nothing but the action name.
+    const rowShape = {
+      tenantId: TENANT_A,
+      connectionId: CONN_1,
+      source: 'mcp',
+      success: true,
+      errorCode: null,
+    };
+    expect(rows[0]).toMatchObject({ actionName: 'legacy_export', ...rowShape });
+    expect(rows[1]).toMatchObject({ actionName: 'export_probe', ...rowShape });
+  });
+});
+
 describe('test_connection (T10)', () => {
   it('executes through Seam A like any action, with allowlist + audit', async () => {
     const { executor, allowlists, audit } = makeHarness();

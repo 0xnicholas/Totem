@@ -115,6 +115,18 @@ describe('buildOpenApiDocument (T24, generator)', () => {
                   'actions only; canonical actions omit the key.',
                 enum: ['feishu', 'dingtalk'],
               },
+              deprecated: {
+                type: 'object',
+                description:
+                  "The action's deprecation status (ADR-0014): present on " +
+                  'deprecated actions only; non-deprecated actions omit the key.',
+                additionalProperties: false,
+                properties: {
+                  replacement: { type: 'string' },
+                  sunset: { type: 'string' },
+                  note: { type: 'string' },
+                },
+              },
             },
             required: ['name', 'description', 'effects'],
           },
@@ -152,6 +164,18 @@ describe('buildOpenApiDocument (T24, generator)', () => {
                   "The action's provider scope (ADR-0013): present on provider-native " +
                   'actions only; canonical actions omit the key.',
                 enum: ['feishu', 'dingtalk'],
+              },
+              deprecated: {
+                type: 'object',
+                description:
+                  "The action's deprecation status (ADR-0014): present on " +
+                  'deprecated actions only; non-deprecated actions omit the key.',
+                additionalProperties: false,
+                properties: {
+                  replacement: { type: 'string' },
+                  sunset: { type: 'string' },
+                  note: { type: 'string' },
+                },
               },
             },
             required: ['name', 'description', 'effects'],

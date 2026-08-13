@@ -1,4 +1,4 @@
-export type { Action, ActionContext, ActionHandler, ActionEffect, ProviderToken } from './action.js';
+export type { Action, ActionContext, ActionDeprecation, ActionHandler, ActionEffect, ProviderToken } from './action.js';
 export { PROVIDER_TOKENS } from './action.js';
 export { CONNECTION_ACTIONS, DOCS_ACTIONS } from './actions.js';
 export type {

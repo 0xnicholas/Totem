@@ -113,6 +113,18 @@ const actionMetadataSchema = {
       // Derived, never re-listed by hand: the closed provider-token union.
       enum: [...PROVIDER_TOKENS],
     },
+    deprecated: {
+      type: 'object',
+      description:
+        "The action's deprecation status (ADR-0014): present on " +
+        'deprecated actions only; non-deprecated actions omit the key.',
+      additionalProperties: false,
+      properties: {
+        replacement: { type: 'string' },
+        sunset: { type: 'string' },
+        note: { type: 'string' },
+      },
+    },
   },
   required: ['name', 'description', 'effects'],
 } as const;
@@ -280,14 +292,15 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
           operationId: 'list_actions',
           description:
             'List the platform action set as metadata (name, description, effects; ' +
-            'provider on provider-native actions only — ADR-0013); hidden actions ' +
-            'are excluded.',
+            'provider on provider-native actions only — ADR-0013; deprecated status ' +
+            'on deprecated actions only — ADR-0014); hidden actions are excluded.',
           security: BEARER_SECURITY,
           responses: {
             '200': {
               description:
                 'The platform action set as metadata (hidden excluded; ' +
-                'provider present on provider-native actions only).',
+                'provider present on provider-native actions only, deprecated ' +
+                'status present on deprecated actions only).',
               content: { 'application/json': { schema: actionsListSchema } },
             },
           },

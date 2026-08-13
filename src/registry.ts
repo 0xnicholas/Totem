@@ -53,6 +53,7 @@ export class ActionRegistry {
       );
     }
     this.assertProviderScope(action.name, action.provider);
+    this.assertDeprecation(action.name, action.deprecated);
     if (this.actions.has(action.name)) {
       throw new Error(`Action "${action.name}" is already registered`);
     }
@@ -90,6 +91,20 @@ export class ActionRegistry {
           `Canonical action "${name}" must not carry the "${token}_" provider prefix (ADR-0013)`,
         );
       }
+    }
+  }
+
+  /**
+   * The ADR-0014 deprecation rule, enforced at registration: a `replacement`
+   * without a `sunset` is rejected. There is deliberately no
+   * referential-integrity check on the replacement's name — deprecation may
+   * precede the successor's landing (spec story 18).
+   */
+  private assertDeprecation(name: string, deprecated: Action['deprecated']): void {
+    if (deprecated?.replacement !== undefined && deprecated.sunset === undefined) {
+      throw new Error(
+        `Deprecated action "${name}" declares a replacement without a sunset (ADR-0014)`,
+      );
     }
   }
 
