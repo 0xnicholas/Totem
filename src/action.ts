@@ -104,6 +104,17 @@ export interface Action {
 }
 
 /**
+ * A Visible Action (CONTEXT.md): an Action with no `hidden` flag — the
+ * registry's advertisement view, produced by
+ * `ActionRegistry.visibleActions()` (hidden excluded, name-sorted) and
+ * projected by every consumption surface. The type carries every field of
+ * `Action` except `hidden`, so a caller holding a VisibleAction cannot even
+ * read the flag — surfaces translate only their wire format (ADR-0008) and
+ * can never re-derive the hidden rule.
+ */
+export type VisibleAction = Omit<Action, 'hidden'>;
+
+/**
  * A connector's private implementation of a platform action (ADR-0003):
  * `handlers: Record<actionName, Handler>` lives inside the connector and is
  * never part of its interface.

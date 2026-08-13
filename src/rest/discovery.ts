@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import { requireTenantKey } from '../auth.js';
-import type { Action, ActionDeprecation, ProviderToken } from '../action.js';
+import type { VisibleAction } from '../action.js';
 import { isRecord } from '../admin/util.js';
 import type { MCPKeyStore } from '../mcp/key-store.js';
+import { toActionMetadata } from './action-metadata.js';
 
 export interface DiscoveryAppConfig {
-  /** The platform action set (the registry's view; hidden actions are filtered here). */
-  actions: Action[];
+  /** The registry's visible view (`registry.visibleActions()`: hidden excluded, name-sorted); this surface translates only its wire format. */
+  actions: VisibleAction[];
   /** Tenant actions-scope key resolution (the same store the MCP surface uses). */
   keys: MCPKeyStore;
 }
@@ -26,16 +27,18 @@ export interface DiscoveryAppConfig {
  * Authenticated with a tenant actions-scope API key (Bearer), like the MCP
  * surface; no connection is involved — action metadata is platform-wide
  * (ADR-0001), not per-connection.
+ *
+ * The surface receives the registry's visible view (`VisibleAction[]`) and
+ * projects only its wire format (ADR-0008): the hidden filter and the
+ * advertised ordering live once in `ActionRegistry.visibleActions()`, and
+ * the metadata shape lives once in `action-metadata.ts`.
  */
 export function createDiscoveryApp(config: DiscoveryAppConfig): Hono {
   const { actions, keys } = config;
-  const visible = actions
-    .filter((action) => action.hidden !== true)
-    .sort((a, b) => a.name.localeCompare(b.name));
   const app = new Hono();
 
   app.get('/actions', requireTenantKey(keys), (c) => {
-    return c.json({ actions: visible.map(toMetadata) });
+    return c.json({ actions: actions.map(toActionMetadata) });
   });
 
   app.post('/actions/search', requireTenantKey(keys), async (c) => {
@@ -45,37 +48,13 @@ export function createDiscoveryApp(config: DiscoveryAppConfig): Hono {
       return c.json({ error: 'body must include a non-empty "query" string' }, 400);
     }
     const needle = query.toLowerCase();
-    const matches = visible.filter(
+    const matches = actions.filter(
       (action) =>
         action.name.toLowerCase().includes(needle) ||
         action.description.toLowerCase().includes(needle),
     );
-    return c.json({ query, actions: matches.map(toMetadata) });
+    return c.json({ query, actions: matches.map(toActionMetadata) });
   });
 
   return app;
-}
-
-/**
- * The wire shape of one action on the discovery surface: name, description
- * and effects, plus `provider` on provider-native actions only (ADR-0013)
- * and `deprecated` on deprecated actions only (ADR-0014) — canonical /
- * non-deprecated actions omit the keys, so both are additive and minor.
- */
-export interface ActionMetadata {
-  name: string;
-  description: string;
-  effects: string;
-  provider?: ProviderToken;
-  deprecated?: ActionDeprecation;
-}
-
-function toMetadata(action: Action): ActionMetadata {
-  return {
-    name: action.name,
-    description: action.description,
-    effects: action.effects,
-    ...(action.provider !== undefined ? { provider: action.provider } : {}),
-    ...(action.deprecated !== undefined ? { deprecated: action.deprecated } : {}),
-  };
 }

@@ -24,22 +24,24 @@ describe('McpAdapter', () => {
     const adapter = new McpAdapter(executor, allowlists);
 
     // Default harness allowlist permits every registered action, and the
-    // fake connector implements all of them: the full registry is exposed.
+    // fake connector implements all of them: the full registry is exposed,
+    // name-sorted (the registry's visible view — ADR-0002's filter now
+    // starts from ActionRegistry.visibleActions()).
     const all = await adapter.listTools(TENANT_A, CONN_1);
     expect(all.map((t) => t.name)).toEqual([
-      'create_doc',
-      'search_docs',
-      'get_doc_content',
-      'get_doc_metadata',
       'append_doc_content',
-      'rename_doc',
-      'move_doc',
+      'create_doc',
       'export_doc',
-      'read_sheet_cells',
-      'write_sheet_cells',
       'feishu_read_bitable_records',
       'feishu_write_bitable_records',
+      'get_doc_content',
+      'get_doc_metadata',
+      'move_doc',
+      'read_sheet_cells',
+      'rename_doc',
+      'search_docs',
       'test_connection',
+      'write_sheet_cells',
     ]);
     const createDoc = all.find((t) => t.name === 'create_doc');
     expect(createDoc?.description).toBeTruthy();
@@ -299,7 +301,7 @@ describe('McpAdapter', () => {
     // stored description is the single clean source (ADR-0014's sole
     // exception to "descriptions carry no marking").
     expect(
-      executor.listActions().find((a) => a.name === 'legacy_export')?.description,
+      executor.listVisibleActions().find((a) => a.name === 'legacy_export')?.description,
     ).toBe('The old export shape.');
     // getTool resolves through the same projection.
     await expect(adapter.getTool(TENANT_A, CONN_1, 'legacy_export')).resolves.toMatchObject({

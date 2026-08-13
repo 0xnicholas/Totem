@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import type { AnySchemaObject } from 'ajv';
-import { PROVIDER_TOKENS, type Action } from '../action.js';
+import type { VisibleAction } from '../action.js';
 import { ACTION_ERROR_CODES, type ActionErrorCode } from '../errors.js';
 import { TOTEM_VERSION } from '../version.js';
+import { actionMetadataSchema } from './action-metadata.js';
 import { STATUS_BY_ERROR_CODE } from './rpc.js';
 
 /** The document-level metadata injected by the composition root (T24). */
@@ -19,8 +20,8 @@ export interface OpenApiMeta {
 }
 
 export interface OpenApiAppConfig {
-  /** The platform action set (the registry's view; hidden actions are filtered here). */
-  actions: Action[];
+  /** The registry's visible view (`registry.visibleActions()`: hidden excluded, name-sorted); this surface translates only its wire format. */
+  actions: VisibleAction[];
   meta: OpenApiMeta;
 }
 
@@ -96,37 +97,6 @@ const rpcEnvelopeSchema = {
     args: { type: 'object' },
   },
   required: ['action'],
-} as const;
-
-const actionMetadataSchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    name: { type: 'string' },
-    description: { type: 'string' },
-    effects: { type: 'string' },
-    provider: {
-      type: 'string',
-      description:
-        "The action's provider scope (ADR-0013): present on provider-native " +
-        'actions only; canonical actions omit the key.',
-      // Derived, never re-listed by hand: the closed provider-token union.
-      enum: [...PROVIDER_TOKENS],
-    },
-    deprecated: {
-      type: 'object',
-      description:
-        "The action's deprecation status (ADR-0014): present on " +
-        'deprecated actions only; non-deprecated actions omit the key.',
-      additionalProperties: false,
-      properties: {
-        replacement: { type: 'string' },
-        sunset: { type: 'string', format: 'date' },
-        note: { type: 'string' },
-      },
-    },
-  },
-  required: ['name', 'description', 'effects'],
 } as const;
 
 const actionsListSchema = {
@@ -256,17 +226,16 @@ function actionErrorResponse(status: number): Response {
  * endpoint, so per-action contracts are published in `components.schemas`
  * as `<action>_input` / `<action>_output`, embedded verbatim with exactly
  * one permitted transformation: the ajv draft-07 `nullable: true` →
- * JSON Schema 2020-12 `type: [...]` translation). Hidden actions are
- * filtered before generation (the discovery rule: `hidden !== true`), so
- * platform-internal actions never appear.
+ * JSON Schema 2020-12 `type: [...]` translation). The input is the
+ * registry's visible view (`VisibleAction[]`, hidden excluded by
+ * `registry.visibleActions()`), so platform-internal actions never appear;
+ * the discovery metadata shape is embedded by reference from
+ * `action-metadata.ts` — this generator owns neither the filter nor the
+ * shape.
  */
-export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): OpenApiDocument {
-  const visible = actions
-    .filter((action) => action.hidden !== true)
-    .sort((a, b) => a.name.localeCompare(b.name));
-
+export function buildOpenApiDocument(actions: VisibleAction[], meta: OpenApiMeta): OpenApiDocument {
   const schemas: Record<string, unknown> = { ActionError: actionErrorSchema };
-  for (const action of visible) {
+  for (const action of actions) {
     schemas[`${action.name}_input`] = toOpenApiSchema(action.inputSchema);
     schemas[`${action.name}_output`] = toOpenApiSchema(action.outputSchema);
   }
@@ -375,7 +344,7 @@ export function buildOpenApiDocument(actions: Action[], meta: OpenApiMeta): Open
  * gate use exactly this, so a registry change that forgets to update
  * `openapi.json` turns the build red.
  */
-export function buildPlatformOpenApiDocument(actions: Action[]): OpenApiDocument {
+export function buildPlatformOpenApiDocument(actions: VisibleAction[]): OpenApiDocument {
   return buildOpenApiDocument(actions, DEFAULT_OPENAPI_META);
 }
 

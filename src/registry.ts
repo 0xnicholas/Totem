@@ -1,7 +1,7 @@
 import Ajv, { type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import type { AnySchemaObject } from 'ajv';
-import type { Action, ActionEffect, ProviderToken } from './action.js';
+import type { Action, ActionEffect, ProviderToken, VisibleAction } from './action.js';
 import { PROVIDER_TOKENS } from './action.js';
 import type { IConnector } from './connector.js';
 import type { ValidationIssue } from './errors.js';
@@ -166,6 +166,21 @@ export class ActionRegistry {
   /** All registered platform actions, in registration order. */
   listActions(): Action[] {
     return [...this.actions.values()].map((entry) => entry.action);
+  }
+
+  /**
+   * The registry's advertisement view (CONTEXT.md "Visible Action"): every
+   * action with no `hidden` flag, sorted by name. This is the one place the
+   * hidden rule and the advertised ordering live — the consumption surfaces
+   * project this view into their wire formats (ADR-0008) instead of
+   * re-deriving the filter. Hidden actions stay registered, allowlistable
+   * and executable through the execution boundary; they are simply never
+   * advertised (ADR-0002 hide-don't-reject).
+   */
+  visibleActions(): VisibleAction[] {
+    return this.listActions()
+      .filter((action) => action.hidden !== true)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**

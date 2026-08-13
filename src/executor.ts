@@ -1,4 +1,4 @@
-import type { Action, ActionContext } from './action.js';
+import type { Action, ActionContext, VisibleAction } from './action.js';
 import { auditParamHash } from './audit.js';
 import type { IConnector } from './connector.js';
 import type { ActionErrorCode } from './errors.js';
@@ -362,9 +362,9 @@ export class ActionExecutor {
     }
   }
 
-  /** All registered platform actions (registration order), for transport adapters. */
-  listActions(): Action[] {
-    return this.registry.listActions();
+  /** The registry's visible view (hidden excluded, name-sorted), for transport adapters. */
+  listVisibleActions(): VisibleAction[] {
+    return this.registry.visibleActions();
   }
 
   /**

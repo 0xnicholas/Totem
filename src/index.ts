@@ -1,4 +1,4 @@
-export type { Action, ActionContext, ActionDeprecation, ActionHandler, ActionEffect, ProviderToken } from './action.js';
+export type { Action, ActionContext, ActionDeprecation, ActionHandler, ActionEffect, ProviderToken, VisibleAction } from './action.js';
 export { PROVIDER_TOKENS } from './action.js';
 export { CONNECTION_ACTIONS, DOCS_ACTIONS } from './actions.js';
 export type {
@@ -50,6 +50,8 @@ export { createMcpApp } from './mcp/server.js';
 export type { McpAppConfig } from './mcp/server.js';
 export { createDiscoveryApp } from './rest/discovery.js';
 export type { DiscoveryAppConfig } from './rest/discovery.js';
+export { actionMetadataSchema, toActionMetadata } from './rest/action-metadata.js';
+export type { ActionMetadata } from './rest/action-metadata.js';
 export { createRpcApp, STATUS_BY_ERROR_CODE } from './rest/rpc.js';
 export type { RpcAppConfig } from './rest/rpc.js';
 export { buildOpenApiDocument, buildPlatformOpenApiDocument, createOpenApiApp, DEFAULT_OPENAPI_META } from './rest/openapi.js';

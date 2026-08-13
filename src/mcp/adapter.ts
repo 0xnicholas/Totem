@@ -61,11 +61,12 @@ export class McpAdapter {
   /**
    * The tool list for a (tenant, connection): registry actions the
    * connection's allowlist permits, its connector implements, and that are
-   * not hidden (ADR-0002 hide-don't-reject; hidden actions exist for the
-   * platform's internal use and are never advertised). Deprecated actions
-   * (ADR-0014) stay advertised until sunset, with the `[DEPRECATED …]`
-   * marker on the projected description only. Empty for unknown
-   * connections.
+   * visible (ADR-0002 hide-don't-reject; the hidden rule lives once in
+   * `ActionRegistry.visibleActions()` — the executor's
+   * `listVisibleActions()` view — hidden actions are never advertised).
+   * Deprecated actions (ADR-0014) stay advertised until sunset, with the
+   * `[DEPRECATED …]` marker on the projected description only. Empty for
+   * unknown connections.
    */
   async listTools(tenantId: string, connectionId: string): Promise<McpToolDefinition[]> {
     const connection = await this.executor.getConnection(tenantId, connectionId);
@@ -74,12 +75,10 @@ export class McpAdapter {
     if (!connector) return [];
     const allowed = new Set(await this.allowlists.getAllowedActions(tenantId, connectionId));
     return this.executor
-      .listActions()
+      .listVisibleActions()
       .filter(
         (action) =>
-          action.hidden !== true &&
-          allowed.has(action.name) &&
-          connector.manifest.implements.includes(action.name),
+          allowed.has(action.name) && connector.manifest.implements.includes(action.name),
       )
       .map((action) => ({
         name: action.name,

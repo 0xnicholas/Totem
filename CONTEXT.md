@@ -16,6 +16,10 @@ _Avoid_: Unified action, standard action
 An Action scoped to one provider (`Action.provider`, ADR-0013): named `<provider>_verb_noun` (e.g. `feishu_read_bitable_records`), implementable only by that provider's connectors, with a curated provider-shaped output schema that keeps every platform invariant (opaque IDs, unified errors, validation). Enters the catalog when a capability is genuinely provider-specific; promoted by adding a new canonical Action and deprecating the native one (ADR-0014) — never by renaming.
 _Avoid_: Custom action (StackOne's `custom` actionType returns raw provider output; totem's provider-native output stays curated), connector-specific action, passthrough
 
+**Visible Action**:
+An Action with no `hidden` flag — the registry's advertisement view, produced by `ActionRegistry.visibleActions()` (hidden excluded, name-sorted) and projected by every consumption surface (MCP tools, `GET /actions`, OpenAPI). Hidden actions stay registered and executable through the Execution Boundary; they are simply never advertised.
+_Avoid_: Public action, exposed action, listed action
+
 **Action Registry**:
 The single source of truth for action definitions. Owned by the platform; connectors declare which actions they implement.
 _Avoid_: Tool registry, action catalog

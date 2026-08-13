@@ -7,6 +7,7 @@ import {
   createOpenApiApp,
   type OpenApiDocument,
 } from '../src/rest/openapi.js';
+import { actionMetadataSchema } from '../src/rest/action-metadata.js';
 import { PLATFORM_ACTIONS } from './fixtures.js';
 
 const META = {
@@ -14,25 +15,6 @@ const META = {
   title: 'Totem API',
   serverUrl: 'https://totem.example.com',
 } as const;
-
-const HIDDEN_ACTION: Action = {
-  name: 'platform_internal',
-  description: 'Secret bookkeeping.',
-  inputSchema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: { note: { type: 'string' } },
-    required: [],
-  },
-  outputSchema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {},
-    required: [],
-  },
-  effects: 'write',
-  hidden: true,
-};
 
 /**
  * The OpenAPI surface (T24): a pure generator (`buildOpenApiDocument`)
@@ -95,45 +77,21 @@ describe('buildOpenApiDocument (T24, generator)', () => {
     const list = doc.paths['/actions']!.get!;
     expect(list.operationId).toBe('list_actions');
     expect(list.security!).toEqual([{ bearerAuth: [] }]);
-    expect(list.responses['200']!.content!['application/json']!.schema).toEqual({
+    const listSchema = list.responses['200']!.content!['application/json']!.schema as {
+      type: string;
+      additionalProperties: boolean;
+      required: string[];
+      properties: { actions: { type: string; items: unknown } };
+    };
+    expect(listSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      properties: {
-        actions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              name: { type: 'string' },
-              description: { type: 'string' },
-              effects: { type: 'string' },
-              provider: {
-                type: 'string',
-                description:
-                  "The action's provider scope (ADR-0013): present on provider-native " +
-                  'actions only; canonical actions omit the key.',
-                enum: ['feishu', 'dingtalk'],
-              },
-              deprecated: {
-                type: 'object',
-                description:
-                  "The action's deprecation status (ADR-0014): present on " +
-                  'deprecated actions only; non-deprecated actions omit the key.',
-                additionalProperties: false,
-                properties: {
-                  replacement: { type: 'string' },
-                  sunset: { type: 'string', format: 'date' },
-                  note: { type: 'string' },
-                },
-              },
-            },
-            required: ['name', 'description', 'effects'],
-          },
-        },
-      },
       required: ['actions'],
+      properties: { actions: { type: 'array' } },
     });
+    // Embedded by reference, not hand-kept: the single home of the metadata
+    // wire shape is action-metadata.ts, beside the builder it documents.
+    expect(listSchema.properties.actions.items).toBe(actionMetadataSchema);
 
     const search = doc.paths['/actions/search']!.post!;
     expect(search.operationId).toBe('search_actions');
@@ -144,46 +102,22 @@ describe('buildOpenApiDocument (T24, generator)', () => {
       properties: { query: { type: 'string', minLength: 1 } },
       required: ['query'],
     });
-    expect(search.responses['200']!.content!['application/json']!.schema).toEqual({
+    const searchSchema = search.responses['200']!.content!['application/json']!.schema as {
+      type: string;
+      additionalProperties: boolean;
+      required: string[];
+      properties: {
+        query: { type: string };
+        actions: { type: string; items: unknown };
+      };
+    };
+    expect(searchSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      properties: {
-        query: { type: 'string' },
-        actions: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              name: { type: 'string' },
-              description: { type: 'string' },
-              effects: { type: 'string' },
-              provider: {
-                type: 'string',
-                description:
-                  "The action's provider scope (ADR-0013): present on provider-native " +
-                  'actions only; canonical actions omit the key.',
-                enum: ['feishu', 'dingtalk'],
-              },
-              deprecated: {
-                type: 'object',
-                description:
-                  "The action's deprecation status (ADR-0014): present on " +
-                  'deprecated actions only; non-deprecated actions omit the key.',
-                additionalProperties: false,
-                properties: {
-                  replacement: { type: 'string' },
-                  sunset: { type: 'string', format: 'date' },
-                  note: { type: 'string' },
-                },
-              },
-            },
-            required: ['name', 'description', 'effects'],
-          },
-        },
-      },
       required: ['query', 'actions'],
+      properties: { query: { type: 'string' }, actions: { type: 'array' } },
     });
+    expect(searchSchema.properties.actions.items).toBe(actionMetadataSchema);
   });
 
   it('declares the Bearer security scheme', () => {
@@ -194,9 +128,8 @@ describe('buildOpenApiDocument (T24, generator)', () => {
   });
 
   it('publishes every visible action as <name>_input and <name>_output components', () => {
-    const visible = PLATFORM_ACTIONS.filter((action) => action.hidden !== true);
     expect(Object.keys(doc.components.schemas).sort()).toEqual(
-      ['ActionError', ...visible.flatMap((action) => [`${action.name}_input`, `${action.name}_output`])].sort(),
+      ['ActionError', ...PLATFORM_ACTIONS.flatMap((action) => [`${action.name}_input`, `${action.name}_output`])].sort(),
     );
   });
 
@@ -206,7 +139,6 @@ describe('buildOpenApiDocument (T24, generator)', () => {
     // No v1 output schema uses ajv `nullable` (the list cursor is the
     // anyOf form), so every output component must be byte-identical.
     for (const action of PLATFORM_ACTIONS) {
-      if (action.hidden) continue;
       expect(doc.components.schemas[`${action.name}_output`]).toEqual(action.outputSchema);
     }
   });
@@ -287,13 +219,6 @@ describe('buildOpenApiDocument (T24, generator)', () => {
       properties: { since: { type: ['string', 'null'], format: 'date-time' } },
       required: [],
     });
-  });
-
-  it('hidden actions never appear anywhere in the document', () => {
-    const withoutHidden = buildOpenApiDocument([...PLATFORM_ACTIONS, HIDDEN_ACTION], META);
-    expect(Object.keys(withoutHidden.components.schemas)).not.toContain('platform_internal_input');
-    expect(Object.keys(withoutHidden.components.schemas)).not.toContain('platform_internal_output');
-    expect(JSON.stringify(withoutHidden)).not.toContain('platform_internal');
   });
 });
 

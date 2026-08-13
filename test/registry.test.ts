@@ -28,10 +28,10 @@ function providerAction(name: string, provider: string | undefined): Action {
 }
 
 describe('action registry (registration contract, ADR-0001/0003)', () => {
-  it('registers the platform action set', () => {
+  it('registers the platform action set (visible view, name-sorted by the registry)', () => {
     const executor = makeExecutor();
 
-    const names = executor.listActions().map((a) => a.name).sort();
+    const names = executor.listVisibleActions().map((a) => a.name).sort();
     expect(names).toEqual([
       'append_doc_content',
       'create_doc',
@@ -138,7 +138,7 @@ describe('action registry (deprecation, ADR-0014)', () => {
     const deprecated = makeDeprecatedAction();
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, deprecated] });
 
-    const registered = executor.listActions().find((a) => a.name === 'legacy_export');
+    const registered = executor.listVisibleActions().find((a) => a.name === 'legacy_export');
     expect(registered?.deprecated).toEqual(EXPORT_DEPRECATION);
   });
 
@@ -150,7 +150,7 @@ describe('action registry (deprecation, ADR-0014)', () => {
       const executor = makeExecutor({
         actions: [...PLATFORM_ACTIONS, makeDeprecatedAction({ deprecated })],
       });
-      const registered = executor.listActions().find((a) => a.name === 'legacy_export');
+      const registered = executor.listVisibleActions().find((a) => a.name === 'legacy_export');
       expect(registered?.deprecated).toEqual(deprecated);
     }
   });
@@ -163,9 +163,9 @@ describe('action registry (deprecation, ADR-0014)', () => {
     });
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, deprecated] });
 
-    const registered = executor.listActions().find((a) => a.name === 'legacy_export');
+    const registered = executor.listVisibleActions().find((a) => a.name === 'legacy_export');
     expect(registered?.deprecated?.replacement).toBe('export_doc_v2');
-    expect(executor.listActions().map((a) => a.name)).not.toContain('export_doc_v2');
+    expect(executor.listVisibleActions().map((a) => a.name)).not.toContain('export_doc_v2');
   });
 
   it('rejects a replacement without a sunset', () => {
@@ -191,7 +191,7 @@ describe('action registry (provider scope, ADR-0013)', () => {
     const native = providerAction('feishu_probe_thing', 'feishu');
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, native] });
 
-    const registered = executor.listActions().find((a) => a.name === 'feishu_probe_thing');
+    const registered = executor.listVisibleActions().find((a) => a.name === 'feishu_probe_thing');
     expect(registered?.provider).toBe('feishu');
   });
 
@@ -219,7 +219,7 @@ describe('action registry (provider scope, ADR-0013)', () => {
     const canonical = providerAction('probe_thing', undefined);
     const executor = makeExecutor({ actions: [...PLATFORM_ACTIONS, canonical] });
 
-    const registered = executor.listActions().find((a) => a.name === 'probe_thing');
+    const registered = executor.listVisibleActions().find((a) => a.name === 'probe_thing');
     expect(registered?.provider).toBeUndefined();
   });
 

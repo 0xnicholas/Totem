@@ -119,19 +119,19 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
     expect(rpcResult(listed.payload as never)).toMatchObject({
       result: {
         tools: [
-          { name: 'create_doc' },
-          { name: 'search_docs' },
-          { name: 'get_doc_content' },
-          { name: 'get_doc_metadata' },
           { name: 'append_doc_content' },
-          { name: 'rename_doc' },
-          { name: 'move_doc' },
+          { name: 'create_doc' },
           { name: 'export_doc' },
-          { name: 'read_sheet_cells' },
-          { name: 'write_sheet_cells' },
           { name: 'feishu_read_bitable_records' },
           { name: 'feishu_write_bitable_records' },
+          { name: 'get_doc_content' },
+          { name: 'get_doc_metadata' },
+          { name: 'move_doc' },
+          { name: 'read_sheet_cells' },
+          { name: 'rename_doc' },
+          { name: 'search_docs' },
           { name: 'test_connection' },
+          { name: 'write_sheet_cells' },
         ],
       },
     });
@@ -304,19 +304,19 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
     try {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name)).toEqual([
-      'create_doc',
-      'search_docs',
-      'get_doc_content',
-      'get_doc_metadata',
       'append_doc_content',
-      'rename_doc',
-      'move_doc',
+      'create_doc',
       'export_doc',
-      'read_sheet_cells',
-      'write_sheet_cells',
       'feishu_read_bitable_records',
       'feishu_write_bitable_records',
+      'get_doc_content',
+      'get_doc_metadata',
+      'move_doc',
+      'read_sheet_cells',
+      'rename_doc',
+      'search_docs',
       'test_connection',
+      'write_sheet_cells',
       ]);
       expect(tools[0]?.inputSchema).toMatchObject({ type: 'object' });
 

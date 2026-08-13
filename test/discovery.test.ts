@@ -5,7 +5,6 @@ import pg from 'pg';
 import { migrateUp } from '../scripts/migrate.mjs';
 import { generateApiKey, keyPrefixForEnv } from '../src/admin/keys.js';
 import { createDiscoveryApp } from '../src/rest/discovery.js';
-import type { Action } from '../src/action.js';
 import { InMemoryMCPKeyStore } from '../src/testing/memory-key-store.js';
 import { PostgresMCPKeyStore } from '../src/mcp/pg-key-store.js';
 import { EXPORT_DEPRECATION, PLATFORM_ACTIONS, makeDeprecatedAction } from './fixtures.js';
@@ -38,16 +37,16 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     });
   }
 
-  it('GET /actions lists the platform action set as metadata, hidden excluded', async () => {
+  it('GET /actions lists the platform action set as metadata (the registry\'s visible view)', async () => {
     const response = await discover('/actions');
     expect(response.status).toBe(200);
     const body = (await response.json()) as { actions: Array<{ name: string; description: string; effects: string }> };
     const names = body.actions.map((a) => a.name);
-    expect(names).toEqual(
-      PLATFORM_ACTIONS.filter((a) => a.hidden !== true)
-        .map((a) => a.name)
-        .sort(),
-    );
+    // The surface renders the view it is given, in the order given — the
+    // hidden filter and the advertised ordering live once in
+    // ActionRegistry.visibleActions() (pinned in registry-visibility.test.ts);
+    // this fixture passes the platform set in registration order.
+    expect(names).toEqual(PLATFORM_ACTIONS.map((a) => a.name));
     expect(names).toHaveLength(13);
     const createDoc = body.actions.find((a) => a.name === 'create_doc');
     expect(createDoc).toMatchObject({ effects: 'write' });
@@ -70,25 +69,6 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
         expect(action, action.name).not.toHaveProperty('provider');
       }
     }
-  });
-
-  it('hidden actions never leak through the discovery surface', async () => {
-    const hidden: Action = {
-      name: 'platform_internal',
-      description: 'Secret bookkeeping.',
-      inputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      outputSchema: { type: 'object', additionalProperties: false, properties: {}, required: [] },
-      effects: 'write',
-      hidden: true,
-    };
-    const keys = new InMemoryMCPKeyStore();
-    keys.addKey('tt_dev_hidden_test', 'tenant-a');
-    const app = createDiscoveryApp({ actions: [...PLATFORM_ACTIONS, hidden], keys });
-    const res = await app.fetch(new Request('http://localhost/actions', {
-      headers: { authorization: 'Bearer tt_dev_hidden_test' },
-    }));
-    const body = (await res.json()) as { actions: Array<{ name: string }> };
-    expect(body.actions.map((a) => a.name)).not.toContain('platform_internal');
   });
 
   it('GET /actions exposes deprecated when present and omits it when absent', async () => {

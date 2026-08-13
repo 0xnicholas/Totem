@@ -56,7 +56,7 @@ describe('tenant-key auth module (through every surface)', () => {
       keys,
     });
     rpcApp = createRpcApp({ executor: harness.executor, keys });
-    discoveryApp = createDiscoveryApp({ actions: harness.executor.listActions(), keys });
+    discoveryApp = createDiscoveryApp({ actions: harness.executor.listVisibleActions(), keys });
     adminApp = createAdminApp({ repo, adminKey: ADMIN_KEY });
 
     // Serve the surfaces behind one origin (like production's one process).

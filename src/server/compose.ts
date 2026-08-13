@@ -139,7 +139,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     keys: new PostgresMCPKeyStore(pool),
   });
   const discoveryApp = createDiscoveryApp({
-    actions: executor.listActions(),
+    actions: executor.listVisibleActions(),
     keys: new PostgresMCPKeyStore(pool),
   });
   const rpcApp = createRpcApp({
@@ -147,7 +147,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     keys: new PostgresMCPKeyStore(pool),
   });
   const openApiApp = createOpenApiApp({
-    actions: executor.listActions(),
+    actions: executor.listVisibleActions(),
     meta: {
       ...DEFAULT_OPENAPI_META,
       serverUrl: env.serverUrl ?? DEFAULT_OPENAPI_META.serverUrl,
