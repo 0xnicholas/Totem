@@ -1,6 +1,6 @@
 # Totem
 
-Totem is a multi-tenant action layer for AI agents: a curated, schema-first set of actions over MCP, backed by pluggable connectors to real systems (v1: Feishu Docs), with per-connection allowlists and audit logging. It is an internal platform: tenants are the operator's own internal projects, not paying customers (no SaaS, no second-level customer).
+Totem is a multi-tenant action layer for AI agents: a curated, schema-first set of actions over MCP, backed by pluggable connectors to real systems (docs: Feishu, DingTalk; messaging send: Feishu per ADR-0016), with per-connection allowlists and audit logging. It is an internal platform: tenants are the operator's own internal projects, not paying customers (no SaaS, no second-level customer).
 
 ## Language
 
@@ -29,8 +29,12 @@ The pluggable translation code that implements actions for one real system. A pu
 _Avoid_: Integration, adapter (when the topic is the connector as a whole), driver
 
 **Connection**:
-One tenant's authorized instance of a system: the row that holds OAuth tokens, allowlist, and audit scope for a specific Feishu user. Data, not code. A connector serves many connections.
+One tenant's authorized instance of a system: the row that holds tokens, allowlist, and audit scope — for a specific system user (Feishu, DingTalk) or, for consent-less systems, for the app identity itself (WeCom, ADR-0017). Data, not code. A connector serves many connections.
 _Avoid_: Connector (when you mean a connection), account, integration instance
+
+**Credential Connection**:
+A Connection of a consent-less system (WeCom): created when the tenant registers App Credentials — no authorize URL, no callback, identity is the app itself, tokens are app-level access tokens served by the cached cell (fetch on expiry, single-flight, never auth-expired). ADR-0017.
+_Avoid_: App connection, key connection, bot connection
 
 **Tenant**:
 The isolation unit of the platform and its unit of consumption: one consuming internal project. Owns connections, API keys, allowlists, and audit rows. Authenticates to the MCP endpoint with a tenant API key. Totem is an internal platform — tenants are the operator's own company's projects, not paying customers; there is no second-level customer (no StackOne-style origin_owner). Totem has no end-user accounts: agents act on behalf of a tenant, and system actions execute with the identity of the connection's owner (the Feishu user who authorized).
@@ -39,11 +43,11 @@ _Avoid_: Customer, organization, user, StackOne-style org → project → origin
 Tenants are **mutually trusted** in v1 (ADR-0010): admin-scope tenant keys are platform-credential equivalent, so consuming projects can self-onboard without an operator ticket. Tenant-scoped admin isolation is deferred until a non-trusted consumer exists.
 
 **App Credentials**:
-The OAuth application a tenant registers for a system (v1: a Feishu custom app): app_id/app_secret, held and encrypted by the platform. Registered self-service via the admin API by the tenant's own engineers, never committed to the tenant's codebase. The platform runs the authorize flow with them and stores the resulting tokens per connection.
+The system application a tenant registers (v1: a Feishu custom app; WeCom: a self-built app — corpid/secret/agentid): credentials held and encrypted by the platform. Registered self-service via the admin API by the tenant's own engineers, never committed to the tenant's codebase. The platform runs the authorize flow (user-grant systems) or fetches the app token (credential systems, ADR-0017) and stores the resulting tokens per connection.
 _Avoid_: Client secrets, OAuth app config, setup fields
 
 **Authorize Flow**:
-The minimal OAuth dance that opens a connection: the tenant registers App Credentials, the platform returns an authorize URL, the tenant's user grants access in the system's consent screen, and the callback creates the Connection. Deliberately not a StackOne-style connect session/Hub: no session tokens, no origin_owner, one redirect. The state machine lives in the platform's Token Lifecycle module; providers contribute thin adapters (ADR-0015).
+The minimal OAuth dance that opens a connection: the tenant registers App Credentials, the platform returns an authorize URL, the tenant's user grants access in the system's consent screen, and the callback creates the Connection. User-grant systems only — consent-less systems (WeCom) have no dance: the connection is created when the tenant registers App Credentials (ADR-0017). Deliberately not a StackOne-style connect session/Hub: no session tokens, no origin_owner, one redirect. The state machine lives in the platform's Token Lifecycle module; providers contribute thin adapters (ADR-0015).
 _Avoid_: Connect session, Hub, linking flow
 
 **Token Lifecycle**:
@@ -59,7 +63,7 @@ The append-only record of every execution attempt: tenant, connection, action, p
 _Avoid_: Log, traces, events
 
 **Opaque ID**:
-The platform-level identifier for a system object (`doc_id`), whose meaning only the connector can parse. Agents reference objects by opaque IDs, never by system tokens.
+The platform-level identifier for a system object (`doc_id`, `chat_id`), whose meaning only the connector can parse. Agents reference objects by opaque IDs, never by system tokens; natural keys an agent already possesses (an email) may enter schemas, but provider-shaped tokens (`open_id`, `user_id`, `union_id`) never do (ADR-0016).
 _Avoid_: Document token, docx token (when exposed to agents), resource URL
 
 **Upstream**:
@@ -93,3 +97,7 @@ _Avoid_: 开放标准 (it is not a standards-organization protocol), API 文档
 **List Envelope**:
 The unified output shape of list actions: `{data, next}` with identity fields (`doc_id`, `range`, `table_name`) kept at the top level. Aligned with StackOne's `actionType: list`; `next` is the cursor, currently always `null` (ADR-0012).
 _Avoid_: named list fields (`docs`/`records`/`values` — the ADR-0006 convention, superseded)
+
+**Chat**:
+A conversation container in a messaging system, addressed by the opaque `chat_id` — the group-message target of `send_message` (ADR-0016). Created upstream; its internals are never exposed to agents.
+_Avoid_: Group, conversation, room
