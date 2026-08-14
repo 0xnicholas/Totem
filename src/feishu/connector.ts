@@ -180,7 +180,7 @@ export class FeishuConnector implements IConnector {
 
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
-        const response = await this.docsRequest<SearchFilesData>(
+        const response = await this.docsRequest<SearchFilesData & Paginated>(
           '/open-apis/drive/v1/files/search',
           {
             method: 'POST',
@@ -203,7 +203,7 @@ export class FeishuConnector implements IConnector {
             doc_type: file.docs_type,
           })),
           // #42: a real cursor when Feishu says more pages exist.
-          next: response.data.has_more && response.data.page_token ? response.data.page_token : null,
+          next: nextCursor(response.data),
         };
         return output;
       },
@@ -427,7 +427,7 @@ export class FeishuConnector implements IConnector {
       feishu_read_bitable_records: async (args: ReadBitableRecordsInput, ctx) => {
         const input = args;
         const tableId = await resolveBitableTable(this.request, input.doc_id, input.table_name, ctx.token);
-        const response = await this.docsRequest<BitableRecordsData>(
+        const response = await this.docsRequest<BitableRecordsData & Paginated>(
           `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
           {
             token: ctx.token,
@@ -445,7 +445,7 @@ export class FeishuConnector implements IConnector {
             fields: record.fields,
           })),
           // #42: a real cursor when Feishu says more pages exist.
-          next: response.data.has_more && response.data.page_token ? response.data.page_token : null,
+          next: nextCursor(response.data),
         };
         return output;
       },
@@ -669,9 +669,21 @@ interface BitableTablesData {
 
 interface BitableRecordsData {
   items: Array<{ record_id: string; fields: Record<string, unknown> }>;
-  /** #42: pagination markers (live shape: has_more + page_token). */
+}
+
+/** #42: Feishu's pagination markers, shared by the list responses. */
+interface Paginated {
   has_more?: boolean;
   page_token?: string;
+}
+
+/**
+ * Derives the List Envelope's cursor (#42): Feishu's marker pair
+ * becomes the platform's opaque next — non-null only when another page
+ * exists.
+ */
+function nextCursor(data: Paginated): string | null {
+  return data.has_more && data.page_token ? data.page_token : null;
 }
 
 interface BitableCreateData {
@@ -684,9 +696,6 @@ interface BitableUpdateData {
 
 interface SearchFilesData {
   docs_entities: Array<{ docs_token: string; docs_type: string; title: string }>;
-  /** #42: pagination markers (live shape: has_more + page_token). */
-  has_more?: boolean;
-  page_token?: string;
 }
 
 interface FilesListData {

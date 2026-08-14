@@ -207,6 +207,18 @@ export class DingTalkConnector implements IConnector {
 
       search_docs: async (args: SearchDocsInput, ctx) => {
         const input = args;
+        // ADR-0014 §4: this provider cannot honor the canonical cursor
+        // input (the DingTalk cursor request path is not live-verified),
+        // and silently ignoring it is forbidden — fail validation loudly.
+        // The output side mirrors the stance: next stays null (a provider
+        // without cursor support yields a single page by contract), so a
+        // conforming caller never has a cursor to pass back.
+        if (input.page_token !== undefined) {
+          throw new ActionError(
+            'validation_error',
+            'search_docs on DingTalk does not support pagination: this connector returns a single page and never emits a next cursor',
+          );
+        }
         const response = await this.docRequest<SearchResponse>(
           '/v2.0/storage/dentries/search',
           {
@@ -475,7 +487,7 @@ export class DingTalkConnector implements IConnector {
           doc_id: input.doc_id,
           range: input.range,
           data: response.values,
-          // Cursor semantics are v2 (ADR-0012).
+          // A single range is a single page — no cursor applies.
           next: null,
         };
         return output;

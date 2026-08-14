@@ -209,6 +209,16 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output.data.map((d) => d.doc_id).sort()).toEqual(['doc-1', 'doc-2']);
   });
 
+  it('search_docs rejects page_token with validation_error — cursors unsupported (#42, ADR-0014 §4)', async () => {
+    await expect(
+      connector.execute(
+        'search_docs',
+        { query: '', page_token: 'abc' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'validation_error', retryable: false });
+  });
+
   it('search_docs returns every matching dentry (live search items carry no contentType)', async () => {
     // Live finding: search items have no contentType/docKey, so the
     // T17b-modeled ALIDOC filter does not apply — non-doc dentries are

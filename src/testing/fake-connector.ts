@@ -143,12 +143,18 @@ export class FakeConnector implements IConnector {
   private searchDocs(args: SearchDocsInput): SearchDocsOutput {
     const needle = args.query.toLowerCase();
     const limit = args.limit ?? 50;
-    const docs = [...this.docs.values()]
+    // #42: the fake honors the cursor contract like the real Feishu
+    // connector — page_token is an opaque offset cursor, next is set iff
+    // another page exists (Seam A tests can exercise pagination).
+    const offset = Number(args.page_token ?? '0') || 0;
+    const matched = [...this.docs.values()]
       .filter((doc) => doc.title.toLowerCase().includes(needle))
-      .reverse()
-      .slice(0, limit)
+      .reverse();
+    const docs = matched
+      .slice(offset, offset + limit)
       .map((doc) => ({ doc_id: doc.doc_id, title: doc.title, doc_type: 'docx' }));
-    return { data: docs, next: null };
+    const hasMore = offset + docs.length < matched.length;
+    return { data: docs, next: hasMore ? String(offset + limit) : null };
   }
 
   private getDocContent(args: GetDocContentInput): GetDocContentOutput {
@@ -259,11 +265,16 @@ export class FakeConnector implements IConnector {
   private readBitableRecords(args: ReadBitableRecordsInput): ReadBitableRecordsOutput {
     const doc = this.requireDoc(args.doc_id);
     const records = this.requireTable(doc, args.table_name);
+    // #42: the fake honors the cursor contract like the real connector.
+    const offset = Number(args.page_token ?? '0') || 0;
+    const limit = args.limit ?? 100;
+    const page = records.slice(offset, offset + limit);
+    const hasMore = offset + page.length < records.length;
     return {
       doc_id: doc.doc_id,
       table_name: args.table_name,
-      data: records.slice(0, args.limit ?? 100),
-      next: null,
+      data: page,
+      next: hasMore ? String(offset + limit) : null,
     };
   }
 
