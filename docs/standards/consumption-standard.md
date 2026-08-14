@@ -17,7 +17,7 @@
 | 错误 | StackOne `error_category` + `retryable` | ✅ 七码 + `retryable` + HTTP 映射 + `Retry-After` |
 | 发现 | StackOne `GET /actions` + `POST /actions/search` | ✅ 元数据 + 文本搜索(⚠️ 语义搜索 v2) |
 | MCP | MCP 开放协议(Streamable HTTP) | ✅ 工具列表按 allowlist 过滤(隐藏而非拒绝) |
-| 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 语义 v2 |
+| 分页 | StackOne cursor(`next`/`next_cursor`) | ✅ list 输出 `{data, next}`(ADR-0012);cursor 已落地(#42/#50) |
 | 机器可读契约 | OpenAPI 3.1(生成于注册表,非手写) | ✅ `GET {TOTEM_URL}/openapi.json`(无认证)+ CI 漂移门禁 |
 | 事件/Webhook | StackOne webhook 契约(HMAC 签名、双 secret、双重配置) | 🚧 v2 落地(ADR-0011),契约已定,见 §8 |
 | 目录演进 | StackOne connector semver + 破坏性变更分级(无动作级 deprecation) | ✅ 分级表 + deprecation + 覆盖缺口信号(ADR-0014),见 §11 |
@@ -138,12 +138,15 @@ ADR-0006 的“命名列表字段”约定已由 ADR-0012 取代):
 
 - `data`:条目数组(条目字段以 `openapi.json` 的 `<action>_output` schema 或
   `tools/list` 为准,如 `doc_id`/`title`/`doc_type`);
-- `next`:游标,当前恒 `null`;v2 接入 cursor 语义后为翻页 token(对齐 StackOne
-  `next_cursor`,接入方把 `next` 传回翻页);
+- `next`:游标。**cursor 已落地(#42,tracking #50)**:还有更多结果时为非空翻页
+  token,最后一页为 `null`;接入方把 `next` 原样传回同名动作的 `page_token` 输入
+  参数即可取下一页(对齐 StackOne `next_cursor`)。无 cursor 能力的 provider 恒返
+  `null`(单页即全部);不支持翻页的调用方忽略 `next` 也不破——只是只见一页;
 - **身份字段保留在顶层**:调用者需要据以行动的对象标识(如 `doc_id`、`range`、
-  `table_name`)与 `data` 平级,不塞进条目;
-- `next` 是加性演进:未来 cursor 落地不改变 `data` 与顶层身份字段,现有接入方
-  代码不破。
+  `table_name`、`record_id`)与 `data` 平级,不塞进条目;
+- cursor 落地是行为变更(Major,ADR-0014):`next` 不再恒 `null`,但输出形状不变
+  ——`data` 与顶层身份字段不动,只断言 `next === null` 的代码需要复盘是否应改为
+  跟随翻页(迁移窗口见 tracking #50)。
 
 MCP 与 REST 同构:`tools/call` 的 `structuredContent` 就是这个对象。
 

@@ -302,21 +302,30 @@ export class MockFeishuServer {
       const searchKey =
         isRecord(body) && typeof body.search_key === 'string' ? body.search_key : '';
       const pageSize = Number(c.req.query('page_size') ?? 50) || 50;
+      const offset = Number(c.req.query('page_token') ?? '0') || 0;
       const needle = searchKey.toLowerCase();
-      const docsEntities = this.docs
+      const matches = this.docs
         .filter((doc) => doc.title.toLowerCase().includes(needle))
-        .sort((a, b) => b.edited_at.localeCompare(a.edited_at))
-        .slice(0, pageSize)
-        .map((doc) => ({
-          docs_token: doc.doc_id,
-          docs_type: doc.doc_type,
-          title: doc.title,
-          owner_id: doc.owner_id,
-        }));
+        .sort((a, b) => b.edited_at.localeCompare(a.edited_at));
+      const page = matches.slice(offset, offset + pageSize);
+      const hasMore = offset + page.length < matches.length;
+      const docsEntities = page.map((doc) => ({
+        docs_token: doc.doc_id,
+        docs_type: doc.doc_type,
+        title: doc.title,
+        owner_id: doc.owner_id,
+      }));
+      // Real contract: has_more + page_token drive cursor pagination (#42);
+      // page_token is the offset of the next page.
       return c.json({
         code: 0,
         msg: 'ok',
-        data: { docs_entities: docsEntities, has_more: false, total: docsEntities.length },
+        data: {
+          docs_entities: docsEntities,
+          has_more: hasMore,
+          page_token: hasMore ? String(offset + pageSize) : '',
+          total: matches.length,
+        },
       });
     });
 
@@ -692,6 +701,23 @@ export class MockFeishuServer {
       });
     });
 
+    this.app.put('/open-apis/bitable/v1/apps/:app/tables/:tableId/records/:recordId', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const table = this.requireBitableTable(c.req.param('app'), c.req.param('tableId'));
+      if (!table) return notFound();
+      const record = table.records.find((r) => r.record_id === c.req.param('recordId'));
+      if (!record) return notFound();
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const fields = isRecord(body) && isRecord(body.fields) ? body.fields : {};
+      // Real contract: the update overwrites only the provided fields;
+      // others keep their current values.
+      record.fields = { ...record.fields, ...fields };
+      return c.json({ code: 0, msg: 'ok', data: { record: { record_id: record.record_id, fields: { ...record.fields } } } });
+    });
+
     this.app.get('/open-apis/bitable/v1/apps/:app/tables/:tableId/records', (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;
@@ -699,12 +725,18 @@ export class MockFeishuServer {
       const table = this.requireBitableTable(c.req.param('app'), c.req.param('tableId'));
       if (!table) return notFound();
       const pageSize = Number(c.req.query('page_size') ?? 100) || 100;
+      const offset = Number(c.req.query('page_token') ?? '0') || 0;
+      const page = table.records.slice(offset, offset + pageSize);
+      const hasMore = offset + page.length < table.records.length;
+      // Real contract: has_more + page_token drive cursor pagination (#42);
+      // page_token is the offset of the next page.
       return c.json({
         code: 0,
         msg: 'ok',
         data: {
-          items: table.records.slice(0, pageSize),
-          has_more: false,
+          items: page,
+          has_more: hasMore,
+          page_token: hasMore ? String(offset + pageSize) : '',
         },
       });
     });

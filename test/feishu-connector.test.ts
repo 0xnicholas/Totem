@@ -82,7 +82,11 @@ describe('FeishuConnector (Seam B)', () => {
     expect(output).toEqual({ data: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }], next: null });
 
     const limited = await connector.execute('search_docs', { query: '', limit: 1 }, ctx);
-    expect(limited).toEqual({ data: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }], next: null });
+    expect(limited).toEqual({ data: [{ doc_id: 'doc-1', title: 'Product Strategy', doc_type: 'docx' }], next: '1' });
+
+    // #42: a non-null next cursor fetches the next page.
+    const page2 = await connector.execute('search_docs', { query: '', limit: 1, page_token: '1' }, ctx);
+    expect(page2).toEqual({ data: [{ doc_id: 'doc-2', title: 'Notes', doc_type: 'docx' }], next: null });
   });
 
   it('get_doc_content returns the raw content in a stable structure', async () => {
@@ -661,6 +665,16 @@ describe('FeishuConnector advanced actions (T9)', () => {
       },
       { name: 'Archive', records: [] },
     ]);
+    mock.seedBitable('adv-pg', 'Pager', [
+      {
+        name: 'Rows',
+        records: [
+          { record_id: 'rec_pg_1', fields: { n: 1 } },
+          { record_id: 'rec_pg_2', fields: { n: 2 } },
+          { record_id: 'rec_pg_3', fields: { n: 3 } },
+        ],
+      },
+    ]);
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -764,6 +778,42 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(output.artifact_id).toBeTruthy();
   });
 
+  it('feishu_read_bitable_records returns a real next cursor and honors it (#42)', async () => {
+    const page1 = (await connector.execute(
+      'feishu_read_bitable_records',
+      { doc_id: 'adv-pg', table_name: 'Rows', limit: 2 },
+      withToken(),
+    )) as { data: unknown[]; next: string | null };
+    expect(page1.data).toHaveLength(2);
+    expect(typeof page1.next).toBe('string');
+
+    const page2 = (await connector.execute(
+      'feishu_read_bitable_records',
+      { doc_id: 'adv-pg', table_name: 'Rows', limit: 2, page_token: page1.next! },
+      withToken(),
+    )) as { data: Array<{ record_id: string }>; next: string | null };
+    expect(page2.data.map((r) => r.record_id)).toEqual(['rec_pg_3']);
+    expect(page2.next).toBeNull();
+  });
+
+  it('search_docs returns a real next cursor and honors it (#42)', async () => {
+    const page1 = (await connector.execute(
+      'search_docs',
+      { query: '', limit: 2 },
+      withToken(),
+    )) as { data: unknown[]; next: string | null };
+    expect(page1.data).toHaveLength(2);
+    expect(typeof page1.next).toBe('string');
+
+    const page2 = (await connector.execute(
+      'search_docs',
+      { query: '', limit: 2, page_token: page1.next! },
+      withToken(),
+    )) as { data: unknown[]; next: string | null };
+    expect(page2.data).toHaveLength(2);
+    expect(page2.next).toBeNull();
+  });
+
   it('read_sheet_cells resolves the named sheet and preserves cell types', async () => {
     const result = await connector.execute(
       'read_sheet_cells',
@@ -846,6 +896,37 @@ describe('FeishuConnector advanced actions (T9)', () => {
     );
     const items = (result as { data: unknown[] }).data;
     expect(items).toHaveLength(1);
+  });
+
+  it('feishu_update_bitable_records updates one record and returns the updated fields (#42)', async () => {
+    const result = await connector.execute(
+      'feishu_update_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads', record_id: 'rec_lead_1', fields: { stage: 'won' } },
+      withToken(),
+    );
+    expect(result).toEqual({
+      doc_id: 'adv-bit',
+      table_name: 'Leads',
+      record_id: 'rec_lead_1',
+      fields: { name: 'Ada', stage: 'won' },
+    });
+
+    const read = await connector.execute(
+      'feishu_read_bitable_records',
+      { doc_id: 'adv-bit', table_name: 'Leads', limit: 1 },
+      withToken(),
+    );
+    expect(read).toMatchObject({ data: [{ record_id: 'rec_lead_1', fields: { name: 'Ada', stage: 'won' } }] });
+  });
+
+  it('feishu_update_bitable_records maps a missing record to not_found (#42)', async () => {
+    await expect(
+      connector.execute(
+        'feishu_update_bitable_records',
+        { doc_id: 'adv-bit', table_name: 'Leads', record_id: 'rec_nope', fields: { stage: 'x' } },
+        withToken(),
+      ),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('feishu_write_bitable_records creates a record and returns its id', async () => {
@@ -1147,6 +1228,44 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       ['feishu_read_bitable_records', true, null],
       ['feishu_write_bitable_records', true, null],
       ['feishu_read_bitable_records', true, null],
+    ]);
+  });
+
+  it('feishu_update_bitable_records updates through the executor with governance (#42)', async () => {
+    const fake = new FakeConnector([
+      {
+        doc_id: 'f-bit2',
+        title: 'Bit',
+        content: '',
+        bitable: new Map([
+          ['Leads', [{ record_id: 'rec_9', fields: { name: 'Ada', stage: 'new' } }]],
+        ]),
+      },
+    ]);
+    const { executor, audit } = makeHarness({ connectors: [fake] });
+
+    const updated = await executor.executeAction(TENANT_A, CONN_1, 'feishu_update_bitable_records', {
+      doc_id: 'f-bit2',
+      table_name: 'Leads',
+      record_id: 'rec_9',
+      fields: { stage: 'won' },
+    });
+    expect(updated).toMatchObject({
+      ok: true,
+      output: { record_id: 'rec_9', fields: { name: 'Ada', stage: 'won' } },
+    });
+
+    const missing = await executor.executeAction(TENANT_A, CONN_1, 'feishu_update_bitable_records', {
+      doc_id: 'f-bit2',
+      table_name: 'Leads',
+      record_id: 'nope',
+      fields: {},
+    });
+    expect(missing).toMatchObject({ ok: false, error: { code: 'not_found' } });
+
+    expect(audit.list().map((r) => [r.actionName, r.success, r.errorCode])).toEqual([
+      ['feishu_update_bitable_records', true, null],
+      ['feishu_update_bitable_records', false, 'not_found'],
     ]);
   });
 

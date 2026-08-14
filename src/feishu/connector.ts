@@ -22,6 +22,8 @@ import type {
   SearchDocsOutput,
   SendMessageInput,
   SendMessageOutput,
+  UpdateBitableRecordsInput,
+  UpdateBitableRecordsOutput,
   WriteBitableRecordsInput,
   WriteBitableRecordsOutput,
   WriteSheetCellsInput,
@@ -105,6 +107,7 @@ export class FeishuConnector implements IConnector {
       'write_sheet_cells',
       'feishu_read_bitable_records',
       'feishu_write_bitable_records',
+      'feishu_update_bitable_records',
       'send_message',
     ],
   };
@@ -182,7 +185,12 @@ export class FeishuConnector implements IConnector {
           {
             method: 'POST',
             token: ctx.token,
-            query: { page_size: String(input.limit ?? 50) },
+            query: {
+              page_size: String(input.limit ?? 50),
+              // #42: the cursor is opaque to the agent — the connector is
+              // the only side that parses Feishu's pagination markers.
+              ...(input.page_token !== undefined ? { page_token: input.page_token } : {}),
+            },
             body: { search_key: input.query },
           },
         );
@@ -194,7 +202,8 @@ export class FeishuConnector implements IConnector {
             title: file.title,
             doc_type: file.docs_type,
           })),
-          next: null,
+          // #42: a real cursor when Feishu says more pages exist.
+          next: response.data.has_more && response.data.page_token ? response.data.page_token : null,
         };
         return output;
       },
@@ -422,7 +431,10 @@ export class FeishuConnector implements IConnector {
           `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records`,
           {
             token: ctx.token,
-            query: { page_size: String(input.limit ?? 100) },
+            query: {
+              page_size: String(input.limit ?? 100),
+              ...(input.page_token !== undefined ? { page_token: input.page_token } : {}),
+            },
           },
         );
         const output: ReadBitableRecordsOutput = {
@@ -432,7 +444,8 @@ export class FeishuConnector implements IConnector {
             record_id: record.record_id,
             fields: record.fields,
           })),
-          next: null,
+          // #42: a real cursor when Feishu says more pages exist.
+          next: response.data.has_more && response.data.page_token ? response.data.page_token : null,
         };
         return output;
       },
@@ -452,6 +465,26 @@ export class FeishuConnector implements IConnector {
           doc_id: input.doc_id,
           table_name: input.table_name,
           record_id: response.data.record.record_id,
+        };
+        return output;
+      },
+
+      feishu_update_bitable_records: async (args: UpdateBitableRecordsInput, ctx) => {
+        const input = args;
+        const tableId = await resolveBitableTable(this.request, input.doc_id, input.table_name, ctx.token);
+        const response = await this.docsRequest<BitableUpdateData>(
+          `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(input.record_id)}`,
+          {
+            method: 'PUT',
+            token: ctx.token,
+            body: { fields: input.fields },
+          },
+        );
+        const output: UpdateBitableRecordsOutput = {
+          doc_id: input.doc_id,
+          table_name: input.table_name,
+          record_id: response.data.record.record_id,
+          fields: response.data.record.fields,
         };
         return output;
       },
@@ -636,14 +669,24 @@ interface BitableTablesData {
 
 interface BitableRecordsData {
   items: Array<{ record_id: string; fields: Record<string, unknown> }>;
+  /** #42: pagination markers (live shape: has_more + page_token). */
+  has_more?: boolean;
+  page_token?: string;
 }
 
 interface BitableCreateData {
   record: { record_id: string; fields: Record<string, unknown> };
 }
 
+interface BitableUpdateData {
+  record: { record_id: string; fields: Record<string, unknown> };
+}
+
 interface SearchFilesData {
   docs_entities: Array<{ docs_token: string; docs_type: string; title: string }>;
+  /** #42: pagination markers (live shape: has_more + page_token). */
+  has_more?: boolean;
+  page_token?: string;
 }
 
 interface FilesListData {

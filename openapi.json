@@ -436,6 +436,12 @@
             ],
             "minimum": 1,
             "maximum": 100
+          },
+          "page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -859,6 +865,12 @@
             ],
             "minimum": 1,
             "maximum": 100
+          },
+          "page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -954,6 +966,58 @@
           "doc_id",
           "table_name",
           "record_id"
+        ]
+      },
+      "feishu_update_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "record_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "record_id",
+          "fields"
+        ]
+      },
+      "feishu_update_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "record_id",
+          "fields"
         ]
       },
       "send_message_input": {

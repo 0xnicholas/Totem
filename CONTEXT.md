@@ -95,7 +95,7 @@ The public contract of the consumption surfaces, in two layers: a human-readable
 _Avoid_: 开放标准 (it is not a standards-organization protocol), API 文档
 
 **List Envelope**:
-The unified output shape of list actions: `{data, next}` with identity fields (`doc_id`, `range`, `table_name`) kept at the top level. Aligned with StackOne's `actionType: list`; `next` is the cursor, currently always `null` (ADR-0012).
+The unified output shape of list actions: `{data, next}` with identity fields (`doc_id`, `range`, `table_name`) kept at the top level. Aligned with StackOne's `actionType: list`; `next` is the pagination cursor — non-null when more results exist, passed back as the optional `page_token` input (live since #42; providers without cursor support return `null`, a single page) (ADR-0012).
 _Avoid_: named list fields (`docs`/`records`/`values` — the ADR-0006 convention, superseded)
 
 **Chat**:

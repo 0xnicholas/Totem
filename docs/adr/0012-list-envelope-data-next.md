@@ -23,8 +23,13 @@ Every list action returns `{data, next}`:
 
 - `data` — the item array; item shape stays platform-owned (ADR-0001),
   e.g. `doc_id`/`title`/`doc_type`;
-- `next` — the cursor, always `null` until cursor semantics land (v2,
-  additive: existing code keeps working);
+- `next` — the cursor. v1 stance (superseded 2026-08-14, #42 / tracking
+  #50): always `null`. Cursor semantics have since landed for the list
+  actions that have them (`search_docs`, `feishu_read_bitable_records`):
+  a non-null token when more results exist, passed back as the optional
+  `page_token` input; providers without cursor support keep `null`
+  (single page). Still additive: `data` and the top-level identity fields
+  never changed shape.
 - identity fields the caller needs to act on the result (`doc_id`, `range`,
   `table_name`) stay at the top level beside `data`/`next` — preserving
   ADR-0006's original intent that callers get the object handle they acted

@@ -17,12 +17,14 @@ export interface SearchDocsInput {
   query: string;
   /** Max result count (1–100, default 50). */
   limit?: number;
+  /** Pagination cursor: the `next` value from the previous page (#42). */
+  page_token?: string;
 }
 
 export interface SearchDocsOutput {
   /** Matching documents. */
   data: Array<{ doc_id: string; title: string; doc_type: string }>;
-  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  /** Pagination cursor: non-null when more results exist; pass back as page_token (#42). */
   next: string | null;
 }
 
@@ -118,7 +120,7 @@ export interface ReadSheetCellsOutput {
   range: string;
   /** The range's cells, row-major, with native value types preserved. */
   data: CellValue[][];
-  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  /** Pagination cursor: non-null when more results exist; pass back as page_token (#42). */
   next: string | null;
 }
 
@@ -147,6 +149,8 @@ export interface ReadBitableRecordsInput {
   table_name: string;
   /** Max records to return (1–100, default 100). */
   limit?: number;
+  /** Pagination cursor: the `next` value from the previous page (#42). */
+  page_token?: string;
 }
 
 export interface ReadBitableRecordsOutput {
@@ -154,7 +158,7 @@ export interface ReadBitableRecordsOutput {
   table_name: string;
   /** Records with their field-name-based values. */
   data: Array<{ record_id: string; fields: Record<string, unknown> }>;
-  /** Pagination cursor; always null until cursor semantics land (ADR-0012). */
+  /** Pagination cursor: non-null when more results exist; pass back as page_token (#42). */
   next: string | null;
 }
 
@@ -172,6 +176,26 @@ export interface WriteBitableRecordsOutput {
   table_name: string;
   /** The created record's opaque id. */
   record_id: string;
+}
+
+export interface UpdateBitableRecordsInput {
+  /** Opaque id of the Bitable app (its drive file token). */
+  doc_id: string;
+  /** The table holding the record, by its display name. */
+  table_name: string;
+  /** The record to update, by its opaque id. */
+  record_id: string;
+  /** Field-name-based values to overwrite on the record. */
+  fields: Record<string, unknown>;
+}
+
+export interface UpdateBitableRecordsOutput {
+  doc_id: string;
+  table_name: string;
+  /** The updated record's opaque id. */
+  record_id: string;
+  /** The record's full field-name-based values after the update. */
+  fields: Record<string, unknown>;
 }
 
 export interface SendMessageInput {
@@ -221,6 +245,7 @@ const searchDocsInputSchema: JSONSchemaType<SearchDocsInput> = {
   properties: {
     query: { type: 'string', minLength: 1 },
     limit: { type: 'integer', nullable: true, minimum: 1, maximum: 100 },
+    page_token: { type: 'string', nullable: true },
   },
   required: ['query'],
 };
@@ -444,6 +469,7 @@ const readBitableRecordsInputSchema: JSONSchemaType<ReadBitableRecordsInput> = {
     doc_id: { type: 'string' },
     table_name: { type: 'string', minLength: 1 },
     limit: { type: 'integer', nullable: true, minimum: 1, maximum: 100 },
+    page_token: { type: 'string', nullable: true },
   },
   required: ['doc_id', 'table_name'],
 };
@@ -480,6 +506,30 @@ const writeBitableRecordsOutputSchema: JSONSchemaType<WriteBitableRecordsOutput>
     record_id: { type: 'string' },
   },
   required: ['doc_id', 'table_name', 'record_id'],
+};
+
+const updateBitableRecordsInputSchema: JSONSchemaType<UpdateBitableRecordsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string', minLength: 1 },
+    record_id: { type: 'string', minLength: 1 },
+    fields: { type: 'object', additionalProperties: true },
+  },
+  required: ['doc_id', 'table_name', 'record_id', 'fields'],
+};
+
+const updateBitableRecordsOutputSchema: JSONSchemaType<UpdateBitableRecordsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string' },
+    record_id: { type: 'string' },
+    fields: { type: 'object', additionalProperties: true },
+  },
+  required: ['doc_id', 'table_name', 'record_id', 'fields'],
 };
 
 /**
@@ -548,7 +598,9 @@ export const DOCS_ACTIONS: Action[] = [
     description:
       "Search the tenant's documents by a text query (matches titles) and return matching " +
       'documents with their opaque doc_id, title and type. ' +
-      'Cap the result count with limit (1–100, default 50).',
+      'Cap the result count with limit (1–100, default 50); when more results exist the ' +
+      'output carries a non-null next cursor — pass it back as page_token to fetch the ' +
+      'next page.',
     inputSchema: searchDocsInputSchema,
     outputSchema: searchDocsOutputSchema,
     effects: 'read',
@@ -639,7 +691,8 @@ export const DOCS_ACTIONS: Action[] = [
     description:
       "Read records from a Bitable table by its app's opaque doc_id and the table's display " +
       'name. Records come back with their field-name-based values; cap the result count with ' +
-      'limit (1–100, default 100).',
+      'limit (1–100, default 100). When more records exist the output carries a non-null ' +
+      'next cursor — pass it back as page_token to fetch the next page.',
     inputSchema: readBitableRecordsInputSchema,
     outputSchema: readBitableRecordsOutputSchema,
     effects: 'read',
@@ -652,6 +705,18 @@ export const DOCS_ACTIONS: Action[] = [
       "name, with field-name-based values. Returns the new record's opaque id.",
     inputSchema: writeBitableRecordsInputSchema,
     outputSchema: writeBitableRecordsOutputSchema,
+    effects: 'write',
+    provider: 'feishu',
+  },
+  {
+    name: 'feishu_update_bitable_records',
+    description:
+      "Update one record in a Bitable table by its app's opaque doc_id, the table's display " +
+      "name and the record's opaque id. Only the given field-name-based values are " +
+      'overwritten; other fields keep their current values. Returns the record with its ' +
+      'full values after the update.',
+    inputSchema: updateBitableRecordsInputSchema,
+    outputSchema: updateBitableRecordsOutputSchema,
     effects: 'write',
     provider: 'feishu',
   },

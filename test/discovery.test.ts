@@ -47,7 +47,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     // ActionRegistry.visibleActions() (pinned in registry-visibility.test.ts);
     // this fixture passes the platform set in registration order.
     expect(names).toEqual(PLATFORM_ACTIONS.map((a) => a.name));
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(15);
     const createDoc = body.actions.find((a) => a.name === 'create_doc');
     expect(createDoc).toMatchObject({ effects: 'write' });
     expect(typeof createDoc?.description).toBe('string');
@@ -162,7 +162,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
   });
 
   it('POST /actions/search carries provider metadata like the list endpoint', async () => {
-    // 'bitable' hits the two provider-native actions by name and
+    // 'bitable' hits the three provider-native actions by name and
     // get_doc_metadata (canonical) by description — one response mixing
     // both scopes.
     const native = await discover('/actions/search', {
@@ -174,6 +174,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     };
     expect(nativeBody.actions.map((a) => a.name).sort()).toEqual([
       'feishu_read_bitable_records',
+      'feishu_update_bitable_records',
       'feishu_write_bitable_records',
       'get_doc_metadata',
     ]);

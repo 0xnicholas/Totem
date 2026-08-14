@@ -222,8 +222,11 @@ export class DingTalkConnector implements IConnector {
         // — items carry `dentryUuid` + `name` and NO contentType/docKey,
         // so the T17b-modeled ALIDOC filter cannot be applied (the search
         // response does not say what the dentry is). Matches beyond
-        // DingTalk's page cap (maxResults ≤ 50) are truncated; cursor
-        // semantics are v2 per ADR-0012.
+        // DingTalk's page cap (maxResults ≤ 50) are truncated. #42 landed
+        // real cursors on the canonical `next` (Feishu connectors); the
+        // DingTalk cursor request path is not live-verified, so this
+        // connector still returns next: null — a provider without cursor
+        // support yields a single page by contract.
         const output: SearchDocsOutput = {
           data: response.items.map((item) => ({
             doc_id: item.dentryUuid,

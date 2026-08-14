@@ -34,8 +34,10 @@
     Emerald 不自行处理
   - `forbidden` / `not_found` / `upstream_error` → 上报/告警,不重试
 - [ ] list 动作按 **List Envelope**(标准 §7,现行契约)写翻页:
-  `result.data` 是条目数组,`result.next` 当前恒 `null`;将来 cursor 落地是
-  加性字段,现有代码不破
+  `result.data` 是条目数组;`result.next` 在还有更多结果时是非空翻页 token
+  (#42 起 cursor 已落地)——把 `next` 原样回传同名动作的 `page_token` 参数取下
+  一页,`next === null` 即到末页。忽略 `next` 也不破,只是只见一页(迁移窗口见
+  tracking #50)
 - [ ] 冒烟:手动调一次 `search_docs`,确认返回 `{data: [...], next: null}`,
   并在审计里看到记录(`totemctl query-audit <tenant-id>`)
 

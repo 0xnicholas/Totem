@@ -14,6 +14,8 @@ import type {
   MoveDocInput,
   MoveDocOutput,
   ReadBitableRecordsInput,
+  UpdateBitableRecordsInput,
+  UpdateBitableRecordsOutput,
   ReadBitableRecordsOutput,
   ReadSheetCellsInput,
   ReadSheetCellsOutput,
@@ -93,6 +95,7 @@ export class FakeConnector implements IConnector {
         'write_sheet_cells',
         'feishu_read_bitable_records',
         'feishu_write_bitable_records',
+        'feishu_update_bitable_records',
       ],
       ...(opts.rateLimit !== undefined ? { rateLimit: opts.rateLimit } : {}),
     };
@@ -111,6 +114,7 @@ export class FakeConnector implements IConnector {
       write_sheet_cells: (args: WriteSheetCellsInput) => this.writeSheetCells(args),
       feishu_read_bitable_records: (args: ReadBitableRecordsInput) => this.readBitableRecords(args),
       feishu_write_bitable_records: (args: WriteBitableRecordsInput) => this.writeBitableRecords(args),
+      feishu_update_bitable_records: (args: UpdateBitableRecordsInput) => this.updateBitableRecords(args),
     };
   }
 
@@ -269,6 +273,25 @@ export class FakeConnector implements IConnector {
     const record = { record_id: `rec_${crypto.randomUUID()}`, fields: { ...args.fields } };
     records.push(record);
     return { doc_id: doc.doc_id, table_name: args.table_name, record_id: record.record_id };
+  }
+
+  private updateBitableRecords(args: UpdateBitableRecordsInput): UpdateBitableRecordsOutput {
+    const doc = this.requireDoc(args.doc_id);
+    const records = this.requireTable(doc, args.table_name);
+    const record = records.find((r) => r.record_id === args.record_id);
+    if (!record) {
+      throw new ActionError(
+        'not_found',
+        `Record "${args.record_id}" not found in table "${args.table_name}"`,
+      );
+    }
+    record.fields = { ...record.fields, ...args.fields };
+    return {
+      doc_id: doc.doc_id,
+      table_name: args.table_name,
+      record_id: record.record_id,
+      fields: { ...record.fields },
+    };
   }
 
   private requireDoc(docId: string): FakeDoc {

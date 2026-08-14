@@ -302,7 +302,16 @@ describe('MockFeishuServer advanced endpoints', () => {
       expect(read.code).toBe(0);
       expect(read.data.items).toHaveLength(1);
       expect(read.data.items[0]?.fields).toEqual({ name: 'Ada', stage: 'qualified' });
-      expect(read.data.has_more).toBe(false);
+      // #42: pagination fidelity — a truncated page reports has_more and
+      // a page_token for the next page.
+      expect(read.data.has_more).toBe(true);
+      const next = (read.data as { page_token?: string }).page_token;
+      expect(next).toBe('1');
+      const page2 = (await (
+        await fetchApi(`/open-apis/bitable/v1/apps/adv-bit/tables/${await tableId('Leads')}/records?page_size=1&page_token=${next}`)
+      ).json()) as { code: number; data: { items: Array<{ record_id: string }>; has_more: boolean } };
+      expect(page2.data.items[0]?.record_id).toBe('rec_lead_2');
+      expect(page2.data.has_more).toBe(false);
     });
 
     it('creates a record and returns its id, visible on the next read', async () => {
