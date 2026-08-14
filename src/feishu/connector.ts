@@ -81,6 +81,10 @@ export interface FeishuConnectorOptions {
   exportPollMs?: number;
   /** Max export-task polls before failing. */
   exportMaxAttempts?: number;
+  /** Delay between move-task polls, in ms (tests pass 0). */
+  movePollMs?: number;
+  /** Max move-task polls before failing. */
+  moveMaxAttempts?: number;
 }
 
 export class FeishuConnector implements IConnector {
@@ -116,6 +120,8 @@ export class FeishuConnector implements IConnector {
   private readonly handlers: Record<string, ActionHandler>;
   private readonly exportPollMs: number;
   private readonly exportMaxAttempts: number;
+  private readonly movePollMs: number;
+  private readonly moveMaxAttempts: number;
   private readonly request: UpstreamRequest;
 
   constructor(
@@ -126,6 +132,10 @@ export class FeishuConnector implements IConnector {
     // walk, so the default budget is 2 minutes (60 polls × 2s).
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
+    // Move tasks are fast (single file, no rendering): a small budget —
+    // 10 polls × 500ms — is enough and fails fast when Feishu stalls.
+    this.movePollMs = options.movePollMs ?? 500;
+    this.moveMaxAttempts = options.moveMaxAttempts ?? 10;
 
     // The Upstream HTTP Kernel (CONTEXT.md): the shared request stack, with
     // Feishu's envelope convention (HTTP 200 with code !== 0 is the failure
@@ -276,6 +286,23 @@ export class FeishuConnector implements IConnector {
         // PATCH /docx/v1/documents/{id} with a title returns 1770001. The
         // title is the root Page block's text, so renaming patches the root
         // block (block_id == document_id) with update_text_elements.
+        // #41: update_text_elements REPLACES the elements with what is
+        // sent — sending one run wipes the rest of the title's formatting.
+        // Read the root block's current elements, replace only the first
+        // run's text, and send the full array back.
+        const current = await this.docsRequest<UpdateBlockData>(
+          `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/blocks/${encodeURIComponent(input.doc_id)}`,
+          { token: ctx.token },
+        );
+        const elements = current.data.block.page?.elements ?? [];
+        const updated =
+          elements[0]?.text_run !== undefined
+            ? elements.map((element, index) =>
+                index === 0
+                  ? { ...element, text_run: { ...element.text_run!, content: input.new_title } }
+                  : element,
+              )
+            : [{ text_run: { content: input.new_title } }];
         const response = await this.docsRequest<UpdateBlockData>(
           `/open-apis/docx/v1/documents/${encodeURIComponent(input.doc_id)}/blocks/${encodeURIComponent(input.doc_id)}`,
           {
@@ -283,7 +310,7 @@ export class FeishuConnector implements IConnector {
             token: ctx.token,
             body: {
               update_text_elements: {
-                elements: [{ text_run: { content: input.new_title } }],
+                elements: updated,
               },
             },
           },
@@ -295,16 +322,26 @@ export class FeishuConnector implements IConnector {
 
       move_doc: async (args: MoveDocInput, ctx) => {
         const input = args;
-        // Feishu's move is async (returns a task id); the platform contract
-        // confirms the target, which is all the agent needs.
-        await this.docsRequest(
+        // The move call's type must match the file's real type (mismatch →
+        // params error), so probe it first: opaque ID semantics — only the
+        // connector parses IDs, the agent stays zero-burden (#41).
+        const meta = await resolveDocMeta(this.request, input.doc_id, ctx.token);
+        // Feishu's move is async: it returns a task id that is verified
+        // below; the platform contract confirms the target folder, which
+        // is all the agent needs.
+        const task = await this.docsRequest<MoveTaskData>(
           `/open-apis/drive/v1/files/${encodeURIComponent(input.doc_id)}/move`,
           {
             method: 'POST',
             token: ctx.token,
-            body: { folder_token: input.folder_id, type: 'docx' },
+            body: { folder_token: input.folder_id, type: meta.doc_type },
           },
         );
+        // task_id is returned for async moves; when the response carries
+        // one, the move is not confirmed until the task succeeds.
+        if (task.data.task_id) {
+          await this.pollMoveTask(task.data.task_id, ctx.token);
+        }
         const output: MoveDocOutput = { doc_id: input.doc_id, folder_id: input.folder_id };
         return output;
       },
@@ -319,8 +356,14 @@ export class FeishuConnector implements IConnector {
             method: 'POST',
             token: ctx.token,
             // Live finding (T9 demo pass): the export task requires the
-            // SOURCE type (type) — without it Feishu returns 99992402.
-            body: { type: 'docx', file_extension: input.format, token: input.doc_id },
+            // SOURCE type (type) — without it Feishu returns 99992402. The
+            // type is the file's real type, probed per #41 (a mismatched
+            // type fails like a missing one).
+            body: {
+              type: (await resolveDocMeta(this.request, input.doc_id, ctx.token)).doc_type,
+              file_extension: input.format,
+              token: input.doc_id,
+            },
           },
         );
         const exported = await this.pollExport(task.data.ticket, input.doc_id, ctx.token);
@@ -415,18 +458,10 @@ export class FeishuConnector implements IConnector {
 
       get_doc_metadata: async (args: GetDocMetadataInput, ctx) => {
         const input = args;
-        // v1 boundary: the docs actions address Feishu docx documents — the
-        // opaque doc_id carries no type, so non-docx metadata (sheets,
-        // bitables) fails on the live API until T9's dedicated actions.
-        const response = await this.docsRequest<MetasData>(
-          '/open-apis/drive/v1/metas/batch_query',
-          {
-            method: 'POST',
-            token: ctx.token,
-            body: { request_docs: [{ doc_token: input.doc_id, doc_type: 'docx' }] },
-          },
-        );
-        const meta = response.data.metas[0]!;
+        // The opaque doc_id carries no type, and the metas API needs the
+        // type it is asked about — so the connector probes for it (#41).
+        // The successful probe IS the metadata; no second call is made.
+        const meta = await resolveDocMeta(this.request, input.doc_id, ctx.token);
         const output: GetDocMetadataOutput = {
           doc_id: meta.doc_token,
           title: meta.title,
@@ -505,6 +540,32 @@ export class FeishuConnector implements IConnector {
     throw new ActionError('upstream_error', `Feishu export task "${ticket}" did not complete`);
   }
 
+  /**
+   * Verifies a move task (#41): Feishu's move is async — the response's
+   * task_id is polled via task_check until the string status settles.
+   * Mirrors pollExport with a smaller budget (move tasks are fast).
+   */
+  private async pollMoveTask(taskId: string, token: string | undefined): Promise<void> {
+    for (let attempt = 0; attempt < this.moveMaxAttempts; attempt++) {
+      const poll = await this.docsRequest<MoveTaskCheckData>(
+        '/open-apis/drive/v1/files/task_check',
+        { token, query: { task_id: taskId } },
+      );
+      if (poll.data.status === 'success') return;
+      if (poll.data.status === 'fail') {
+        throw new ActionError(
+          'upstream_error',
+          `Feishu move task "${taskId}" failed`,
+          { upstream: { code: 'move_failed', message: `task ${taskId} failed` } },
+        );
+      }
+      if (attempt < this.moveMaxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, this.movePollMs));
+      }
+    }
+    throw new ActionError('upstream_error', `Feishu move task "${taskId}" did not complete`);
+  }
+
   execute(action: string, args: unknown, ctx: ActionContext): Promise<unknown> {
     const handler = this.handlers[action];
     if (!handler) {
@@ -533,12 +594,20 @@ interface BlocksData {
 interface UpdateBlockData {
   block: {
     block_id: string;
-    page?: { elements: Array<{ text_run?: { content?: string } }> };
+    page?: { elements: Array<{ text_run?: { content?: string; text_element_style?: unknown } }> };
   };
 }
 
 interface ExportTaskData {
   ticket: string;
+}
+
+interface MoveTaskData {
+  task_id?: string;
+}
+
+interface MoveTaskCheckData {
+  status: 'success' | 'fail' | 'process';
 }
 
 interface ExportPollData {
@@ -599,6 +668,57 @@ interface MetasData {
     owner_id: string;
     latest_modify_time: string;
   }>;
+}
+
+/**
+ * Candidate Feishu doc types for the type probe, most common first —
+ * the live metas API accepts exactly these values for doc_type.
+ */
+const DOC_TYPE_CANDIDATES = ['docx', 'sheet', 'bitable', 'doc', 'file', 'mindnote'] as const;
+
+/**
+ * Resolves an opaque doc token's real Feishu type (#41). Live finding:
+ * there is no single-file metadata GET on the drive API
+ * (/drive/v1/files/{token} carries no GET verb), and batch_query needs
+ * the very type being asked for — a chicken-and-egg solved by probing
+ * the candidates in order: a wrong doc_type answers not-found, the
+ * matching one returns the meta. The agent stays zero-burden (opaque ID
+ * semantics: only the connector parses IDs). Docx (the common case)
+ * costs one call; sheets/bitables two/three.
+ */
+async function resolveDocMeta(
+  request: UpstreamRequest,
+  docId: string,
+  token: string | undefined,
+): Promise<MetasData['metas'][number]> {
+  let lastMissing: unknown;
+  for (const docType of DOC_TYPE_CANDIDATES) {
+    try {
+      const response = await request<DocsEnvelope<MetasData>>(
+        '/open-apis/drive/v1/metas/batch_query',
+        {
+          method: 'POST',
+          token,
+          body: { request_docs: [{ doc_token: docId, doc_type: docType }] },
+        },
+      );
+      const meta = response.data.metas[0];
+      if (meta) return meta;
+    } catch (err) {
+      // A wrong-type probe answers not_found — try the next candidate.
+      // Anything else (auth_expired, rate_limited, upstream_error) is a
+      // real failure for the file's true type too: rethrow immediately.
+      if (err instanceof ActionError && err.code === 'not_found') {
+        lastMissing = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  // Every candidate missed: the token matches no file the connection
+  // can see. Surface the last not_found rather than a bare new error.
+  if (lastMissing instanceof ActionError) throw lastMissing;
+  throw new ActionError('not_found', `Document "${docId}" not found`);
 }
 
 /**

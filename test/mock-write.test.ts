@@ -123,14 +123,26 @@ describe('MockFeishuServer write endpoints', () => {
     expect(envelope.data.block.page.elements[0]!.text_run.content).toBe('Renamed Doc');
   });
 
-  it('moves a document to a folder', async () => {
+  it('moves a document to a folder (real contract: type must match)', async () => {
+    const mismatched = await jsonFetch(`/open-apis/drive/v1/files/${docId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ folder_token: 'folder-2', type: 'sheet' }),
+    });
+    expect(((await mismatched.json()) as { code: number }).code).toBe(1061002);
+
     const res = await jsonFetch(`/open-apis/drive/v1/files/${docId}/move`, {
       method: 'POST',
-      body: JSON.stringify({ folder_token: 'folder-2' }),
+      body: JSON.stringify({ folder_token: 'folder-2', type: 'docx' }),
     });
     const envelope = (await res.json()) as { code: number; data: { task_id: string } };
     expect(envelope.code).toBe(0);
     expect(envelope.data.task_id).toBeTruthy();
+
+    // The async move is verified through task_check (string status).
+    const check = await jsonFetch(`/open-apis/drive/v1/files/task_check?task_id=${envelope.data.task_id}`);
+    expect(((await check.json()) as { code: number; data: { status: string } }).data.status).toBe(
+      'success',
+    );
   });
 
   it('rejects writes to a locked document with 10667', async () => {

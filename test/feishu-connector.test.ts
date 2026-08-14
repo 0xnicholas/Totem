@@ -369,6 +369,18 @@ describe('FeishuConnector write actions (T8)', () => {
         doc_type: 'docx',
         edited_at: '2026-03-01T10:00:00.000Z',
       },
+      {
+        doc_id: 'w-2',
+        title: 'Styled Title',
+        content: 'Body.',
+        owner_id: 'user-9',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+        root_elements: [
+          { text_run: { content: 'Styled', text_element_style: { bold: true } } },
+          { text_run: { content: ' Title' } },
+        ],
+      },
     ]);
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
@@ -380,7 +392,7 @@ describe('FeishuConnector write actions (T8)', () => {
       redirectUri: REDIRECT_URI,
     });
     accessToken = pair.accessToken;
-    connector = new FeishuConnector(baseUrl, { exportPollMs: 0 });
+    connector = new FeishuConnector(baseUrl, { exportPollMs: 0, movePollMs: 0 });
   });
 
   afterAll(async () => {
@@ -428,6 +440,49 @@ describe('FeishuConnector write actions (T8)', () => {
     ctx.token = accessToken;
     const output = await connector.execute('move_doc', { doc_id: 'w-1', folder_id: 'folder-9' }, ctx);
     expect(output).toEqual({ doc_id: 'w-1', folder_id: 'folder-9' });
+  });
+
+  it('move_doc polls a pending move task until it completes (#41)', async () => {
+    ctx.token = accessToken;
+    mock.holdNextMove();
+    const output = await connector.execute(
+      'move_doc',
+      { doc_id: 'w-1', folder_id: 'folder-10' },
+      ctx,
+    );
+    expect(output).toEqual({ doc_id: 'w-1', folder_id: 'folder-10' });
+  });
+
+  it('move_doc maps a failed move task to upstream_error (#41)', async () => {
+    ctx.token = accessToken;
+    mock.failNextMove();
+    await expect(
+      connector.execute('move_doc', { doc_id: 'w-1', folder_id: 'folder-x' }, ctx),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'move_failed' },
+    });
+  });
+
+  it('rename_doc preserves the root block\'s other elements and styling (#41)', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute(
+      'rename_doc',
+      { doc_id: 'w-2', new_title: 'Renamed' },
+      ctx,
+    );
+    expect(output).toEqual({ doc_id: 'w-2', title: 'Renamed' });
+
+    // The PATCH must carry the FULL elements array with only the first
+    // run's text replaced — styling and sibling elements survive.
+    const patch = mock.lastBlockPatch as {
+      update_text_elements: { elements: Array<{ text_run: { content: string; text_element_style?: unknown } }> };
+    };
+    expect(patch.update_text_elements.elements).toEqual([
+      { text_run: { content: 'Renamed', text_element_style: { bold: true } } },
+      { text_run: { content: ' Title' } },
+    ]);
   });
 
   it('maps a locked document to upstream_error with the lock code in diagnostics', async () => {
@@ -677,6 +732,36 @@ describe('FeishuConnector advanced actions (T9)', () => {
     await expect(
       connector.execute('export_doc', { doc_id: 'missing', format: 'pdf' }, withToken()),
     ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('get_doc_metadata detects a sheet\'s real type and returns its metadata (#41)', async () => {
+    const result = await connector.execute('get_doc_metadata', { doc_id: 'adv-sheet' }, withToken());
+    expect(result).toMatchObject({ doc_id: 'adv-sheet', title: 'Budget', doc_type: 'sheet' });
+  });
+
+  it('get_doc_metadata detects a bitable\'s real type (#41)', async () => {
+    const result = await connector.execute('get_doc_metadata', { doc_id: 'adv-bit' }, withToken());
+    expect(result).toMatchObject({ doc_id: 'adv-bit', doc_type: 'bitable' });
+  });
+
+  it('move_doc detects the real type and moves a sheet (#41)', async () => {
+    const result = await connector.execute(
+      'move_doc',
+      { doc_id: 'adv-sheet', folder_id: 'folder-2' },
+      withToken(),
+    );
+    expect(result).toEqual({ doc_id: 'adv-sheet', folder_id: 'folder-2' });
+  });
+
+  it('export_doc detects the real type and exports a sheet to xlsx (#41)', async () => {
+    const result = await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-sheet', format: 'xlsx' },
+      withToken(),
+    );
+    expect(result).toMatchObject({ doc_id: 'adv-sheet', format: 'xlsx' });
+    const output = result as { artifact_id: string };
+    expect(output.artifact_id).toBeTruthy();
   });
 
   it('read_sheet_cells resolves the named sheet and preserves cell types', async () => {

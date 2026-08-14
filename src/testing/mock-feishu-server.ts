@@ -26,6 +26,11 @@ export interface MockFeishuServerOptions {
   refreshTokenTtlMs?: number;
 }
 
+/** A docx text element: a text_run with optional styling. */
+export interface MockTextElement {
+  text_run: { content: string; text_element_style?: Record<string, unknown> };
+}
+
 /** A document in the mock's Feishu drive (T7: docs endpoints). */
 export interface MockFeishuDoc {
   doc_id: string;
@@ -36,6 +41,8 @@ export interface MockFeishuDoc {
   edited_at: string;
   /** Set by the drive move endpoint (T8). */
   folder_id?: string;
+  /** Root Page block elements (defaults to one plain element of `title`); set to model styled titles (#41). */
+  root_elements?: MockTextElement[];
 }
 
 /**
@@ -57,6 +64,8 @@ export class MockFeishuServer {
   exchangeRequestCount = 0;
   /** Messages received by the IM endpoint (ADR-0016): receive_id_type, id, text content. */
   sentMessages: Array<{ receiveIdType: string; receiveId: string; content: string }> = [];
+  /** Body of the last block PATCH (rename): pins the elements the connector sends (#41). */
+  lastBlockPatch: unknown;
 
   private readonly accessTokenTtlMs: number;
   private readonly refreshTokenTtlMs: number;
@@ -71,8 +80,11 @@ export class MockFeishuServer {
   >();
   private readonly bitables = new Map<string, Array<{ name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> }>>();
   private readonly exports = new Map<string, { status: number; fileToken: string }>();
+  private readonly moveTasks = new Map<string, { status: 'success' | 'process' | 'fail' }>();
   private holdNextExportArmed = false;
   private failNextExportArmed = false;
+  private holdNextMoveArmed = false;
+  private failNextMoveArmed = false;
   private omitRefreshTokenArmed = false;
   private scriptedFailure: ScriptedFailure | undefined;
   private scriptedDocsFailure: ScriptedFailure | undefined;
@@ -171,7 +183,6 @@ export class MockFeishuServer {
     this.docs.length = 0;
     this.docs.push(...docs.map((doc) => ({ ...doc })));
   }
-
   /** Locks a document: write endpoints reject it with 10667 (doc locked). */
   lockDoc(docId: string): void {
     this.lockedDocs.add(docId);
@@ -241,6 +252,16 @@ export class MockFeishuServer {
   /** Fails the next created export task (job_status 2). */
   failNextExport(): void {
     this.failNextExportArmed = true;
+  }
+
+  /** Holds the next move task in the running state (status "process"). */
+  holdNextMove(): void {
+    this.holdNextMoveArmed = true;
+  }
+
+  /** Fails the next move task (status "fail"). */
+  failNextMove(): void {
+    this.failNextMoveArmed = true;
   }
 
   /** Next token envelope omits refresh_token (app-config simulation). */
@@ -397,6 +418,28 @@ export class MockFeishuServer {
       return c.json({ code: 0, msg: 'ok', data: { children: [] } });
     });
 
+    this.app.get('/open-apis/docx/v1/documents/:docId/blocks/:blockId', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('docId'));
+      if (!doc) return notFound();
+      // Real contract: the root Page block's id equals the document id —
+      // the single-block GET returns its rich-text elements (the title).
+      if (c.req.param('blockId') !== doc.doc_id) return notFound();
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: {
+          block: {
+            block_id: doc.doc_id,
+            block_type: 1,
+            parent_id: '',
+            page: { elements: this.rootElements(doc) },
+          },
+        },
+      });
+    });
+
     this.app.patch('/open-apis/docx/v1/documents/:docId/blocks/:blockId', async (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;
@@ -408,13 +451,18 @@ export class MockFeishuServer {
       // (block_id == document_id) with update_text_elements.
       if (c.req.param('blockId') !== doc.doc_id) return notFound();
       const body: unknown = await c.req.json().catch(() => ({}));
+      this.lastBlockPatch = body;
       const update =
         isRecord(body) && isRecord(body.update_text_elements) ? body.update_text_elements : {};
-      const elements = Array.isArray(update.elements) ? update.elements : [];
-      const run = isRecord(elements[0]) && isRecord(elements[0].text_run) ? elements[0].text_run : {};
-      const title = typeof run.content === 'string' ? run.content : '';
-      if (title === '') return c.json({ code: 10002, msg: 'content is required' });
-      doc.title = title;
+      const elements = Array.isArray(update.elements) ? (update.elements as MockTextElement[]) : [];
+      if (elements.length === 0) return c.json({ code: 10002, msg: 'content is required' });
+      // Fidelity: update_text_elements REPLACES the elements with what is
+      // sent — the connector must send the full array (#41). The title is
+      // the concatenation of all text_run contents.
+      doc.root_elements = elements;
+      doc.title = elements
+        .map((element) => element?.text_run?.content ?? '')
+        .join('');
       doc.edited_at = new Date().toISOString();
       return c.json({
         code: 0,
@@ -424,7 +472,7 @@ export class MockFeishuServer {
             block_id: doc.doc_id,
             block_type: 1,
             parent_id: '',
-            page: { elements: [{ text_run: { content: doc.title } }] },
+            page: { elements: elements.map((element) => ({ ...element })) },
           },
         },
       });
@@ -441,9 +489,45 @@ export class MockFeishuServer {
       const folderToken =
         isRecord(body) && typeof body.folder_token === 'string' ? body.folder_token : '';
       if (folderToken === '') return c.json({ code: 10002, msg: 'folder_token is required' });
+      // Real contract: a mismatched or empty type fails the move
+      // (params error) — the connector must probe the real file type.
+      const type = isRecord(body) && typeof body.type === 'string' ? body.type : '';
+      if (type !== doc.doc_type) {
+        return c.json({ code: 1061002, msg: 'file type mismatch' });
+      }
       doc.folder_id = folderToken;
       doc.edited_at = new Date().toISOString();
-      return c.json({ code: 0, msg: 'ok', data: { task_id: `task_${randomUUID()}` } });
+      // Real contract: the move is async — the task completes via
+      // task_check. The mock applies the move immediately; the task's
+      // status only gates verification (scriptable below).
+      const taskId = `task_${randomUUID()}`;
+      let status: 'success' | 'process' | 'fail' = 'success';
+      if (this.failNextMoveArmed) {
+        this.failNextMoveArmed = false;
+        status = 'fail';
+      } else if (this.holdNextMoveArmed) {
+        this.holdNextMoveArmed = false;
+        status = 'process';
+      }
+      this.moveTasks.set(taskId, { status });
+      return c.json({ code: 0, msg: 'ok', data: { task_id: taskId } });
+    });
+
+    // Real contract: drive async-task status. status is a STRING —
+    // "success", "fail" (task done, failed), or "process" (running).
+    this.app.get('/open-apis/drive/v1/files/task_check', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const taskId = c.req.query('task_id') ?? '';
+      const task = this.moveTasks.get(taskId);
+      if (!task) return c.json({ code: 1061003, msg: 'task not found' });
+      // A held move completes on its second poll.
+      const status = task.status;
+      if (status === 'process') {
+        task.status = 'success';
+      }
+      return c.json({ code: 0, msg: 'ok', data: { status } });
     });
   }
 
@@ -466,7 +550,13 @@ export class MockFeishuServer {
         return c.json({ code: 99992402, msg: 'field validation failed' });
       }
       if (token === '') return c.json({ code: 10002, msg: 'token is required' });
-      if (!this.requireDoc(token)) return notFound();
+      const sourceDoc = this.requireDoc(token);
+      if (!sourceDoc) return notFound();
+      // Real contract: the source type must match the file's real type —
+      // the connector must probe it instead of hardcoding docx.
+      if (type !== sourceDoc.doc_type) {
+        return c.json({ code: 99992402, msg: 'field validation failed' });
+      }
 
       const ticket = `ticket_${randomUUID()}`;
       const fileToken = `exported_${randomUUID()}`;
@@ -661,6 +751,11 @@ export class MockFeishuServer {
 
   private requireDoc(docId: string): MockFeishuDoc | undefined {
     return this.docs.find((d) => d.doc_id === docId);
+  }
+
+  /** The doc's root Page block elements, defaulting to one plain run of its title. */
+  private rootElements(doc: MockFeishuDoc): MockTextElement[] {
+    return doc.root_elements ?? [{ text_run: { content: doc.title } }];
   }
 
   private authorized(c: Context): boolean {
