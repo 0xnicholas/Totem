@@ -718,7 +718,9 @@ export const MESSAGING_ACTIONS: Action[] = [
     description:
       'Send a plain-text message to a user by email, or to a chat by its opaque chat_id ' +
       '(exactly one of email/chat_id). The message is sent with the identity of this ' +
-      "connection's owner. Returns the sent message's opaque message_id.",
+      "connection — the owner's identity on user-grant systems, the app identity where the " +
+      "system only knows applications (DingTalk messaging, WeCom). Returns the sent " +
+      "message's opaque message_id.",
     inputSchema: sendMessageInputSchema,
     outputSchema: sendMessageOutputSchema,
     effects: 'write',

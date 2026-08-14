@@ -57,3 +57,13 @@ Grilling record: 2026-08-14 session.
 - Non-doc families now have a worked curation precedent: minimal action
   set, connection-owner identity, natural-key addressing, opaque IDs
   everywhere else.
+
+## Amendment (2026-08-14)
+
+The identity clause of Decision 3 is generalized: messages are sent with
+**the identity of the connection** — the owner's identity on user-grant
+systems (Feishu), the app/robot identity where the system has no per-user
+sending identity (DingTalk messaging, WeCom). Rationale: DingTalk's
+messaging APIs only send as the app/robot, and the canonical description
+(`actions.ts`) and the Tenant glossary term were worded identically wrong.
+The registry description now reads "the identity of this connection".

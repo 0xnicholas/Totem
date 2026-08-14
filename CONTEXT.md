@@ -37,7 +37,7 @@ A Connection of a consent-less system (WeCom): created when the tenant registers
 _Avoid_: App connection, key connection, bot connection
 
 **Tenant**:
-The isolation unit of the platform and its unit of consumption: one consuming internal project. Owns connections, API keys, allowlists, and audit rows. Authenticates to the MCP endpoint with a tenant API key. Totem is an internal platform — tenants are the operator's own company's projects, not paying customers; there is no second-level customer (no StackOne-style origin_owner). Totem has no end-user accounts: agents act on behalf of a tenant, and system actions execute with the identity of the connection's owner (the Feishu user who authorized).
+The isolation unit of the platform and its unit of consumption: one consuming internal project. Owns connections, API keys, allowlists, and audit rows. Authenticates to the MCP endpoint with a tenant API key. Totem is an internal platform — tenants are the operator's own company's projects, not paying customers; there is no second-level customer (no StackOne-style origin_owner). Totem has no end-user accounts: agents act on behalf of a tenant, and system actions execute with the identity of the connection — the owner's identity on user-grant systems (the Feishu user who authorized), the app identity where the system only knows applications (DingTalk messaging, WeCom; ADR-0017).
 _Avoid_: Customer, organization, user, StackOne-style org → project → origin_owner hierarchy
 
 Tenants are **mutually trusted** in v1 (ADR-0010): admin-scope tenant keys are platform-credential equivalent, so consuming projects can self-onboard without an operator ticket. Tenant-scoped admin isolation is deferred until a non-trusted consumer exists.
