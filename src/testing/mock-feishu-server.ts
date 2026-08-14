@@ -341,10 +341,10 @@ export class MockFeishuServer {
         if (!isRecord(request) || typeof request.doc_token !== 'string') continue;
         const doc = this.docs.find((d) => d.doc_id === request.doc_token);
         if (!doc) return c.json({ code: 10662, msg: 'document not found' });
-        // Fidelity: the requested doc_type must match the stored doc's type
-        // (the v1 connector asks for docx; anything else fails like the
-        // live API would).
-        if (isRecord(request) && typeof request.doc_type === 'string' && request.doc_type !== doc.doc_type) {
+        // Fidelity: the requested doc_type must match the stored doc's
+        // type — a wrong type answers not-found exactly like a missing
+        // token (the connector probes candidates in order per #41).
+        if (typeof request.doc_type === 'string' && request.doc_type !== doc.doc_type) {
           return c.json({ code: 10662, msg: 'document not found' });
         }
         metas.push({

@@ -691,7 +691,7 @@ async function resolveDocMeta(
   docId: string,
   token: string | undefined,
 ): Promise<MetasData['metas'][number]> {
-  let lastMissing: unknown;
+  let lastMissing: ActionError | undefined;
   for (const docType of DOC_TYPE_CANDIDATES) {
     try {
       const response = await request<DocsEnvelope<MetasData>>(
@@ -716,8 +716,8 @@ async function resolveDocMeta(
     }
   }
   // Every candidate missed: the token matches no file the connection
-  // can see. Surface the last not_found rather than a bare new error.
-  if (lastMissing instanceof ActionError) throw lastMissing;
+  // can see — the last probe's not_found is the answer.
+  if (lastMissing) throw lastMissing;
   throw new ActionError('not_found', `Document "${docId}" not found`);
 }
 
