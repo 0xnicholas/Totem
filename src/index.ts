@@ -1,6 +1,6 @@
 export type { Action, ActionContext, ActionDeprecation, ActionHandler, ActionEffect, ProviderToken, VisibleAction } from './action.js';
 export { PROVIDER_TOKENS } from './action.js';
-export { CONNECTION_ACTIONS, DOCS_ACTIONS } from './actions.js';
+export { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS } from './actions.js';
 export type {
   AppendDocContentInput,
   AppendDocContentOutput,

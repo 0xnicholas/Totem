@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createFeishuOAuthClient, FeishuApiError } from '../src/feishu/oauth.js';
 import { FeishuConnector, mapFeishuError } from '../src/feishu/connector.js';
-import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS, createActionExecutor } from '../src/index.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
 import { MockFeishuServer } from '../src/testing/mock-feishu-server.js';
@@ -169,6 +169,47 @@ describe('FeishuConnector (Seam B)', () => {
       .then(() => undefined, (e: unknown) => e);
     expect(err).toMatchObject({ code: 'upstream_error', retryable: false });
   });
+
+  it('send_message addresses a user by email and returns the message id (ADR-0016)', async () => {
+    ctx.token = accessToken;
+    const result = await connector.execute(
+      'send_message',
+      { email: 'zhangsan@corp.com', content: 'daily report ready' },
+      ctx,
+    );
+    const output = result as { message_id: string };
+    expect(output.message_id).toMatch(/^om_/);
+    expect(mock.sentMessages).toEqual([
+      {
+        receiveIdType: 'email',
+        receiveId: 'zhangsan@corp.com',
+        content: 'daily report ready',
+      },
+    ]);
+  });
+
+  it('send_message addresses a chat by opaque chat_id', async () => {
+    const result = await connector.execute(
+      'send_message',
+      { chat_id: 'oc_chat-1', content: 'heads up' },
+      ctx,
+    );
+    const output = result as { message_id: string };
+    expect(output.message_id).toMatch(/^om_/);
+    expect(mock.sentMessages[1]).toEqual({
+      receiveIdType: 'chat_id',
+      receiveId: 'oc_chat-1',
+      content: 'heads up',
+    });
+  });
+
+  it('send_message maps a rate limit to rate_limited (retryable)', async () => {
+    mock.failNextDocs({ code: 99991400, msg: 'rate limited' });
+    const err = await connector
+      .execute('send_message', { email: 'a@b.co', content: 'x' }, ctx)
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({ code: 'rate_limited', retryable: true });
+  });
 });
 
 /**
@@ -215,7 +256,7 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,
@@ -240,6 +281,44 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
       ['search_docs', true, null],
       ['get_doc_metadata', false, 'forbidden'],
     ]);
+  });
+
+  it('executes send_message with audit, and rejects disallowed sends with forbidden (ADR-0016)', async () => {
+    const { executor, audit } = makeExecutor(['send_message']);
+
+    const ok = await executor.executeAction(TENANT, CONNECTION, 'send_message', {
+      email: 'zhangsan@corp.com',
+      content: 'governed message',
+    });
+    if (!ok.ok) throw new Error('expected send to succeed');
+    const output = ok.output as { message_id: string };
+    expect(output.message_id).toMatch(/^om_/);
+
+    const denied = await executor.executeAction(TENANT, CONNECTION, 'search_docs', {
+      query: 'governed',
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+
+    expect(audit.list().map((r) => [r.actionName, r.success, r.errorCode])).toEqual([
+      ['send_message', true, null],
+      ['search_docs', false, 'forbidden'],
+    ]);
+  });
+
+  it('rejects send_message addressing with validation_error when both or neither of email/chat_id are given', async () => {
+    const { executor } = makeExecutor(['send_message']);
+
+    const both = await executor.executeAction(TENANT, CONNECTION, 'send_message', {
+      email: 'a@b.co',
+      chat_id: 'oc_x',
+      content: 'x',
+    });
+    expect(both).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+
+    const neither = await executor.executeAction(TENANT, CONNECTION, 'send_message', {
+      content: 'x',
+    });
+    expect(neither).toMatchObject({ ok: false, error: { code: 'validation_error' } });
   });
 
   it('surfaces connector-mapped errors through executeAction', async () => {
@@ -416,7 +495,7 @@ describe('FeishuConnector write lifecycle through the executor (T8)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,
@@ -771,7 +850,7 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, allowlist);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new FeishuConnector(baseUrl, { exportPollMs: 0 })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'feishu_docs' }],
       allowlists,

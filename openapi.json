@@ -380,39 +380,6 @@
           "retryable"
         ]
       },
-      "append_doc_content_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "doc_id",
-          "content"
-        ]
-      },
-      "append_doc_content_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "content"
-        ]
-      },
       "create_doc_input": {
         "type": "object",
         "additionalProperties": false,
@@ -452,6 +419,237 @@
         "required": [
           "doc_id",
           "title"
+        ]
+      },
+      "search_docs_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "search_docs_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "doc_id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "doc_type": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "doc_id",
+                "title",
+                "doc_type"
+              ]
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next"
+        ]
+      },
+      "get_doc_content_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
+      "get_doc_content_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "get_doc_metadata_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
+      "get_doc_metadata_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "doc_type": {
+            "type": "string"
+          },
+          "edited_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "title",
+          "owner_id",
+          "doc_type",
+          "edited_at"
+        ]
+      },
+      "append_doc_content_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "append_doc_content_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "content"
+        ]
+      },
+      "rename_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "new_title": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "new_title"
+        ]
+      },
+      "rename_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "title"
+        ]
+      },
+      "move_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "folder_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "folder_id"
+        ]
+      },
+      "move_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "folder_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id",
+          "folder_id"
         ]
       },
       "export_doc_input": {
@@ -500,6 +698,147 @@
           "format",
           "artifact_id",
           "url"
+        ]
+      },
+      "read_sheet_cells_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "sheet_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "doc_id",
+          "range"
+        ]
+      },
+      "read_sheet_cells_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "data",
+          "next"
+        ]
+      },
+      "write_sheet_cells_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "sheet_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "values"
+        ]
+      },
+      "write_sheet_cells_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          },
+          "updated_cells": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "doc_id",
+          "range",
+          "updated_cells"
         ]
       },
       "feishu_read_bitable_records_input": {
@@ -617,276 +956,65 @@
           "record_id"
         ]
       },
-      "get_doc_content_input": {
+      "send_message_input": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "doc_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id"
-        ]
-      },
-      "get_doc_content_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "content": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "content"
-        ]
-      },
-      "get_doc_metadata_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id"
-        ]
-      },
-      "get_doc_metadata_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          },
-          "owner_id": {
-            "type": "string"
-          },
-          "doc_type": {
-            "type": "string"
-          },
-          "edited_at": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "title",
-          "owner_id",
-          "doc_type",
-          "edited_at"
-        ]
-      },
-      "move_doc_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "folder_id": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "doc_id",
-          "folder_id"
-        ]
-      },
-      "move_doc_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "folder_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "folder_id"
-        ]
-      },
-      "read_sheet_cells_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "sheet_name": {
+          "email": {
             "type": [
               "string",
               "null"
             ],
             "minLength": 1
           },
-          "range": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "doc_id",
-          "range"
-        ]
-      },
-      "read_sheet_cells_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "range": {
-            "type": "string"
-          },
-          "data": {
-            "type": "array",
-            "items": {
-              "type": "array",
-              "items": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          },
-          "next": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "doc_id",
-          "range",
-          "data",
-          "next"
-        ]
-      },
-      "rename_doc_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "new_title": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": [
-          "doc_id",
-          "new_title"
-        ]
-      },
-      "rename_doc_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "doc_id",
-          "title"
-        ]
-      },
-      "search_docs_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "query": {
-            "type": "string",
-            "minLength": 1
-          },
-          "limit": {
+          "chat_id": {
             "type": [
-              "integer",
+              "string",
               "null"
             ],
-            "minimum": 1,
-            "maximum": 100
+            "minLength": 1
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
-          "query"
-        ]
-      },
-      "search_docs_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "doc_id": {
-                  "type": "string"
-                },
-                "title": {
-                  "type": "string"
-                },
-                "doc_type": {
-                  "type": "string"
-                }
-              },
+          "content"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "email"
+            ],
+            "not": {
               "required": [
-                "doc_id",
-                "title",
-                "doc_type"
+                "chat_id"
               ]
             }
           },
-          "next": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          {
+            "required": [
+              "chat_id"
+            ],
+            "not": {
+              "required": [
+                "email"
+              ]
+            }
+          }
+        ]
+      },
+      "send_message_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string"
           }
         },
         "required": [
-          "data",
-          "next"
+          "message_id"
         ]
       },
       "test_connection_input": {
@@ -912,73 +1040,6 @@
         "required": [
           "connection_id",
           "status"
-        ]
-      },
-      "write_sheet_cells_input": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "sheet_name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "minLength": 1
-          },
-          "range": {
-            "type": "string",
-            "minLength": 1
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "array",
-              "items": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              }
-            }
-          }
-        },
-        "required": [
-          "doc_id",
-          "range",
-          "values"
-        ]
-      },
-      "write_sheet_cells_output": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "doc_id": {
-            "type": "string"
-          },
-          "range": {
-            "type": "string"
-          },
-          "updated_cells": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "doc_id",
-          "range",
-          "updated_cells"
         ]
       }
     }

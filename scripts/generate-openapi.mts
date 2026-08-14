@@ -18,9 +18,10 @@ import {
   buildPlatformOpenApiDocument,
   CONNECTION_ACTIONS,
   DOCS_ACTIONS,
+  MESSAGING_ACTIONS,
 } from '../src/index.js';
 
-const document = buildPlatformOpenApiDocument([...DOCS_ACTIONS, ...CONNECTION_ACTIONS]);
+const document = buildPlatformOpenApiDocument([...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS]);
 const snapshotPath = fileURLToPath(new URL('../openapi.json', import.meta.url));
 writeFileSync(snapshotPath, `${JSON.stringify(document, null, 2)}\n`);
 console.log(`wrote ${snapshotPath}`);

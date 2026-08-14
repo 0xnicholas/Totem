@@ -56,7 +56,8 @@ const TOKEN_PATH = '/open-apis/authen/v2/oauth/token';
  * `offline_access` yields a token without any business scope, so every
  * docx/drive/sheets/bitable call fails with 99991679. The platform's token
  * refresh design (ADR-0004) requires refresh tokens → `offline_access` is
- * mandatory; the rest covers the v1 action set. Each scope must also be
+ * mandatory; the rest covers the v1 action set plus messaging (im:message,
+ * ADR-0016). Each scope must also be
  * enabled on the app in the Feishu console, or the authorize page rejects.
  */
 const DEFAULT_AUTHORIZE_SCOPES = [
@@ -71,6 +72,10 @@ const DEFAULT_AUTHORIZE_SCOPES = [
   'sheets:spreadsheet',
   'bitable:app:readonly',
   'bitable:app',
+  // Messaging (ADR-0016): send_message as the connection's owner. Existing
+  // connections lack this scope until they re-run the Authorize Flow
+  // (re-authorization is native to the flow).
+  'im:message',
 ].join(' ');
 
 /**

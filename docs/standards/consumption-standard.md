@@ -277,8 +277,15 @@ ADR-0010);目录无版本号,pin 机制 v2。
 - **input**:provider 兑现不了的可选参数 = `validation` 错误,**不会静默忽略**
   (否则 agent 误以为参数已生效)。
 
+### 11.5 消息域(ADR-0016)
+
+首个非文档 canonical 动作 `send_message` 进入目录:纯文本内容,寻址为
+`{ email, chat_id }` 恰好取一(`email` = 自然键,`chat_id` = opaque 群 ID);
+以连接所有者身份发送。飞书首批实现;钉钉、企微为路线图后续批次(未实现的
+provider = 覆盖缺口,§11.1)。接收消息方向属 v2 事件面(§8),不在动作目录。
+
 ---
 
 *标准来源:StackOne 官方文档(webhooks / platform-events / Actions RPC OpenAPI /
 MCP / A2A,研究快照见 `docs/research/`);totem 侧契约以代码 + ADR
-(0002、0005、0008、0011、0013、0014)为准。*
+(0002、0005、0008、0011、0013、0014、0016)为准。*

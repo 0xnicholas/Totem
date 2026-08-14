@@ -47,7 +47,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     // ActionRegistry.visibleActions() (pinned in registry-visibility.test.ts);
     // this fixture passes the platform set in registration order.
     expect(names).toEqual(PLATFORM_ACTIONS.map((a) => a.name));
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
     const createDoc = body.actions.find((a) => a.name === 'create_doc');
     expect(createDoc).toMatchObject({ effects: 'write' });
     expect(typeof createDoc?.description).toBe('string');

@@ -51,7 +51,8 @@ describe('FeishuOAuthClient', () => {
     expect(url.searchParams.get('scope')).toBe(
       'offline_access docx:document:readonly docx:document:create docx:document ' +
         'drive:drive:readonly drive:drive drive:export:readonly ' +
-        'sheets:spreadsheet:readonly sheets:spreadsheet bitable:app:readonly bitable:app',
+        'sheets:spreadsheet:readonly sheets:spreadsheet bitable:app:readonly bitable:app ' +
+        'im:message',
     );
   });
 

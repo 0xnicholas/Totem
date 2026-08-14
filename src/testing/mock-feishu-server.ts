@@ -55,6 +55,8 @@ export class MockFeishuServer {
   refreshRequestCount = 0;
   /** Number of authorization_code grant calls received. */
   exchangeRequestCount = 0;
+  /** Messages received by the IM endpoint (ADR-0016): receive_id_type, id, text content. */
+  sentMessages: Array<{ receiveIdType: string; receiveId: string; content: string }> = [];
 
   private readonly accessTokenTtlMs: number;
   private readonly refreshTokenTtlMs: number;
@@ -134,6 +136,7 @@ export class MockFeishuServer {
     this.docsEndpoints();
     this.writeEndpoints();
     this.advancedEndpoints();
+    this.imEndpoints();
   }
 
   /**
@@ -676,6 +679,37 @@ export class MockFeishuServer {
     this.scriptedDocsFailure = undefined;
     if (scripted) return c.json({ code: scripted.code, msg: scripted.msg }, scripted.httpStatus ?? 200);
     return undefined;
+  }
+
+  /**
+   * The IM send surface (ADR-0016): `POST /im/v1/messages` — the mock
+   * records each accepted message so tests pin the connector's request
+   * shape (receive_id_type, receive_id, JSON-encoded text content).
+   */
+  private imEndpoints(): void {
+    this.app.post('/open-apis/im/v1/messages', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const receiveId = isRecord(body) && typeof body.receive_id === 'string' ? body.receive_id : '';
+      if (receiveId === '') {
+        // Fidelity: the live API rejects a missing receive_id with the
+        // generic invalid-parameter envelope (230001).
+        return c.json({ code: 230001, msg: 'invalid request parameter' });
+      }
+      let textContent = '';
+      if (isRecord(body) && typeof body.content === 'string') {
+        const parsed: unknown = JSON.parse(body.content);
+        if (isRecord(parsed) && typeof parsed.text === 'string') textContent = parsed.text;
+      }
+      this.sentMessages.push({
+        receiveIdType: c.req.query('receive_id_type') ?? '',
+        receiveId,
+        content: textContent,
+      });
+      return c.json({ code: 0, msg: 'ok', data: { message_id: `om_${randomUUID()}` } });
+    });
   }
 
   /**

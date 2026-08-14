@@ -44,6 +44,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       'read_sheet_cells',
       'rename_doc',
       'search_docs',
+      'send_message',
       'test_connection',
       'write_sheet_cells',
     ]);

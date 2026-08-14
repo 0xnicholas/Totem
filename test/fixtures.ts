@@ -1,5 +1,5 @@
 import type { Action, ActionDeprecation, ActionExecutor, ActionHandler, ConnectionRecord, IConnector, ProviderToken } from '../src/index.js';
-import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS, createActionExecutor } from '../src/index.js';
 import type { AllowlistStore, AuditPolicyProvider, AuditSink, DefenderPolicyProvider } from '../src/governance.js';
 import type { TokenProvider } from '../src/oauth/token-lifecycle.js';
 import type { RateLimiter } from '../src/rate-limit.js';
@@ -12,8 +12,8 @@ export const CONN_1 = 'conn-1';
 export { FAKE_CONNECTOR_ID };
 export const MISBEHAVING_CONNECTOR_ID = 'misbehaving';
 
-/** The full v1 platform action set: the Docs domain plus connection actions. */
-export const PLATFORM_ACTIONS: Action[] = [...DOCS_ACTIONS, ...CONNECTION_ACTIONS];
+/** The full platform action set: Docs, messaging (ADR-0016) and connection actions. */
+export const PLATFORM_ACTIONS: Action[] = [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS];
 
 export const CONN_1_A: ConnectionRecord = {
   tenantId: TENANT_A,

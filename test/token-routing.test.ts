@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConnectionStore, createActionExecutor, type IConnector } from '../src/index.js';
-import { CONNECTION_ACTIONS, DOCS_ACTIONS } from '../src/actions.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS } from '../src/actions.js';
 import { TokenRoutingProvider } from '../src/token-routing.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
@@ -101,7 +101,7 @@ describe('executor with routed token acquisition (two connectors)', () => {
     const audit = new InMemoryAuditSink();
 
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       // The real DingTalk connector is covered at Seam B; here a stub with
       // the same manifest id stands in so the test stays about routing.
       connectors: [new FakeConnector(), dingtalkStubConnector()],

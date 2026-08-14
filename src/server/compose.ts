@@ -18,7 +18,7 @@ import { PostgresTokenStore } from '../oauth/pg-token-store.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
 import { createOpenApiApp, DEFAULT_OPENAPI_META } from '../rest/openapi.js';
 import { createRpcApp } from '../rest/rpc.js';
-import { CONNECTION_ACTIONS, DOCS_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS, createActionExecutor, createMcpApp, McpAdapter, PostgresMCPKeyStore } from '../index.js';
 import { PostgresConnectionStore } from '../pg-connections.js';
 import { PostgresAllowlistStore, PostgresAuditPolicyStore, PostgresAuditSink, PostgresDefenderPolicyStore } from '../pg-governance.js';
 import { TokenRoutingProvider } from '../token-routing.js';
@@ -110,7 +110,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   // acquisition routes by connector id (T17a): one TokenProvider seam for
   // the executor, per-connector managers behind it.
   const executor = createActionExecutor({
-    actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+    actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
     connectors,
     connections: [],
     allowlists,

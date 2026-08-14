@@ -1,7 +1,7 @@
 import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CONNECTION_ACTIONS, DOCS_ACTIONS, McpAdapter, RateLimiter, createActionExecutor } from '../src/index.js';
+import { CONNECTION_ACTIONS, DOCS_ACTIONS, MESSAGING_ACTIONS, McpAdapter, RateLimiter, createActionExecutor } from '../src/index.js';
 import { DingTalkConnector } from '../src/dingtalk/connector.js';
 import { createDingTalkOAuthClient } from '../src/dingtalk/oauth.js';
 import { FakeConnector } from '../src/testing/fake-connector.js';
@@ -910,7 +910,7 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
     allowlists.setAllowed(TENANT, CONNECTION, opts.allowed);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'dingtalk_docs' }],
       allowlists,
@@ -1137,7 +1137,7 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
     allowlists.setAllowed(TENANT, FAKE_CONN, ['search_docs', 'test_connection']);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [
         new FakeConnector([{ doc_id: 'fake-1', title: 'Fake Doc', content: 'fake' }]),
         new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) }),
@@ -1256,7 +1256,7 @@ describe('DingTalk sheet actions through Seam A (T18a)', () => {
     allowlists.setAllowed(TENANT, CONNECTION, opts.allowed);
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
-      actions: [...DOCS_ACTIONS, ...CONNECTION_ACTIONS],
+      actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
       connectors: [new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) })],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'dingtalk_docs' }],
       allowlists,

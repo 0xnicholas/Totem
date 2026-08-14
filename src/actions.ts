@@ -174,6 +174,26 @@ export interface WriteBitableRecordsOutput {
   record_id: string;
 }
 
+export interface SendMessageInput {
+  /**
+   * Recipient email (a user). Exactly one of `email` / `chat_id` is
+   * required — the schema rejects both-absent and both-present.
+   */
+  email?: string;
+  /**
+   * Opaque id of the target chat (a group conversation). Exactly one of
+   * `email` / `chat_id` is required.
+   */
+  chat_id?: string;
+  /** Plain-text message content. */
+  content: string;
+}
+
+export interface SendMessageOutput {
+  /** The sent message's opaque id. */
+  message_id: string;
+}
+
 const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
   type: 'object',
   additionalProperties: false,
@@ -462,6 +482,35 @@ const writeBitableRecordsOutputSchema: JSONSchemaType<WriteBitableRecordsOutput>
   required: ['doc_id', 'table_name', 'record_id'],
 };
 
+/**
+ * Exactly-one-of addressing for `send_message` (ADR-0016): the email /
+ * chat_id union is a JSON Schema `oneOf` with negation, which
+ * `JSONSchemaType` cannot infer — same escape hatch as `cellValueSchema`.
+ */
+const sendMessageInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    email: { type: 'string', nullable: true, minLength: 1 },
+    chat_id: { type: 'string', nullable: true, minLength: 1 },
+    content: { type: 'string', minLength: 1 },
+  },
+  required: ['content'],
+  oneOf: [
+    { required: ['email'], not: { required: ['chat_id'] } },
+    { required: ['chat_id'], not: { required: ['email'] } },
+  ],
+} as unknown as JSONSchemaType<SendMessageInput>;
+
+const sendMessageOutputSchema: JSONSchemaType<SendMessageOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message_id: { type: 'string' },
+  },
+  required: ['message_id'],
+};
+
 const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
   type: 'object',
   additionalProperties: false,
@@ -653,5 +702,25 @@ export const CONNECTION_ACTIONS: Action[] = [
     inputSchema: testConnectionInputSchema,
     outputSchema: testConnectionOutputSchema,
     effects: 'read',
+  },
+];
+
+/**
+ * The messaging domain (ADR-0016): the platform's first non-doc action
+ * family, entering on the catalog-driven roadmap. `send_message` is
+ * canonical — the schema is designed against concepts the providers share
+ * (natural-key email addressing, opaque chat ids), so Feishu implements it
+ * now and DingTalk / WeCom follow in later batches.
+ */
+export const MESSAGING_ACTIONS: Action[] = [
+  {
+    name: 'send_message',
+    description:
+      'Send a plain-text message to a user by email, or to a chat by its opaque chat_id ' +
+      '(exactly one of email/chat_id). The message is sent with the identity of this ' +
+      "connection's owner. Returns the sent message's opaque message_id.",
+    inputSchema: sendMessageInputSchema,
+    outputSchema: sendMessageOutputSchema,
+    effects: 'write',
   },
 ];

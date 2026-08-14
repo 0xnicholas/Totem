@@ -20,6 +20,8 @@ import type {
   RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
+  SendMessageInput,
+  SendMessageOutput,
   WriteBitableRecordsInput,
   WriteBitableRecordsOutput,
   WriteSheetCellsInput,
@@ -99,6 +101,7 @@ export class FeishuConnector implements IConnector {
       'write_sheet_cells',
       'feishu_read_bitable_records',
       'feishu_write_bitable_records',
+      'send_message',
     ],
   };
 
@@ -435,6 +438,34 @@ export class FeishuConnector implements IConnector {
         };
         return output;
       },
+
+      send_message: async (args: SendMessageInput, ctx) => {
+        const input = args;
+        // ADR-0016: the connection owner's identity (user access token),
+        // natural-key email addressing or the opaque chat_id — never
+        // provider tokens (open_id/user_id/union_id). Exactly-one-of is
+        // schema-enforced upstream of the handler.
+        const receiveIdType = input.email !== undefined ? 'email' : 'chat_id';
+        const receiveId = input.email ?? input.chat_id!;
+        const response = await this.request<DocsEnvelope<SendMessageData>>(
+          '/open-apis/im/v1/messages',
+          {
+            method: 'POST',
+            token: ctx.token,
+            query: { receive_id_type: receiveIdType },
+            body: {
+              receive_id: receiveId,
+              msg_type: 'text',
+              // Feishu encodes per-msg_type content as a JSON string.
+              content: JSON.stringify({ text: input.content }),
+            },
+          },
+        );
+        // Live-note (deferred): IM-specific not_found codes (unknown email /
+        // chat) surface as upstream_error until a live pass pins them — the
+        // generic envelope mapping below covers everything else already.
+        return { message_id: response.data.message_id } satisfies SendMessageOutput;
+      },
     };
   }
 
@@ -550,6 +581,10 @@ interface FilesListData {
   files: unknown[];
   has_more: boolean;
   next_page_token: string;
+}
+
+interface SendMessageData {
+  message_id: string;
 }
 
 interface RawContentData {
