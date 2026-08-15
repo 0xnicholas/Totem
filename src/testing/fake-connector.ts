@@ -11,6 +11,8 @@ import type {
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  GetExportArtifactInput,
+  GetExportArtifactOutput,
   MoveDocInput,
   MoveDocOutput,
   ReadBitableRecordsInput,
@@ -30,10 +32,18 @@ import type {
 } from '../actions.js';
 import type { ConnectorManifest, IConnector } from '../connector.js';
 import { ActionError } from '../errors.js';
+import { toArtifactOutput } from '../actions.js';
 import type { RateLimitDeclaration } from '../rate-limit.js';
 import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js';
 
 export const FAKE_CONNECTOR_ID = 'fake';
+
+/** MIME types the fake reports for exported artifacts, keyed by format. */
+const FAKE_EXPORT_CONTENT_TYPES: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
 
 /** A spreadsheet inside the fake connector (T9): one sheet, id + name. */
 export interface FakeSheet {
@@ -69,6 +79,8 @@ export class FakeConnector implements IConnector {
   readonly manifest: ConnectorManifest;
 
   private readonly docs = new Map<string, FakeDoc>();
+  /** Export artifacts by artifact_id (#43): export_doc creates, get_export_artifact downloads. */
+  private readonly artifacts = new Map<string, { bytes: Uint8Array; contentType: string }>();
   private readonly handlers: Record<string, ActionHandler>;
 
   constructor(
@@ -91,6 +103,7 @@ export class FakeConnector implements IConnector {
         'rename_doc',
         'move_doc',
         'export_doc',
+        'get_export_artifact',
         'read_sheet_cells',
         'write_sheet_cells',
         'feishu_read_bitable_records',
@@ -110,6 +123,7 @@ export class FakeConnector implements IConnector {
       rename_doc: (args: RenameDocInput) => this.renameDoc(args),
       move_doc: (args: MoveDocInput) => this.moveDoc(args),
       export_doc: (args: ExportDocInput) => this.exportDoc(args),
+      get_export_artifact: (args: GetExportArtifactInput) => this.getExportArtifact(args),
       read_sheet_cells: (args: ReadSheetCellsInput) => this.readSheetCells(args),
       write_sheet_cells: (args: WriteSheetCellsInput) => this.writeSheetCells(args),
       feishu_read_bitable_records: (args: ReadBitableRecordsInput) => this.readBitableRecords(args),
@@ -209,12 +223,25 @@ export class FakeConnector implements IConnector {
 
   private exportDoc(args: ExportDocInput): ExportDocOutput {
     const doc = this.requireDoc(args.doc_id);
+    const artifactId = `export_${doc.doc_id}_${args.format}`;
+    this.artifacts.set(artifactId, {
+      bytes: new TextEncoder().encode(`FAKE-EXPORT-${artifactId}`),
+      contentType: FAKE_EXPORT_CONTENT_TYPES[args.format] ?? 'application/octet-stream',
+    });
     return {
       doc_id: doc.doc_id,
       format: args.format,
-      artifact_id: `export_${doc.doc_id}_${args.format}`,
+      artifact_id: artifactId,
       url: `https://fake.totem.local/exports/${doc.doc_id}.${args.format}`,
     };
+  }
+
+  private getExportArtifact(args: GetExportArtifactInput): GetExportArtifactOutput {
+    const artifact = this.artifacts.get(args.artifact_id);
+    if (!artifact) {
+      throw new ActionError('not_found', `Artifact "${args.artifact_id}" not found`);
+    }
+    return toArtifactOutput(args.artifact_id, artifact);
   }
 
   private readSheetCells(args: ReadSheetCellsInput): ReadSheetCellsOutput {

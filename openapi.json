@@ -706,6 +706,45 @@
           "url"
         ]
       },
+      "get_export_artifact_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "artifact_id"
+        ]
+      },
+      "get_export_artifact_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_base64": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "content_type",
+          "size_bytes",
+          "content_base64"
+        ]
+      },
       "read_sheet_cells_input": {
         "type": "object",
         "additionalProperties": false,

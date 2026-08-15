@@ -250,6 +250,7 @@ describe('listAllowedTools (the tool-list question at Seam A)', () => {
       'feishu_write_bitable_records',
       'get_doc_content',
       'get_doc_metadata',
+      'get_export_artifact',
       'move_doc',
       'read_sheet_cells',
       'rename_doc',

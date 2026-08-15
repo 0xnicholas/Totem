@@ -41,6 +41,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       'feishu_write_bitable_records',
       'get_doc_content',
       'get_doc_metadata',
+      'get_export_artifact',
       'move_doc',
       'read_sheet_cells',
       'rename_doc',

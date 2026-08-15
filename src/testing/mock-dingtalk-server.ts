@@ -14,6 +14,12 @@ interface DingTalkErrorBody {
 
 const INVALID_AUTH = { code: 'InvalidAuthentication', message: 'invalid access token' } satisfies DingTalkErrorBody;
 
+/** MIME types the mock reports for export artifacts, keyed by exportType. */
+const EXPORT_CONTENT_TYPES: Record<string, string> = {
+  dingTalkDocToDocx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  dingTalkDocToPdf: 'application/pdf',
+};
+
 interface ScriptedFailure {
   code: string;
   message: string;
@@ -146,7 +152,16 @@ export class MockDingTalkServer {
   private readonly docs: MockDingTalkDoc[] = [];
   private readonly folders: MockDingTalkFolder[] = [];
   private readonly workbooks: MockDingTalkWorkbook[] = [];
-  private readonly exportJobs = new Map<string, { status: string }>();
+  private readonly exportJobs = new Map<
+    string,
+    { status: string; bytes: Uint8Array; contentType: string }
+  >();
+  /**
+   * Base URL for presigned export downloadUrls (#43): when set, the task
+   * query returns URLs under this base so the connector's absolute-URL
+   * fetch hits the mock itself (tests set it to the live server URL).
+   */
+  artifactBaseUrl: string | undefined;
 
   constructor(private readonly options: MockDingTalkServerOptions) {
     this.accessTokenTtlMs = options.accessTokenTtlMs ?? 2 * 60 * 60 * 1000;
@@ -526,7 +541,7 @@ export class MockDingTalkServer {
 
     // POST /v2.0/doc/dentries/export — create an async export task. The
     // mock accepts it (the live API 404s for this app — see connector
-    // notes); the connector keeps export_doc hidden either way.
+    // notes; #43 flipped export_doc visible regardless).
     this.app.post('/v2.0/doc/dentries/export', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
@@ -535,10 +550,9 @@ export class MockDingTalkServer {
         return c.json(INVALID_AUTH, 401);
       }
       const body = await readJson(c);
+      const param = isRecord(body) && isRecord(body.param) ? body.param : undefined;
       const dentryUuid =
-        isRecord(body) && isRecord(body.param) && typeof body.param.dentryUuid === 'string'
-          ? body.param.dentryUuid
-          : undefined;
+        param !== undefined && typeof param.dentryUuid === 'string' ? param.dentryUuid : undefined;
       if (!dentryUuid) {
         return c.json({ code: 'paramError', message: 'missing param.dentryUuid' }, 400);
       }
@@ -547,8 +561,26 @@ export class MockDingTalkServer {
         return c.json({ code: 'DocumentNotFound', message: 'document not found' }, 404);
       }
       const jobId = `job-${randomUUID()}`;
-      this.exportJobs.set(jobId, { status: 'init' });
+      const exportType =
+        param !== undefined && typeof param.exportType === 'string' ? param.exportType : '';
+      this.exportJobs.set(jobId, {
+        status: 'init',
+        bytes: new TextEncoder().encode(`MOCK-DINGTALK-EXPORT-${jobId}`),
+        contentType: EXPORT_CONTENT_TYPES[exportType] ?? 'application/octet-stream',
+      });
       return c.json({ jobId, status: 'init' });
+    });
+
+    // GET /export/artifacts/:taskId — the presigned artifact download
+    // (#43). Deliberately UNAUTHENTICATED: presigned links carry their
+    // authorization in the URL, which is also why the kernel sends no
+    // auth header on absolute-URL downloads.
+    this.app.get('/export/artifacts/:taskId', (c) => {
+      const job = this.exportJobs.get(c.req.param('taskId'));
+      if (!job) {
+        return c.json({ code: 'ArtifactNotFound', message: 'no such artifact' }, 404);
+      }
+      return new Response(job.bytes, { headers: { 'content-type': job.contentType } });
     });
 
     // GET /v1.0/doc/workbooks/{workbookId}/sheets — the worksheet list
@@ -680,8 +712,9 @@ export class MockDingTalkServer {
       if (!job) {
         return c.json({ code: 'ExportTaskNotFound', message: 'export task not found' }, 404);
       }
+      const base = this.artifactBaseUrl ?? 'https://mock.dingtalk.example';
       return c.json({
-        downloadUrl: `https://mock.dingtalk.example/export/${taskId}`,
+        downloadUrl: `${base}/export/artifacts/${taskId}`,
         status: 'success',
       });
     });
@@ -940,6 +973,17 @@ export class MockDingTalkServer {
   /** Scripts one failure for the next refresh_token, app-token or users/me call. */
   failNext(failure: ScriptedFailure): void {
     this.scriptedFailure = failure;
+  }
+
+  /**
+   * Replaces an export artifact's bytes (#43): tests arm oversized
+   * payloads (the connector's cap) or custom content types.
+   */
+  setExportArtifactBytes(jobId: string, bytes: Uint8Array, contentType: string): void {
+    const job = this.exportJobs.get(jobId);
+    if (job) {
+      this.exportJobs.set(jobId, { ...job, bytes, contentType });
+    }
   }
 
   /** Scripts one failure for the next content-insert call (create seed / append). */

@@ -71,7 +71,7 @@ The external system a connector talks to (v1: Feishu Open Platform). The source 
 _Avoid_: Backend, third-party API, provider
 
 **Upstream HTTP Kernel**:
-The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, auth header, empty-body policy, and the envelope convention (success check + error mapping) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003).
+The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, the binary download stack (relative path with the profile's auth header, or an absolute pre-signed URL fetched verbatim with no credentials, both under an optional byte cap), and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, auth header, empty-body policy, and the envelope convention (success check + error mapping, applied to error envelopes on downloads too) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003).
 _Avoid_: HTTP client, fetch helper
 
 **Execution Boundary**:

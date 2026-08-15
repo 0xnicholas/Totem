@@ -778,6 +778,62 @@ describe('FeishuConnector advanced actions (T9)', () => {
     expect(output.artifact_id).toBeTruthy();
   });
 
+  it('get_export_artifact downloads an exported artifact as base64 (#43)', async () => {
+    const exported = (await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-doc', format: 'pdf' },
+      withToken(),
+    )) as { artifact_id: string };
+
+    const result = await connector.execute(
+      'get_export_artifact',
+      { artifact_id: exported.artifact_id },
+      withToken(),
+    );
+
+    // The mock's artifact bytes are deterministic ASCII, so the full
+    // output — including the base64 encoding — is assertable verbatim.
+    const expected = `MOCK-EXPORT-pdf-${exported.artifact_id}`;
+    expect(result).toEqual({
+      artifact_id: exported.artifact_id,
+      content_type: 'application/pdf',
+      size_bytes: expected.length,
+      content_base64: Buffer.from(expected, 'utf8').toString('base64'),
+    });
+  });
+
+  it('get_export_artifact maps a missing artifact to not_found (#43)', async () => {
+    await expect(
+      connector.execute('get_export_artifact', { artifact_id: 'exported_none' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found', retryable: false });
+  });
+
+  it('get_export_artifact rejects an artifact over the 10 MiB cap (#43)', async () => {
+    const exported = (await connector.execute(
+      'export_doc',
+      { doc_id: 'adv-doc', format: 'pdf' },
+      withToken(),
+    )) as { artifact_id: string };
+    mock.setArtifactBytes(
+      exported.artifact_id,
+      new Uint8Array(10 * 1024 * 1024 + 1),
+      'application/pdf',
+    );
+
+    await expect(
+      connector.execute(
+        'get_export_artifact',
+        { artifact_id: exported.artifact_id },
+        withToken(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      message:
+        'Feishu Docs API artifact exceeds the download cap: 10485761 bytes (cap 10485760)',
+    });
+  });
+
   it('feishu_read_bitable_records returns a real next cursor and honors it (#42)', async () => {
     const page1 = (await connector.execute(
       'feishu_read_bitable_records',
@@ -1026,9 +1082,10 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     return { executor, audit };
   }
 
-  it('walks export → sheet write/read → bitable write/read with audit rows', async () => {
+  it('walks export → artifact download → sheet write/read → bitable write/read with audit rows', async () => {
     const { executor, audit } = makeExecutor([
       'export_doc',
+      'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
       'feishu_read_bitable_records',
@@ -1040,6 +1097,24 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
       format: 'pdf',
     });
     expect(exported).toMatchObject({ ok: true, output: { doc_id: 'life-doc', format: 'pdf' } });
+
+    // #43: the export loop closes at Seam A — the boundary validates the
+    // canonical output schema (base64 + content type + size) like any
+    // other action, and the download is audited.
+    const artifactId = (exported as { ok: true; output: { artifact_id: string } }).output
+      .artifact_id;
+    const downloaded = await executor.executeAction(TENANT, CONNECTION, 'get_export_artifact', {
+      artifact_id: artifactId,
+    });
+    expect(downloaded).toMatchObject({
+      ok: true,
+      output: {
+        artifact_id: artifactId,
+        content_type: 'application/pdf',
+        size_bytes: `MOCK-EXPORT-pdf-${artifactId}`.length,
+        content_base64: Buffer.from(`MOCK-EXPORT-pdf-${artifactId}`, 'utf8').toString('base64'),
+      },
+    });
 
     const sheetWrite = await executor.executeAction(TENANT, CONNECTION, 'write_sheet_cells', {
       doc_id: 'life-sheet',
@@ -1093,6 +1168,7 @@ describe('FeishuConnector advanced lifecycle through the executor (T9)', () => {
     const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
     expect(rows).toEqual([
       ['export_doc', true, null],
+      ['get_export_artifact', true, null],
       ['write_sheet_cells', true, null],
       ['read_sheet_cells', true, null],
       ['feishu_write_bitable_records', true, null],
@@ -1150,6 +1226,23 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
       output: { doc_id: 'f-doc', format: 'pdf' },
     });
     expect((exported as { ok: true; output: { artifact_id: string } }).output.artifact_id).toBeTruthy();
+
+    // #43: the fake closes the export loop too — download through the
+    // boundary, output validated against the canonical schema.
+    const artifactId = (exported as { ok: true; output: { artifact_id: string } }).output
+      .artifact_id;
+    const downloaded = await executor.executeAction(TENANT_A, CONN_1, 'get_export_artifact', {
+      artifact_id: artifactId,
+    });
+    expect(downloaded).toMatchObject({
+      ok: true,
+      output: {
+        artifact_id: artifactId,
+        content_type: 'application/pdf',
+        size_bytes: `FAKE-EXPORT-${artifactId}`.length,
+        content_base64: Buffer.from(`FAKE-EXPORT-${artifactId}`, 'utf8').toString('base64'),
+      },
+    });
 
     const read = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
       doc_id: 'f-sheet',
@@ -1222,6 +1315,7 @@ describe('FakeConnector advanced actions through the executor (Seam A)', () => {
     const rows = audit.list().map((r) => [r.actionName, r.success, r.errorCode]);
     expect(rows).toEqual([
       ['export_doc', true, null],
+      ['get_export_artifact', true, null],
       ['read_sheet_cells', true, null],
       ['write_sheet_cells', true, null],
       ['read_sheet_cells', true, null],

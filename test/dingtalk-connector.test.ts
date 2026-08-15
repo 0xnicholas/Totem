@@ -39,6 +39,9 @@ describe('DingTalkConnector (Seam B)', () => {
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    // #43: presigned export downloadUrls point back at the mock itself so
+    // get_export_artifact's absolute-URL fetch is live-testable.
+    mock.artifactBaseUrl = baseUrl;
     connector = new DingTalkConnector(baseUrl, {
       // The app token the doc APIs authenticate with (T17 live pass); the
       // test resolves it from the mock's client-credentials endpoint.
@@ -141,7 +144,7 @@ describe('DingTalkConnector (Seam B)', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets, export_doc hidden)', () => {
+  it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets + #43 export flip)', () => {
     expect(connector.manifest.id).toBe('dingtalk_docs');
     expect(connector.manifest.provider).toBe('dingtalk');
     expect(connector.manifest.implements).toEqual([
@@ -153,10 +156,11 @@ describe('DingTalkConnector (Seam B)', () => {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'export_doc',
+      'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
     ]);
-    expect(connector.manifest.implements).not.toContain('export_doc');
     expect(connector.manifest.rateLimit).toEqual({ requestsPerMinute: 120 });
   });
 
@@ -481,7 +485,7 @@ describe('DingTalkConnector (Seam B)', () => {
     ).rejects.toMatchObject({ code: 'rate_limited', retryable: true });
   });
 
-  it('export_doc is translated (async task + poll) but hidden from the manifest', async () => {
+  it('export_doc is translated (async task + poll) and visible (#43 flip)', async () => {
     const output = (await connector.execute(
       'export_doc',
       { doc_id: 'doc-1', format: 'docx' },
@@ -490,8 +494,68 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output.doc_id).toBe('doc-1');
     expect(output.format).toBe('docx');
     expect(output.artifact_id).toMatch(/^job-/);
-    expect(output.url).toMatch(/^https:\/\/mock\.dingtalk\.example\/export\//);
-    expect(connector.manifest.implements).not.toContain('export_doc');
+    expect(output.url).toMatch(/\/export\/artifacts\//);
+    expect(connector.manifest.implements).toContain('export_doc');
+  });
+
+  it('get_export_artifact downloads the export bytes over the presigned URL (#43)', async () => {
+    const exported = (await connector.execute(
+      'export_doc',
+      { doc_id: 'doc-1', format: 'pdf' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { artifact_id: string };
+
+    const result = await connector.execute(
+      'get_export_artifact',
+      { artifact_id: exported.artifact_id },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    );
+
+    // The mock's artifact bytes are deterministic ASCII, so the full
+    // output — including the base64 encoding — is assertable verbatim.
+    const expected = `MOCK-DINGTALK-EXPORT-${exported.artifact_id}`;
+    expect(result).toEqual({
+      artifact_id: exported.artifact_id,
+      content_type: 'application/pdf',
+      size_bytes: expected.length,
+      content_base64: Buffer.from(expected, 'utf8').toString('base64'),
+    });
+  });
+
+  it('get_export_artifact maps an unknown artifact to not_found (#43)', async () => {
+    await expect(
+      connector.execute(
+        'get_export_artifact',
+        { artifact_id: 'job-none' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'not_found', retryable: false });
+  });
+
+  it('get_export_artifact rejects an artifact over the 10 MiB cap (#43)', async () => {
+    const exported = (await connector.execute(
+      'export_doc',
+      { doc_id: 'doc-1', format: 'pdf' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { artifact_id: string };
+    mock.setExportArtifactBytes(
+      exported.artifact_id,
+      new Uint8Array(10 * 1024 * 1024 + 1),
+      'application/pdf',
+    );
+
+    await expect(
+      connector.execute(
+        'get_export_artifact',
+        { artifact_id: exported.artifact_id },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      message:
+        'DingTalk API artifact exceeds the download cap: 10485761 bytes (cap 10485760)',
+    });
   });
 });
 
@@ -959,11 +1023,11 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
   });
 
   it('rejects actions the connector does not implement (hide, don\'t reject)', async () => {
-    // export_doc is translated but deliberately hidden (T17c decision:
-    // exportType values unconfirmed until the live pass) — the executor
-    // must never route it.
-    const { executor } = makeExecutor({ allowed: ['export_doc'] });
-    const result = await executor.executeAction(TENANT, CONNECTION, 'export_doc', { doc_id: 'doc-1', format: 'docx' }, 'cli');
+    // send_message is canonical (registered) but not implemented by
+    // dingtalk_docs — the executor must never route it (export_doc joined
+    // the manifest in the #43 flip).
+    const { executor } = makeExecutor({ allowed: ['send_message'] });
+    const result = await executor.executeAction(TENANT, CONNECTION, 'send_message', { content: 'x', email: 'a@b.c' }, 'cli');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('action_not_found');
@@ -1181,8 +1245,8 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
 
   it('advertises implements ∩ allowlist as MCP tools for a DingTalk connection', async () => {
     const { executor, allowlists } = makeTwoConnectorExecutor();
-    // export_doc is allowed but deliberately hidden on dingtalk_docs
-    // (T17c decision): not advertised. create_doc IS implemented now.
+    // #43: export_doc flipped visible on dingtalk_docs (Minor per
+    // ADR-0014) and get_export_artifact joins it.
     allowlists.setAllowed(TENANT, DINGTALK_CONN, [
       'search_docs',
       'create_doc',
@@ -1190,19 +1254,20 @@ describe('two-connector dispatch + MCP tool list (T17b)', () => {
       'read_sheet_cells',
       'write_sheet_cells',
       'export_doc',
+      'get_export_artifact',
     ]);
     const adapter = new McpAdapter(executor);
     const tools = await adapter.listTools(TENANT, DINGTALK_CONN);
     const names = tools.map((tool) => tool.name).sort();
-    // T18a: the two sheet Actions now join implements ∩ allowlist.
     expect(names).toEqual([
       'create_doc',
+      'export_doc',
       'get_doc_metadata',
+      'get_export_artifact',
       'read_sheet_cells',
       'search_docs',
       'write_sheet_cells',
     ]);
-    expect(names).not.toContain('export_doc'); // hidden even when allowed
     expect(names).not.toContain('get_doc_content'); // allowed ∩ implemented only
   });
 });

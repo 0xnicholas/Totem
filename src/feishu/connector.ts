@@ -10,6 +10,8 @@ import type {
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  GetExportArtifactInput,
+  GetExportArtifactOutput,
   MoveDocInput,
   MoveDocOutput,
   ReadBitableRecordsInput,
@@ -30,9 +32,15 @@ import type {
   WriteSheetCellsOutput,
 } from '../actions.js';
 import type { IConnector } from '../connector.js';
+import { GET_EXPORT_ARTIFACT_MAX_BYTES, toArtifactOutput } from '../actions.js';
 import { ActionError, errorMessage } from '../errors.js';
 import { FeishuApiError } from './oauth.js';
-import { createUpstreamHttp, type UpstreamRequest, type UpstreamRequestOptions } from '../upstream-http.js';
+import {
+  createUpstreamHttp,
+  type UpstreamHttp,
+  type UpstreamRequest,
+  type UpstreamRequestOptions,
+} from '../upstream-http.js';
 
 /**
  * Feishu error-code families (T7, live-verified in the T9 demo pass):
@@ -103,6 +111,7 @@ export class FeishuConnector implements IConnector {
       'rename_doc',
       'move_doc',
       'export_doc',
+      'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
       'feishu_read_bitable_records',
@@ -125,7 +134,7 @@ export class FeishuConnector implements IConnector {
   private readonly exportMaxAttempts: number;
   private readonly movePollMs: number;
   private readonly moveMaxAttempts: number;
-  private readonly request: UpstreamRequest;
+  private readonly request: UpstreamHttp;
 
   constructor(
     private readonly baseUrl: string,
@@ -384,6 +393,20 @@ export class FeishuConnector implements IConnector {
           // the connection's Feishu authorization.
           url: `${this.baseUrl}/open-apis/drive/v1/medias/${encodeURIComponent(exported.file_token)}/download`,
         };
+        return output;
+      },
+
+      get_export_artifact: async (args: GetExportArtifactInput, ctx) => {
+        const input = args;
+        // #43: the platform holds the authorization the agent lacks — the
+        // medias download fetched here is exactly what export_doc's URL
+        // points at, with the connection's token attached. The kernel's
+        // cap guard rejects oversized artifacts before bytes surface.
+        const file = await this.request.download(
+          `/open-apis/drive/v1/medias/${encodeURIComponent(input.artifact_id)}/download`,
+          { token: ctx.token, maxBytes: GET_EXPORT_ARTIFACT_MAX_BYTES },
+        );
+        const output: GetExportArtifactOutput = toArtifactOutput(input.artifact_id, file);
         return output;
       },
 

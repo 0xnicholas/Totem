@@ -279,7 +279,8 @@ curl -sS -X POST "$TOTEM_URL/actions/search" \
 | `append_doc_content` | write | 追加文本到文档末尾 |
 | `rename_doc` | write | 重命名 |
 | `move_doc` | write | 移动到文件夹 |
-| `export_doc` | write | 导出(docx/pdf/xlsx/csv/base/pptx;**无 markdown**) |
+| `export_doc` | read | 导出(docx/pdf;**无 markdown**),返回 `artifact_id`(URL 本身需 connection 授权,agent 拿不到) |
+| `get_export_artifact` | read | 按 `artifact_id` 取导出产物:base64 字节 + MIME 类型 + 字节数(≤10 MiB,超限 `upstream_error`) |
 | `read_sheet_cells` / `write_sheet_cells` | read / write | 表格单元格读写 |
 | `feishu_read_bitable_records` / `feishu_write_bitable_records` | read / write | Bitable 记录读写 |
 | `test_connection` | read | 连通性自检 |

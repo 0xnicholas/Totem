@@ -76,6 +76,16 @@ REST 动作;totem 的注册表是 schema-first 的,动作的输入就是一张�
   opaque IDs")。
 - **失败**:见 §4。MCP 的失败是**结果**(`isError: true`),不是 JSON-RPC 异常
   (对齐 StackOne: tool failures are results)。
+- **二进制产物(#43,`get_export_artifact`)**:`export_doc` 返回的 URL 需要
+  connection 的授权,agent 拿不到——导出闭环由平台代取。输出
+  `{artifact_id, content_type, size_bytes, content_base64}`:base64 编码的字节
+  (docx/pdf 是二进制,不存在可读文本形态)、上游报告的 MIME 类型、原始字节数。
+  `artifact_id` 是 opaque ID(只存、只传、不解析)。**平台级 10 MiB 原始字节
+  上限**:超限返回 `upstream_error`(不可重试——重试产物也不会变小),接入方
+  应改用更小的文档/格式或引导用户自行下载。Defender 对二进制产物**不做声明**:
+  超过 1 MiB 的响应本就被尺寸守卫跳过(“无 metadata = 无声明”),更小的 base64
+  产物虽可扫描但注入指令签名不可能匹配 base64 文本——这是诚实标注的边界能力,
+  不是静默豁免;能扫描的文本面(`get_doc_content` 等)防护不变。
 
 ## 4. 错误标准(✅)
 

@@ -11,6 +11,18 @@ const INVALID_TOKEN_ENVELOPE = { code: 99991672, msg: 'invalid access token' };
 /** Real export-task extension options (T9 demo pass): no markdown export. */
 const EXPORT_EXTENSIONS = new Set(['docx', 'pdf', 'xlsx', 'csv', 'base', 'pptx']);
 
+/** MIME types the mock reports for exported artifacts, keyed by extension. */
+const EXPORT_CONTENT_TYPES: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pdf: 'application/pdf',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+/** Deterministic artifact bytes for an export (#43): the connector round-trips them. */
+function mockExportBytes(extension: string, fileToken: string): Uint8Array {
+  return new TextEncoder().encode(`MOCK-EXPORT-${extension}-${fileToken}`);
+}
+
 interface ScriptedFailure {
   code: number;
   msg: string;
@@ -80,6 +92,8 @@ export class MockFeishuServer {
   >();
   private readonly bitables = new Map<string, Array<{ name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> }>>();
   private readonly exports = new Map<string, { status: number; fileToken: string }>();
+  /** Downloadable export artifacts keyed by exported file token (#43). */
+  private readonly artifacts = new Map<string, { bytes: Uint8Array; contentType: string }>();
   private readonly moveTasks = new Map<string, { status: 'success' | 'process' | 'fail' }>();
   private holdNextExportArmed = false;
   private failNextExportArmed = false;
@@ -252,6 +266,14 @@ export class MockFeishuServer {
   /** Fails the next created export task (job_status 2). */
   failNextExport(): void {
     this.failNextExportArmed = true;
+  }
+
+  /**
+   * Replaces a downloadable artifact's bytes (#43): tests arm oversized
+   * payloads (the connector's cap) or custom content types.
+   */
+  setArtifactBytes(fileToken: string, bytes: Uint8Array, contentType: string): void {
+    this.artifacts.set(fileToken, { bytes, contentType });
   }
 
   /** Holds the next move task in the running state (status "process"). */
@@ -569,6 +591,12 @@ export class MockFeishuServer {
 
       const ticket = `ticket_${randomUUID()}`;
       const fileToken = `exported_${randomUUID()}`;
+      // #43: a completed export produces a downloadable artifact keyed by
+      // the exported file token (the medias download surface).
+      this.artifacts.set(fileToken, {
+        bytes: mockExportBytes(extension, fileToken),
+        contentType: EXPORT_CONTENT_TYPES[extension] ?? 'application/octet-stream',
+      });
       if (this.failNextExportArmed) {
         this.failNextExportArmed = false;
         this.exports.set(ticket, { status: 2, fileToken });
@@ -608,6 +636,20 @@ export class MockFeishuServer {
         code: 0,
         msg: 'ok',
         data: { result: { file_token: exportTask.fileToken } },
+      });
+    });
+
+    // Real contract (T9 demo pass): the medias download serves the
+    // exported file's bytes for the connection's token (#43 closes the
+    // loop: the platform fetches what the agent cannot).
+    this.app.get('/open-apis/drive/v1/medias/:fileToken/download', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      const artifact = this.artifacts.get(c.req.param('fileToken'));
+      if (!artifact) return notFound();
+      return new Response(artifact.bytes, {
+        headers: { 'content-type': artifact.contentType },
       });
     });
 

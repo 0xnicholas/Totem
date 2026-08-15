@@ -11,6 +11,8 @@ import type {
   GetDocContentOutput,
   GetDocMetadataInput,
   GetDocMetadataOutput,
+  GetExportArtifactInput,
+  GetExportArtifactOutput,
   MoveDocInput,
   MoveDocOutput,
   ReadSheetCellsInput,
@@ -24,9 +26,10 @@ import type {
   WriteSheetCellsOutput,
 } from '../actions.js';
 import type { IConnector } from '../connector.js';
+import { GET_EXPORT_ARTIFACT_MAX_BYTES, toArtifactOutput } from '../actions.js';
 import { ActionError, errorMessage } from '../errors.js';
 import { DingTalkApiError } from './oauth.js';
-import { createUpstreamHttp, type UpstreamRequest } from '../upstream-http.js';
+import { createUpstreamHttp, type UpstreamHttp } from '../upstream-http.js';
 
 /**
  * Maps a DingTalk Open Platform API failure into the unified error
@@ -103,12 +106,15 @@ export function mapDingtalkError(err: DingTalkApiError): ActionError {
  *   updated_cells is computed as rows × columns of the submitted values
  *   (recorded finding).
  *
- * export_doc stays OUT of the manifest (T17c AC-2 decision, confirmed by
- * the live pass): the async task endpoints 404 for this app
- * (`InvalidAction.NotFound`) and the required `Document.Document.Read`
- * permission point is not grantable in the DingTalk console. The
- * translation is implemented and Seam B tested so a future flip only
- * needs the manifest entry + corrected shapes.
+ * export_doc was hidden from the manifest from T17c until #43 (2026-08-14
+ * gap-review decision) flipped it visible: the translation had been
+ * implemented and Seam B tested all along; the flip is Minor per ADR-0014.
+ * Live caveat (T17 pass, still true): the async export endpoints 404 for
+ * this app (`InvalidAction.NotFound`) and the `Document.Document.Read`
+ * permission point is not grantable in the DingTalk console — a live call
+ * surfaces that upstream failure to the agent instead of hiding the
+ * capability. The exportType mapping below remains an unconfirmed
+ * assumption (patterned on the published `dingTalksheetToxlsx` example).
  */
 export class DingTalkConnector implements IConnector {
   readonly manifest = {
@@ -123,6 +129,8 @@ export class DingTalkConnector implements IConnector {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'export_doc',
+      'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
     ],
@@ -135,7 +143,7 @@ export class DingTalkConnector implements IConnector {
   private readonly handlers: Record<string, ActionHandler>;
   private readonly exportPollMs: number;
   private readonly exportMaxAttempts: number;
-  private readonly request: UpstreamRequest;
+  private readonly request: UpstreamHttp;
   private readonly getAppAccessToken: ((tenantId: string) => Promise<string>) | undefined;
   /**
    * DingTalk's doc APIs require the acting user's `unionId` as
@@ -438,11 +446,11 @@ export class DingTalkConnector implements IConnector {
 
       export_doc: async (args: ExportDocInput, ctx) => {
         const input = args;
-        // Hidden from the manifest (T17c decision, live-confirmed); kept
-        // implemented + Seam B tested for a future flip. DingTalk exports
-        // are async: create a task, then poll until the downloadUrl exists.
-        // Note: the SDK's export-create takes no operatorId — docRequest
-        // attaches it as a query param anyway (harmless if ignored).
+        // Visible since #43 (Minor per ADR-0014; live caveat in the class
+        // comment). DingTalk exports are async: create a task, then poll
+        // until the downloadUrl exists. Note: the SDK's export-create takes
+        // no operatorId — docRequest attaches it as a query param anyway
+        // (harmless if ignored).
         const task = await this.docRequest<ExportTaskState>(
           '/v2.0/doc/dentries/export',
           {
@@ -465,6 +473,20 @@ export class DingTalkConnector implements IConnector {
           artifact_id: task.jobId,
           url: exported.downloadUrl,
         };
+        return output;
+      },
+
+      get_export_artifact: async (args: GetExportArtifactInput, ctx) => {
+        const input = args;
+        // The artifact id is the export job's id: re-poll the task for its
+        // (short-lived) presigned downloadUrl, then fetch it. Presigned
+        // URLs are absolute and carry their authorization in the URL — the
+        // kernel fetches them verbatim, with no auth header attached.
+        const exported = await this.pollExport(input.artifact_id, ctx);
+        const file = await this.request.download(exported.downloadUrl, {
+          maxBytes: GET_EXPORT_ARTIFACT_MAX_BYTES,
+        });
+        const output: GetExportArtifactOutput = toArtifactOutput(input.artifact_id, file);
         return output;
       },
 
@@ -529,13 +551,9 @@ export class DingTalkConnector implements IConnector {
     };
   }
 
-  // T17c AC-2 decision (live-confirmed): export_doc stays OUT of the
-  // manifest. The live pass showed the async export endpoints answering
-  // 404 `InvalidAction.NotFound` for this app, and the required
-  // `Document.Document.Read` permission point is not grantable in the
-  // DingTalk console. The mapping below is an unconfirmed assumption
-  // (pattern modeled on the published `dingTalksheetToxlsx` example) and
-  // stays hidden until a faithful live path exists.
+  // The exportType mapping is an unconfirmed assumption (patterned on
+  // the published `dingTalksheetToxlsx` example); export_doc is visible
+  // since #43 with this caveat recorded in the class comment.
   private static readonly EXPORT_TYPE_BY_FORMAT: Record<string, string> = {
     docx: 'dingTalkDocToDocx',
     pdf: 'dingTalkDocToPdf',

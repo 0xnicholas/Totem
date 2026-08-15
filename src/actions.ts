@@ -98,8 +98,50 @@ export interface ExportDocOutput {
   format: 'docx' | 'pdf';
   /** Opaque token of the exported artifact in the user's drive. */
   artifact_id: string;
-  /** Download URL for the artifact (requires the connection's Feishu auth). */
+  /** Download URL for the artifact (requires the connection's authorization). */
   url: string;
+}
+
+export interface GetExportArtifactInput {
+  /** Opaque artifact token — the artifact_id from export_doc's output. */
+  artifact_id: string;
+}
+
+export interface GetExportArtifactOutput {
+  artifact_id: string;
+  /** The artifact's MIME type as reported upstream ('application/octet-stream' when absent). */
+  content_type: string;
+  /** Raw byte count of the artifact. */
+  size_bytes: number;
+  /** The artifact's bytes, base64-encoded — docx/pdf are binary; agents decode. */
+  content_base64: string;
+}
+
+/**
+ * The platform-wide raw-byte cap for `get_export_artifact` (#43): artifacts
+ * up to 10 MiB download; larger ones fail `upstream_error` (not retryable —
+ * the artifact will not shrink) before any surface sees bytes. The single
+ * constant every connector passes to the kernel's download guard, so the
+ * cap is uniform across providers.
+ */
+export const GET_EXPORT_ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Shapes a downloaded artifact into the canonical get_export_artifact
+ * output — the one place the base64/size/content-type conventions live, so
+ * every connector (and the fake) produces the identical vocabulary
+ * (#43). Node-only by design: Buffer is the platform's encoding tool.
+ */
+export function toArtifactOutput(
+  artifactId: string,
+  file: { bytes: Uint8Array; contentType: string | undefined },
+): GetExportArtifactOutput {
+  return {
+    artifact_id: artifactId,
+    content_type: file.contentType ?? 'application/octet-stream',
+    size_bytes: file.bytes.byteLength,
+    content_base64: Buffer.from(file.bytes).toString('base64'),
+  };
 }
 
 export interface ReadSheetCellsInput {
@@ -393,6 +435,27 @@ const exportDocOutputSchema: JSONSchemaType<ExportDocOutput> = {
   required: ['doc_id', 'format', 'artifact_id', 'url'],
 };
 
+const getExportArtifactInputSchema: JSONSchemaType<GetExportArtifactInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    artifact_id: { type: 'string', minLength: 1 },
+  },
+  required: ['artifact_id'],
+};
+
+const getExportArtifactOutputSchema: JSONSchemaType<GetExportArtifactOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    artifact_id: { type: 'string' },
+    content_type: { type: 'string', minLength: 1 },
+    size_bytes: { type: 'integer', minimum: 0 },
+    content_base64: { type: 'string' },
+  },
+  required: ['artifact_id', 'content_type', 'size_bytes', 'content_base64'],
+};
+
 const readSheetCellsInputSchema: JSONSchemaType<ReadSheetCellsInput> = {
   type: 'object',
   additionalProperties: false,
@@ -657,12 +720,27 @@ export const DOCS_ACTIONS: Action[] = [
     // the original 'md' format was dropped from the platform vocabulary.
     description:
       "Export a document by its opaque doc_id into a portable format: 'docx' or 'pdf'. " +
-      'Returns an artifact reference: the exported file token and its download URL (fetching ' +
-      "the artifact requires the connection's Feishu authorization).",
+      'Returns an artifact reference: the exported file token (artifact_id) and its drive URL. ' +
+      "The URL requires the connection's authorization, so the agent cannot fetch it — pass " +
+      'artifact_id to get_export_artifact and the platform downloads the bytes for you.',
     inputSchema: exportDocInputSchema,
     outputSchema: exportDocOutputSchema,
     // Export creates an artifact on the upstream side but never changes the
     // document itself — read class, like the rest of the metadata surface.
+    effects: 'read',
+  },
+  {
+    name: 'get_export_artifact',
+    description:
+      "Download an export artifact by its opaque artifact_id (from export_doc's output) and " +
+      "return its bytes base64-encoded, with the artifact's content type and size. The platform " +
+      "fetches the artifact with the connection's authorization — the export URL itself is " +
+      'unreachable to agents. Artifacts are capped at 10 MiB; larger ones fail with a ' +
+      'non-retryable upstream_error.',
+    inputSchema: getExportArtifactInputSchema,
+    outputSchema: getExportArtifactOutputSchema,
+    // A pure download: no upstream state changes (the artifact already
+    // exists from export_doc).
     effects: 'read',
   },
   {
