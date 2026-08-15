@@ -78,10 +78,6 @@ _Avoid_: Backend, third-party API, provider
 The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, the binary download stack (relative path with the profile's auth — an auth header, or a query token for query-param families like WeCom — or an absolute pre-signed URL fetched verbatim with no credentials, both under an optional byte cap), and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, the auth attachment (header name or query param), empty-body policy, and the envelope convention (success check + error mapping, applied to error envelopes on downloads too) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003). The sole execution substrate for every connector (ADR-0019): no connector shells out to a CLI process at runtime.
 _Avoid_: HTTP client, fetch helper
 
-**Endpoint Corpus**:
-The machine-readable snapshot of Feishu's upstream API surface (from `lark-cli schema`, pinned as a committed fixture), diffed at build time against the endpoints and params the connector references — blocking on referenced drift, informational on coverage. An oracle, never a generator; never a runtime dependency (ADR-0019).
-_Avoid_: Drift oracle (names the function, not the artifact), lark-cli catalog, API schema
-
 **Execution Boundary**:
 The single orchestration point (`executeAction`) through which every action call passes: allowlist check, schema validation, token acquisition, dispatch, audit write. It also answers the tool-list question the surfaces ask (`listAllowedTools` — visible view ∩ allowlist ∩ connector `implements`, ADR-0002 hide-don't-reject), so governance data never crosses a second seam. The primary test seam (Seam A).
 _Avoid_: Service layer, use case, controller
