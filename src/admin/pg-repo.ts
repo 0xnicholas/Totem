@@ -259,7 +259,11 @@ export class PostgresAdminRepository implements AdminRepository {
     return rows.map(mapConnection);
   }
 
-  async setAllowlist(connectionId: string, actions: string[]): Promise<void> {
+  async setAllowlist(
+    connectionId: string,
+    actions: string[],
+    acknowledge?: { allowDestructive?: boolean },
+  ): Promise<void> {
     await this.mutate(async (client) => {
       const connection = await this.requireConnection(client, connectionId);
       await client.query('DELETE FROM allowlists WHERE connection_id = $1', [connectionId]);
@@ -273,7 +277,11 @@ export class PostgresAdminRepository implements AdminRepository {
         tenantId: connection.tenant_id,
         connectionId,
         actionName: ADMIN_AUDIT_ACTIONS.allowlistUpdated,
-        params: { connectionId, actions },
+        params: {
+          connectionId,
+          actions,
+          ...(acknowledge?.allowDestructive === true ? { allowDestructive: true } : {}),
+        },
         durationMs: 0,
       });
     });
@@ -326,6 +334,17 @@ export class PostgresAdminRepository implements AdminRepository {
     if (filters.success !== undefined) {
       params.push(filters.success);
       conditions.push(`success = $${params.length}`);
+    }
+    if (filters.destructive !== undefined) {
+      params.push(filters.destructive);
+      // The ADR-0018 write-time stamp: metadata.effects is what the platform
+      // classified at execution time — the filter never consults the live
+      // registry. COALESCE makes `false` mean "not stamped destructive"
+      // (unstamped rows included) — the same semantics as the in-memory
+      // double, so both stores answer the same question.
+      conditions.push(
+        `COALESCE(metadata->>'effects' = 'destructive', false) = $${params.length}`,
+      );
     }
     const rows = (
       await this.pool.query<AuditLogRow>(

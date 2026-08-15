@@ -21,8 +21,10 @@ export interface ActionContext {
  * can see the consequences of a call before making it (mapped to MCP tool
  * annotations at the adapter). `read` never changes state; `write` mutates
  * but nothing is permanently destroyed; `destructive` is irreversible
- * (deletion, overwrite of the object itself). Nothing in the v1 set is
- * destructive; the class exists for future delete-style actions.
+ * (deletion, overwrite of the object itself). Since the destructive family
+ * (ADR-0018) the class carries a governance contract: acknowledged
+ * allowlisting, fail-closed Defender input screening, always-audited
+ * executions.
  */
 export type ActionEffect = 'read' | 'write' | 'destructive';
 

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { serve, type ServerType } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
 import { createAdminApp } from '../src/admin/server.js';
+import { ADMIN_AUDIT_ACTIONS } from '../src/admin/repo.js';
 import { hashApiKey } from '../src/admin/keys.js';
 import { FlowError } from '../src/oauth/authorize-flow.js';
 import { InMemoryAdminRepository } from '../src/testing/memory-admin-repo.js';
@@ -160,6 +161,94 @@ describe('admin API (HTTP boundary)', () => {
       body: JSON.stringify({ actions: [] }),
     });
     expect(unknown.status).toBe(404);
+  });
+
+  it('requires an explicit acknowledge for destructive allowlist entries (ADR-0018)', async () => {
+    // A dedicated app with the platform's destructive set wired — the
+    // production wiring (compose) always injects it.
+    const localRepo = new InMemoryAdminRepository();
+    const localApp = createAdminApp({
+      repo: localRepo,
+      adminKey: ADMIN_KEY,
+      destructiveActions: new Set(['delete_doc', 'feishu_delete_bitable_records']),
+    });
+    const localServer = serve({ fetch: localApp.fetch, port: 0 });
+    await new Promise((resolve) => localServer.once('listening', resolve));
+    const localUrl = `http://127.0.0.1:${(localServer.address() as AddressInfo).port}`;
+    const localFetch = (path: string, init: RequestInit = {}): Promise<Response> =>
+      fetch(`${localUrl}${path}`, {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${ADMIN_KEY}`,
+          ...init.headers,
+        },
+      });
+    try {
+      const tenant = await localRepo.createTenant('destructive-tenant');
+      localRepo.addConnection(tenant.id, 'conn-destr');
+
+      // No acknowledge: rejected, naming the offending entries.
+      const bare = await localFetch('/admin/connections/conn-destr/allowlist', {
+        method: 'PUT',
+        body: JSON.stringify({ actions: ['create_doc', 'delete_doc'] }),
+      });
+      expect(bare.status).toBe(400);
+      const bareBody = (await bare.json()) as { error: string };
+      expect(bareBody.error).toContain('delete_doc');
+      expect(bareBody.error).toContain('allowDestructive');
+
+      // The acknowledge flag admits the list — the opting-in act is audited.
+      const acknowledged = await localFetch('/admin/connections/conn-destr/allowlist', {
+        method: 'PUT',
+        body: JSON.stringify({
+          actions: ['create_doc', 'delete_doc'],
+          allowDestructive: true,
+        }),
+      });
+      expect(acknowledged.status).toBe(200);
+      const rows = await localRepo.queryAudit(tenant.id, {
+        action: ADMIN_AUDIT_ACTIONS.allowlistUpdated,
+      });
+      const last = rows.at(-1);
+      // paramHash covers {connectionId, actions, allowDestructive} — the
+      // params cannot be read back, so the flag's presence is pinned by
+      // the registry audit seam; here we assert the row exists.
+      expect(last?.actionName).toBe('admin.allowlist_updated');
+    } finally {
+      await new Promise((resolve) => localServer.close(resolve));
+    }
+  });
+
+  it('filters audit rows by the destructive stamp (ADR-0018)', async () => {
+    const tenant = await repo.createTenant('destructive-filter-tenant');
+    repo.seedAuditRow({
+      tenantId: tenant.id,
+      actionName: 'delete_doc',
+      createdAt: '2026-08-15T10:00:00.000Z',
+      metadata: { effects: 'destructive' },
+    });
+    repo.seedAuditRow({
+      tenantId: tenant.id,
+      actionName: 'create_doc',
+      createdAt: '2026-08-15T10:01:00.000Z',
+    });
+
+    const destructive = await adminFetch(`/admin/tenants/${tenant.id}/audit?destructive=true`);
+    expect(destructive.status).toBe(200);
+    const body = (await destructive.json()) as { rows: Array<{ actionName: string }> };
+    expect(body.rows.map((r) => r.actionName)).toEqual(['delete_doc']);
+
+    // false = "not stamped destructive": unstamped rows are included
+    // (the same semantics as the Postgres COALESCE) — tenant_created is
+    // the admin mutation's own unstamped row.
+    const plain = await adminFetch(`/admin/tenants/${tenant.id}/audit?destructive=false`);
+    expect(plain.status).toBe(200);
+    const plainBody = (await plain.json()) as { rows: Array<{ actionName: string }> };
+    expect(plainBody.rows.map((r) => r.actionName)).toEqual(['create_doc', 'admin.tenant_created']);
+
+    const rejected = await adminFetch(`/admin/tenants/${tenant.id}/audit?destructive=yes`);
+    expect(rejected.status).toBe(400);
   });
 
   it('suspends and resumes a connection', async () => {

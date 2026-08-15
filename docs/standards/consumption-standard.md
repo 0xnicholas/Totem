@@ -131,6 +131,35 @@ totem 自定枚举——这就是 totem 的枚举):
 代码动态适配。**接入方不要在代码里硬编码动作清单,从 `GET /actions` 或
 `tools/list` 读取。**
 
+### 5.1 副作用分级(effects,✅ 含破坏类,ADR-0018)
+
+每个动作声明一个副作用分级 `effects`,消费面一致投影(MCP 见 §6.1):
+
+| effects | 含义 | 接入方行为 |
+|---|---|---|
+| `read` | 不改变任何状态 | 自由调用 |
+| `write` | 改变状态,但不摧毁对象本身 | 正常调用 |
+| `destructive` | 不可逆删除——从平台/agent 的世界里对象永久消失(上游可能移到回收站,但恢复是**人类**在上游 UI 的操作,agent 无法做到) | **先向用户确认再调用**;MCP 面为 `destructiveHint: true` |
+
+破坏类(`destructive`)的治理契约(平台侧保证,接入方可信):
+
+- **永不隐式进 allowlist**:新连接 allowlist 为空(fail-closed,拒绝一切);
+  任何包含破坏类动作的 allowlist 写入都必须带运营方的显式
+  `allowDestructive: true` 确认(§6),因此 agent 看不到未经确认的删除工具——
+  `tools/list` 没出现就是没有权限(§6);
+- **每次执行必留审计**:破坏类动作的成功与失败都写入审计日志
+  (`metadata.effects = 'destructive'` 戳记),即使租户开启了 error-only
+  审计模式;运营方可用 `?destructive=true` 查询;
+- **入参失败关闭扫描**:破坏类动作的参数在派发前经 Defender 扫描,高危注入
+  指令无论租户的 `blockHighRisk` 开关如何都拦截为 `forbidden`(Tier-1 签名
+  扫描,诚实标注);
+- 调用语义与其它动作完全一致(同一 envelope、同一七码错误、`forbidden` =
+  未授权,勿重试);`effects` 分级变化按 §11.2 的 major 流程通告。
+
+首个破坏类动作(`#44`):`delete_doc`(canonical:删文档;飞书把文件移入系统
+回收站,仅人类可恢复)、`feishu_delete_bitable_records`(provider-native:批量删
+多维表格记录,1–500 条/次)。
+
 ## 6. MCP 标准(✅)
 
 - 传输:Streamable HTTP,挂载 `{TOTEM_URL}/mcp`(与 StackOne `api.stackone.com/mcp`
@@ -140,6 +169,13 @@ totem 自定枚举——这就是 totem 的枚举):
   `tools/list` 没出现的工具 = 没有权限,不要猜。
 - 调用未知工具 → JSON-RPC `-32602`(stale 工具列表,对齐 StackOne)。
 - 成功/失败语义见 §3/§4。
+
+### 6.1 工具注解(effects 投影,ADR-0018 含破坏类)
+
+`tools/list` 按 `effects` 附带注解:`read` → `readOnlyHint: true`;
+`destructive` → `destructiveHint: true`;普通 `write` 不带注解(不得标记为
+破坏类)。agent 客户端应把 `destructiveHint: true` 的工具视为需要用户确认的
+操作(§5.1)。
 
 ## 7. 分页 / List Envelope(✅ 已实现,ADR-0012)
 
@@ -231,6 +267,7 @@ v1 阶段平台不投递:接入方直连上游订阅,但**事件处理层按本�
 | 连接器版本化 | semver pin per profile | 约定已记录,机制 v2 | 🚧 |
 | provider-native 动作 | `custom` actionType,裸上游输出 | `<provider>_` 前缀 + curated 输出(平台惯例不破,ADR-0013) | ⚠️ 有意更强 |
 | 动作级 deprecation | 无政策(pin 即安全网) | `deprecated` 字段 + sunset + MCP 描述警告(ADR-0014) | ✅ 超越 |
+| 破坏类治理 | 无显式概念(删除即普通动作) | `destructive` 分级 + 显式 allowlist 确认 + 入参失败关闭扫描 + 必留审计(§5.1,ADR-0018) | ✅ 超越 |
 
 ## 10. 接入方对照调整指南(怎么用本标准)
 

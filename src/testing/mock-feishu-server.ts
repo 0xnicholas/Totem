@@ -100,6 +100,8 @@ export class MockFeishuServer {
   private failNextExportArmed = false;
   private holdNextMoveArmed = false;
   private failNextMoveArmed = false;
+  private holdNextDeleteArmed = false;
+  private failNextDeleteArmed = false;
   private omitRefreshTokenArmed = false;
   private scriptedFailure: ScriptedFailure | undefined;
   private scriptedDocsFailure: ScriptedFailure | undefined;
@@ -285,6 +287,16 @@ export class MockFeishuServer {
   /** Fails the next move task (status "fail"). */
   failNextMove(): void {
     this.failNextMoveArmed = true;
+  }
+
+  /** Holds the next delete task in the running state (#44). */
+  holdNextDelete(): void {
+    this.holdNextDeleteArmed = true;
+  }
+
+  /** Fails the next delete task (#44). */
+  failNextDelete(): void {
+    this.failNextDeleteArmed = true;
   }
 
   /** Next token envelope omits refresh_token (app-config simulation). */
@@ -545,6 +557,39 @@ export class MockFeishuServer {
       return c.json({ code: 0, msg: 'ok', data: { task_id: taskId } });
     });
 
+    // Real contract (#44, doc-verified): drive file delete is
+    // DELETE /files/:token?type=<type>; deletion moves the file to the
+    // system trash; the response carries a task_id verified via the same
+    // task_check endpoint as moves. The type must be the file's real type
+    // (mismatch fails), so the connector probes first like move/export.
+    this.app.delete('/open-apis/drive/v1/files/:fileToken', (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+      const doc = this.requireDoc(c.req.param('fileToken'));
+      if (!doc) return notFound();
+      if (this.lockedDocs.has(doc.doc_id)) return locked();
+
+      const type = c.req.query('type') ?? '';
+      if (type !== doc.doc_type) {
+        return c.json({ code: 1061002, msg: 'file type mismatch' });
+      }
+      const index = this.docs.indexOf(doc);
+      this.docs.splice(index, 1);
+      this.sheets.delete(doc.doc_id);
+      this.bitables.delete(doc.doc_id);
+      const taskId = `task_${randomUUID()}`;
+      let status: 'success' | 'process' | 'fail' = 'success';
+      if (this.failNextDeleteArmed) {
+        this.failNextDeleteArmed = false;
+        status = 'fail';
+      } else if (this.holdNextDeleteArmed) {
+        this.holdNextDeleteArmed = false;
+        status = 'process';
+      }
+      this.moveTasks.set(taskId, { status });
+      return c.json({ code: 0, msg: 'ok', data: { task_id: taskId } });
+    });
+
     // Real contract: drive async-task status. status is a STRING —
     // "success", "fail" (task done, failed), or "process" (running).
     this.app.get('/open-apis/drive/v1/files/task_check', (c) => {
@@ -797,6 +842,38 @@ export class MockFeishuServer {
       table.records.push(record);
       return c.json({ code: 0, msg: 'ok', data: { record } });
     });
+
+    // Real contract (#44, doc-verified): batch delete takes a plain array
+    // of record-id strings (≤500), succeeds as a unit, and returns no
+    // per-record results — the count is the caller's batch size. A missing
+    // record id fails the whole call; the mock pins that as the 10662
+    // not-found family (live code unpinned until a demo pass).
+    this.app.post(
+      '/open-apis/bitable/v1/apps/:app/tables/:tableId/records/batch_delete',
+      async (c) => {
+        const gate = this.docsGate(c);
+        if (gate) return gate;
+
+        const table = this.requireBitableTable(c.req.param('app'), c.req.param('tableId'));
+        if (!table) return notFound();
+
+        const body: unknown = await c.req.json().catch(() => ({}));
+        const ids =
+          isRecord(body) && Array.isArray(body.records)
+            ? body.records.filter((id): id is string => typeof id === 'string')
+            : [];
+        if (ids.length === 0) {
+          return c.json({ code: 10002, msg: 'records is required' });
+        }
+        const doomed = ids.map((id) => table.records.find((r) => r.record_id === id));
+        if (doomed.some((record) => record === undefined)) return notFound();
+        for (const record of doomed) {
+          const index = table.records.indexOf(record!);
+          table.records.splice(index, 1);
+        }
+        return c.json({ code: 0, msg: 'ok', data: {} });
+      },
+    );
   }
 
   /**

@@ -55,8 +55,12 @@ The platform-owned module (`src/oauth/`) behind a connection's OAuth tokens (ADR
 _Avoid_: Token manager (when meaning a per-provider copy — there is one platform lifecycle, providers contribute adapters)
 
 **Allowlist**:
-The per-connection list of action names that may be executed. Enforced at the execution boundary; also filters which tools the MCP server advertises to the agent (hide, don't reject).
+The per-connection list of action names that may be executed. Enforced at the execution boundary; also filters which tools the MCP server advertises to the agent (hide, don't reject). Fail-closed: new connections carry an empty allowlist and can do nothing until an operator sets it. Since the destructive family (ADR-0018), a list that includes a destructive action is only accepted with an explicit `allowDestructive: true` acknowledge — destructive actions are never implicitly allowlisted.
 _Avoid_: Whitelist, permissions, ACL
+
+**Destructive Action**:
+An Action with `effects: 'destructive'` — irreversible upstream state change from the platform's and agent's world (deletion; upstream trash recovery is a human operation, not an agent capability). Carries a class contract (ADR-0018): allowlisted only by acknowledged act, input args screened fail-closed at the boundary (a high-risk Defender detection blocks regardless of `blockHighRisk`), every attempt audited with `metadata.effects` stamped and exempt from error-only mode. MCP projects the class as `destructiveHint`.
+_Avoid_: Dangerous action, admin action, irreversible action (when the topic is the effects class)
 
 **Audit Log**:
 The append-only record of every execution attempt: tenant, connection, action, param hash, status, error code, timestamp. The answer to "who did what, when".

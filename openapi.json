@@ -658,6 +658,30 @@
           "folder_id"
         ]
       },
+      "delete_doc_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
+      "delete_doc_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      },
       "export_doc_input": {
         "type": "object",
         "additionalProperties": false,
@@ -1057,6 +1081,54 @@
           "table_name",
           "record_id",
           "fields"
+        ]
+      },
+      "feishu_delete_bitable_records_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "record_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "record_ids"
+        ]
+      },
+      "feishu_delete_bitable_records_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc_id": {
+            "type": "string"
+          },
+          "table_name": {
+            "type": "string"
+          },
+          "deleted_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "doc_id",
+          "table_name",
+          "deleted_count"
         ]
       },
       "send_message_input": {

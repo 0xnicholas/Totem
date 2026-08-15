@@ -109,8 +109,9 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   // created by the OAuth flow (T6) are visible without a restart. Token
   // acquisition routes by connector id (T17a): one TokenProvider seam for
   // the executor, per-connector managers behind it.
+  const actions = [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS];
   const executor = createActionExecutor({
-    actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
+    actions,
     connectors,
     connections: [],
     allowlists,
@@ -133,6 +134,12 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     secretCipher: {
       encrypt: (tenantId, secret) => encryptValue(tenantId, secret, masterKey),
     },
+    // ADR-0018: the destructive set the acknowledge gate checks against —
+    // straight from the registered catalog, so future destructive actions
+    // inherit the gate without wiring changes.
+    destructiveActions: new Set(
+      actions.filter((action) => action.effects === 'destructive').map((action) => action.name),
+    ),
   });
   const mcpApp = createMcpApp({
     adapter: new McpAdapter(executor),

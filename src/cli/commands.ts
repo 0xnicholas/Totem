@@ -31,11 +31,15 @@ commands:
                                        connection instead of creating one;
                                        --connector picks the flow, default feishu_docs)
   set-allowlist <connection-id> <action> [action...]
+                                      (--allow-destructive true acknowledges that the list
+                                       includes destructive actions, ADR-0018)
   suspend-connection <connection-id>
   resume-connection <connection-id>
   list-connections <tenant-id>                          (id, name, connector, auth state)
   query-audit <tenant-id> [--user <id>] [--action <name>] [--since <iso-timestamp>]
-              [--source mcp|admin_api|cli] [--success true|false]
+              [--source mcp|admin_api|cli] [--success true|false] [--destructive true|false]
+              (--destructive filters rows stamped with the irreversible class,
+               ADR-0018; stamped rows also print a DESTRUCTIVE marker)
   get-audit-policy <tenant-id>                          (retention days, error-only, capture-body)
   set-audit-policy <tenant-id> [--retention-days N] [--error-only true|false]
                   [--capture-body true|false]           (omitted fields are kept)
@@ -157,12 +161,24 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
       }
 
       case 'set-allowlist': {
-        const [connectionId, ...actions] = rest;
+        const { positionals, flags } = parseFlags(rest);
+        const [connectionId, ...actions] = positionals;
         if (!connectionId || actions.length === 0) {
-          throw new UsageError('set-allowlist <connection-id> <action> [action...]');
+          throw new UsageError(
+            'set-allowlist <connection-id> <action> [action...] [--allow-destructive true|false]',
+          );
         }
-        await io.client.setAllowlist(connectionId, actions);
-        io.stdout(`Allowlist for connection ${connectionId}: ${actions.join(', ')}`);
+        if (flags['allow-destructive'] !== undefined && flags['allow-destructive'] !== 'true' && flags['allow-destructive'] !== 'false') {
+          throw new UsageError('--allow-destructive must be "true" or "false"');
+        }
+        const allowDestructive = flags['allow-destructive'] === 'true';
+        await io.client.setAllowlist(connectionId, actions, {
+          ...(allowDestructive ? { allowDestructive: true } : {}),
+        });
+        io.stdout(
+          `Allowlist for connection ${connectionId}: ${actions.join(', ')}` +
+            (allowDestructive ? ' (destructive acknowledged)' : ''),
+        );
         return 0;
       }
 
@@ -187,6 +203,10 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         const filters = flagsToAuditFilters(flags);
         const { rows } = await io.client.queryAudit(tenantId, filters);
         for (const row of rows) {
+          const destructive =
+            typeof row.metadata === 'object' &&
+            row.metadata !== null &&
+            (row.metadata as { effects?: unknown }).effects === 'destructive';
           io.stdout(
             [
               row.createdAt,
@@ -195,6 +215,7 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
               row.source,
               row.success ? 'ok' : 'FAIL',
               row.errorCode ?? '',
+              ...(destructive ? ['DESTRUCTIVE'] : []),
             ].join('\t'),
           );
         }
@@ -285,7 +306,7 @@ function parseFlags(argv: string[]): { positionals: string[]; flags: Record<stri
   return { positionals, flags };
 }
 
-const AUDIT_FLAGS = ['user', 'action', 'since', 'source', 'success'] as const;
+const AUDIT_FLAGS = ['user', 'action', 'since', 'source', 'success', 'destructive'] as const;
 
 function flagsToAuditFilters(flags: Record<string, string>): AuditFilters {
   const filters: AuditFilters = {};
@@ -306,6 +327,11 @@ function flagsToAuditFilters(flags: Record<string, string>): AuditFilters {
         throw new UsageError('--success must be "true" or "false"');
       }
       filters.success = value === 'true';
+    } else if (name === 'destructive') {
+      if (value !== 'true' && value !== 'false') {
+        throw new UsageError('--destructive must be "true" or "false"');
+      }
+      filters.destructive = value === 'true';
     }
   }
   return filters;

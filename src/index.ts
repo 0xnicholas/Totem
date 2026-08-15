@@ -58,7 +58,7 @@ export { buildOpenApiDocument, buildPlatformOpenApiDocument, createOpenApiApp, D
 export type { OpenApiAppConfig, OpenApiDocument, OpenApiMeta } from './rest/openapi.js';
 export { InMemoryMCPKeyStore } from './testing/memory-key-store.js';
 export { InMemoryDefenderPolicyStore } from './testing/memory-governance.js';
-export { scanDefender, DEFENDER_MAX_RESPONSE_BYTES } from './defender.js';
+export { scanDefender, DEFENDER_MAX_SCAN_BYTES } from './defender.js';
 export type { DefenderMetadata } from './defender.js';
 export { decryptValue, deriveTenantKey, encryptValue, isCiphertext } from './crypto.js';
 // The OAuth lifecycle module (ADR-0015): the platform-owned token + flow

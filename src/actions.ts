@@ -85,6 +85,15 @@ export interface MoveDocOutput {
   folder_id: string;
 }
 
+export interface DeleteDocInput {
+  doc_id: string;
+}
+
+export interface DeleteDocOutput {
+  /** The deleted document's opaque id — the confirmation the agent acted. */
+  doc_id: string;
+}
+
 /** A spreadsheet cell value with its native JSON type preserved. */
 export type CellValue = string | number | boolean | null;
 
@@ -239,6 +248,22 @@ export interface UpdateBitableRecordsOutput {
   record_id: string;
   /** The record's full field-name-based values after the update. */
   fields: Record<string, unknown>;
+}
+
+export interface DeleteBitableRecordsInput {
+  /** Opaque id of the Bitable app (its drive file token). */
+  doc_id: string;
+  /** The table holding the records, by its display name. */
+  table_name: string;
+  /** The records to delete, by their opaque ids. 1–500 per call (Feishu's cap). */
+  record_ids: string[];
+}
+
+export interface DeleteBitableRecordsOutput {
+  doc_id: string;
+  table_name: string;
+  /** How many records were deleted (the batch succeeded as a unit). */
+  deleted_count: number;
 }
 
 export interface SendMessageInput {
@@ -406,6 +431,17 @@ const moveDocOutputSchema: JSONSchemaType<MoveDocOutput> = {
     folder_id: { type: 'string' },
   },
   required: ['doc_id', 'folder_id'],
+};
+
+const deleteDocInputSchema: JSONSchemaType<DeleteDocInput> = docIdInputSchema;
+
+const deleteDocOutputSchema: JSONSchemaType<DeleteDocOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+  },
+  required: ['doc_id'],
 };
 
 // JSONSchemaType cannot infer unions from oneOf; the runtime schema below
@@ -596,6 +632,34 @@ const updateBitableRecordsOutputSchema: JSONSchemaType<UpdateBitableRecordsOutpu
   required: ['doc_id', 'table_name', 'record_id', 'fields'],
 };
 
+const deleteBitableRecordsInputSchema: JSONSchemaType<DeleteBitableRecordsInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string', minLength: 1 },
+    record_ids: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      minItems: 1,
+      // Feishu's batch_delete caps a call at 500 records (doc-verified).
+      maxItems: 500,
+    },
+  },
+  required: ['doc_id', 'table_name', 'record_ids'],
+};
+
+const deleteBitableRecordsOutputSchema: JSONSchemaType<DeleteBitableRecordsOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    doc_id: { type: 'string' },
+    table_name: { type: 'string' },
+    deleted_count: { type: 'integer', minimum: 0 },
+  },
+  required: ['doc_id', 'table_name', 'deleted_count'],
+};
+
 /**
  * Exactly-one-of addressing for `send_message` (ADR-0016): the email /
  * chat_id union is a JSON Schema `oneOf` with negation, which
@@ -715,6 +779,20 @@ export const DOCS_ACTIONS: Action[] = [
     effects: 'write',
   },
   {
+    name: 'delete_doc',
+    // The platform's first destructive-class action (ADR-0018): the class
+    // contract (acknowledged allowlisting, fail-closed input screening,
+    // always-audited) rides on this effects value alone.
+    description:
+      'Delete a document by its opaque doc_id. DESTRUCTIVE and irreversible: the ' +
+      "document disappears from everything the connection can see (Feishu moves it to the " +
+      "system's trash, where only a human user may restore it — agents cannot). Confirm with " +
+      'the user before calling. Returns the deleted document id.',
+    inputSchema: deleteDocInputSchema,
+    outputSchema: deleteDocOutputSchema,
+    effects: 'destructive',
+  },
+  {
     name: 'export_doc',
     // Live finding (T9 demo pass): Feishu's export API supports
     // [docx, pdf, xlsx, csv, base, pptx] — there is NO markdown export, so
@@ -797,6 +875,20 @@ export const DOCS_ACTIONS: Action[] = [
     inputSchema: updateBitableRecordsInputSchema,
     outputSchema: updateBitableRecordsOutputSchema,
     effects: 'write',
+    provider: 'feishu',
+  },
+  {
+    name: 'feishu_delete_bitable_records',
+    // Destructive-class (ADR-0018): same class contract as delete_doc,
+    // provider-scoped because batch delete is Feishu-shaped.
+    description:
+      'Delete records from a Bitable table by their opaque record_ids (1–500 per call). ' +
+      'DESTRUCTIVE and irreversible: the records are permanently removed from the table ' +
+      'and cannot be restored by agents. Confirm with the user before calling. Returns ' +
+      'the table identity and how many records were deleted.',
+    inputSchema: deleteBitableRecordsInputSchema,
+    outputSchema: deleteBitableRecordsOutputSchema,
+    effects: 'destructive',
     provider: 'feishu',
   },
 ];

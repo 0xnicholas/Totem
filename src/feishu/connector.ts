@@ -4,6 +4,10 @@ import type {
   AppendDocContentOutput,
   CreateDocInput,
   CreateDocOutput,
+  DeleteBitableRecordsInput,
+  DeleteBitableRecordsOutput,
+  DeleteDocInput,
+  DeleteDocOutput,
   ExportDocInput,
   ExportDocOutput,
   GetDocContentInput,
@@ -110,6 +114,7 @@ export class FeishuConnector implements IConnector {
       'append_doc_content',
       'rename_doc',
       'move_doc',
+      'delete_doc',
       'export_doc',
       'get_export_artifact',
       'read_sheet_cells',
@@ -117,6 +122,7 @@ export class FeishuConnector implements IConnector {
       'feishu_read_bitable_records',
       'feishu_write_bitable_records',
       'feishu_update_bitable_records',
+      'feishu_delete_bitable_records',
       'send_message',
     ],
   };
@@ -358,9 +364,34 @@ export class FeishuConnector implements IConnector {
         // task_id is returned for async moves; when the response carries
         // one, the move is not confirmed until the task succeeds.
         if (task.data.task_id) {
-          await this.pollMoveTask(task.data.task_id, ctx.token);
+          await this.pollDriveTask(task.data.task_id, ctx.token, 'move');
         }
         const output: MoveDocOutput = { doc_id: input.doc_id, folder_id: input.folder_id };
+        return output;
+      },
+
+      delete_doc: async (args: DeleteDocInput, ctx) => {
+        const input = args;
+        // The delete API needs the file's real type (like move/export), so
+        // probe it: opaque ID semantics — the agent stays zero-burden.
+        // Feishu moves deleted files to the system trash; the platform
+        // class still reads destructive (irreversible from the agent's
+        // world, ADR-0018) and the action description says so.
+        const meta = await resolveDocMeta(this.request, input.doc_id, ctx.token);
+        const task = await this.docsRequest<DeleteTaskData>(
+          `/open-apis/drive/v1/files/${encodeURIComponent(input.doc_id)}`,
+          {
+            method: 'DELETE',
+            token: ctx.token,
+            query: { type: meta.doc_type },
+          },
+        );
+        // Doc-verified: deletes are async like moves — a task_id in the
+        // response is verified through the shared task_check endpoint.
+        if (task.data.task_id) {
+          await this.pollDriveTask(task.data.task_id, ctx.token, 'delete');
+        }
+        const output: DeleteDocOutput = { doc_id: input.doc_id };
         return output;
       },
 
@@ -512,6 +543,28 @@ export class FeishuConnector implements IConnector {
         return output;
       },
 
+      feishu_delete_bitable_records: async (args: DeleteBitableRecordsInput, ctx) => {
+        const input = args;
+        const tableId = await resolveBitableTable(this.request, input.doc_id, input.table_name, ctx.token);
+        // Doc-verified: batch_delete takes a plain array of record ids
+        // (≤500, schema-capped), succeeds as a unit, and returns no count —
+        // deleted_count is the batch size the upstream call accepted.
+        await this.docsRequest<Record<never, never>>(
+          `/open-apis/bitable/v1/apps/${encodeURIComponent(input.doc_id)}/tables/${encodeURIComponent(tableId)}/records/batch_delete`,
+          {
+            method: 'POST',
+            token: ctx.token,
+            body: { records: input.record_ids },
+          },
+        );
+        const output: DeleteBitableRecordsOutput = {
+          doc_id: input.doc_id,
+          table_name: input.table_name,
+          deleted_count: input.record_ids.length,
+        };
+        return output;
+      },
+
       get_doc_metadata: async (args: GetDocMetadataInput, ctx) => {
         const input = args;
         // The opaque doc_id carries no type, and the metas API needs the
@@ -597,11 +650,15 @@ export class FeishuConnector implements IConnector {
   }
 
   /**
-   * Verifies a move task (#41): Feishu's move is async — the response's
-   * task_id is polled via task_check until the string status settles.
-   * Mirrors pollExport with a smaller budget (move tasks are fast).
+   * Verifies a drive async task (#41, #44): moves and deletes return a
+   * task_id polled via task_check until the string status settles.
+   * Mirrors pollExport with the move budget (drive tasks are fast).
    */
-  private async pollMoveTask(taskId: string, token: string | undefined): Promise<void> {
+  private async pollDriveTask(
+    taskId: string,
+    token: string | undefined,
+    label: string,
+  ): Promise<void> {
     for (let attempt = 0; attempt < this.moveMaxAttempts; attempt++) {
       const poll = await this.docsRequest<MoveTaskCheckData>(
         '/open-apis/drive/v1/files/task_check',
@@ -611,15 +668,15 @@ export class FeishuConnector implements IConnector {
       if (poll.data.status === 'fail') {
         throw new ActionError(
           'upstream_error',
-          `Feishu move task "${taskId}" failed`,
-          { upstream: { code: 'move_failed', message: `task ${taskId} failed` } },
+          `Feishu ${label} task "${taskId}" failed`,
+          { upstream: { code: `${label}_failed`, message: `task ${taskId} failed` } },
         );
       }
       if (attempt < this.moveMaxAttempts - 1) {
         await new Promise((resolve) => setTimeout(resolve, this.movePollMs));
       }
     }
-    throw new ActionError('upstream_error', `Feishu move task "${taskId}" did not complete`);
+    throw new ActionError('upstream_error', `Feishu ${label} task "${taskId}" did not complete`);
   }
 
   execute(action: string, args: unknown, ctx: ActionContext): Promise<unknown> {
@@ -659,6 +716,11 @@ interface ExportTaskData {
 }
 
 interface MoveTaskData {
+  task_id?: string;
+}
+
+/** #44: the drive delete response mirrors the move's async task shape. */
+interface DeleteTaskData {
   task_id?: string;
 }
 

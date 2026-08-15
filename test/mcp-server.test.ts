@@ -121,7 +121,9 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
         tools: [
           { name: 'append_doc_content' },
           { name: 'create_doc' },
+          { name: 'delete_doc' },
           { name: 'export_doc' },
+          { name: 'feishu_delete_bitable_records' },
           { name: 'feishu_read_bitable_records' },
           { name: 'feishu_update_bitable_records' },
           { name: 'feishu_write_bitable_records' },
@@ -137,6 +139,16 @@ describe('MCP HTTP surface: session and tool lifecycle', () => {
         ],
       },
     });
+
+    // ADR-0018: the destructive class projects as destructiveHint — the
+    // protocol signal agents should treat with user confirmation.
+    const tools = (rpcResult(listed.payload as never) as { result: { tools: Array<{ name: string; annotations?: Record<string, unknown> }> } }).result.tools;
+    expect(tools.find((t) => t.name === 'delete_doc')?.annotations).toMatchObject({
+      destructiveHint: true,
+    });
+    expect(
+      tools.find((t) => t.name === 'feishu_delete_bitable_records')?.annotations,
+    ).toMatchObject({ destructiveHint: true });
 
     const called = await rpc(
       app,
@@ -308,7 +320,9 @@ describe('real MCP client over loopback HTTP (AC-5)', () => {
       expect(tools.map((t) => t.name)).toEqual([
       'append_doc_content',
       'create_doc',
+      'delete_doc',
       'export_doc',
+      'feishu_delete_bitable_records',
       'feishu_read_bitable_records',
       'feishu_update_bitable_records',
       'feishu_write_bitable_records',

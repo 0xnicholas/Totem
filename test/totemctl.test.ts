@@ -143,6 +143,25 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     expect(stdout[0]).toBe('Allowlist for connection conn-1: create_doc, get_doc_content');
   });
 
+  it('set-allowlist --allow-destructive true acknowledges the destructive class (ADR-0018)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['set-allowlist', 'conn-1', 'delete_doc', '--allow-destructive', 'true'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/connections/conn-1/allowlist',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ actions: ['delete_doc'], allowDestructive: true }),
+      }),
+    );
+    expect(stdout[0]).toBe('Allowlist for connection conn-1: delete_doc (destructive acknowledged)');
+  });
+
   it('suspend-connection and resume-connection hit their routes', async () => {
     const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
     const { io } = makeHarness(fetchMock);
@@ -202,6 +221,53 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
       expect.objectContaining({ method: 'GET' }),
     );
     expect(stdout[0]).toBe('2026-08-09T10:00:00.000Z\tadmin.tenant_created\tadmin\tadmin_api\tok\t');
+  });
+
+  it('query-audit --destructive filters and marks destructive rows (ADR-0018)', async () => {
+    const rows = [
+      {
+        id: 'd1',
+        tenantId: 't1',
+        connectionId: 'c1',
+        userId: null,
+        actionName: 'delete_doc',
+        paramHash: 'h',
+        source: 'mcp',
+        success: true,
+        errorCode: null,
+        durationMs: 3,
+        createdAt: '2026-08-15T09:00:00.000Z',
+        metadata: { effects: 'destructive' },
+      },
+      {
+        id: 'd2',
+        tenantId: 't1',
+        connectionId: 'c1',
+        userId: null,
+        actionName: 'create_doc',
+        paramHash: 'h',
+        source: 'mcp',
+        success: true,
+        errorCode: null,
+        durationMs: 3,
+        createdAt: '2026-08-15T09:01:00.000Z',
+      },
+    ];
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ rows }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['query-audit', 'tenant-1', '--destructive', 'true'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/audit?destructive=true',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    // The destructive row carries the prominent marker; the plain row does not.
+    expect(stdout[0]).toBe('2026-08-15T09:00:00.000Z\tdelete_doc\t-\tmcp\tok\t\tDESTRUCTIVE');
+    expect(stdout[1]).toBe('2026-08-15T09:01:00.000Z\tcreate_doc\t-\tmcp\tok\t');
   });
 
   it('propagates API errors to stderr with exit code 1', async () => {

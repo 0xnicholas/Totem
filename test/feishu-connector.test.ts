@@ -1410,3 +1410,160 @@ describe('mapFeishuError (error translation)', () => {
     expect(err).toMatchObject({ code: 'rate_limited', retryable: true });
   });
 });
+
+/**
+ * The destructive family (ADR-0018): delete_doc (canonical, drive delete
+ * task) and feishu_delete_bitable_records (provider-native, batch delete).
+ * Same translator rules as every action — the destructive class is a
+ * governance contract at Seam A, not connector behavior.
+ */
+describe('FeishuConnector destructive actions (#44)', () => {
+  let server: ServerType;
+  let baseUrl: string;
+  let mock: MockFeishuServer;
+  let accessToken: string;
+  let connector: FeishuConnector;
+
+  beforeAll(async () => {
+    mock = new MockFeishuServer({ appId: APP_ID, appSecret: APP_SECRET });
+    mock.seedDocs([
+      {
+        doc_id: 'd-doc',
+        title: 'Doomed Doc',
+        content: 'Delete me.',
+        owner_id: 'user-9',
+        doc_type: 'docx',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+      {
+        doc_id: 'd-sheet',
+        title: 'Doomed Sheet',
+        content: '',
+        owner_id: 'user-9',
+        doc_type: 'sheet',
+        edited_at: '2026-03-01T10:00:00.000Z',
+      },
+    ]);
+    mock.seedBitable('d-bit', 'Records', [
+      {
+        name: 'Leads',
+        records: [
+          { record_id: 'rec_d_1', fields: { name: 'Ada' } },
+          { record_id: 'rec_d_2', fields: { name: 'Grace' } },
+          { record_id: 'rec_d_3', fields: { name: 'Lin' } },
+        ],
+      },
+    ]);
+    server = serve({ fetch: mock.app.fetch, port: 0 });
+    await new Promise((resolve) => server.once('listening', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const oauth = createFeishuOAuthClient(baseUrl);
+    const pair = await oauth.exchangeCode({
+      creds: { appId: APP_ID, appSecret: APP_SECRET },
+      code: await mock.authorizeCode(REDIRECT_URI, 'st-destr'),
+      redirectUri: REDIRECT_URI,
+    });
+    accessToken = pair.accessToken;
+    connector = new FeishuConnector(baseUrl, { exportPollMs: 0, movePollMs: 0 });
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  const ctx = { tenantId: TENANT, connectionId: CONNECTION, token: '' };
+
+  function withToken(): { tenantId: string; connectionId: string; token: string } {
+    return { ...ctx, token: accessToken };
+  }
+
+  it('delete_doc deletes a docx and returns its id', async () => {
+    const output = await connector.execute('delete_doc', { doc_id: 'd-doc' }, withToken());
+    expect(output).toEqual({ doc_id: 'd-doc' });
+
+    // Gone from the connector's world: the follow-up read is not_found.
+    await expect(
+      connector.execute('get_doc_content', { doc_id: 'd-doc' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('delete_doc detects the real type and deletes a sheet (#41 probe reused)', async () => {
+    const output = await connector.execute('delete_doc', { doc_id: 'd-sheet' }, withToken());
+    expect(output).toEqual({ doc_id: 'd-sheet' });
+  });
+
+  it('delete_doc polls a pending delete task until it completes', async () => {
+    // A fresh doc: seed through the connector itself.
+    const created = (await connector.execute(
+      'create_doc',
+      { title: 'Held Delete' },
+      withToken(),
+    )) as { doc_id: string };
+    mock.holdNextDelete();
+    const output = await connector.execute('delete_doc', { doc_id: created.doc_id }, withToken());
+    expect(output).toEqual({ doc_id: created.doc_id });
+  });
+
+  it('delete_doc maps a failed delete task to upstream_error', async () => {
+    const created = (await connector.execute(
+      'create_doc',
+      { title: 'Failed Delete' },
+      withToken(),
+    )) as { doc_id: string };
+    mock.failNextDelete();
+    await expect(
+      connector.execute('delete_doc', { doc_id: created.doc_id }, withToken()),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'delete_failed' },
+    });
+  });
+
+  it('delete_doc maps an unknown doc to not_found', async () => {
+    await expect(
+      connector.execute('delete_doc', { doc_id: 'no-such' }, withToken()),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('feishu_delete_bitable_records deletes a batch and reports the count', async () => {
+    const output = await connector.execute(
+      'feishu_delete_bitable_records',
+      { doc_id: 'd-bit', table_name: 'Leads', record_ids: ['rec_d_1', 'rec_d_2'] },
+      withToken(),
+    );
+    expect(output).toEqual({
+      doc_id: 'd-bit',
+      table_name: 'Leads',
+      deleted_count: 2,
+    });
+
+    // The remaining record is still readable.
+    const page = (await connector.execute(
+      'feishu_read_bitable_records',
+      { doc_id: 'd-bit', table_name: 'Leads' },
+      withToken(),
+    )) as { data: Array<{ record_id: string }> };
+    expect(page.data.map((r) => r.record_id)).toEqual(['rec_d_3']);
+  });
+
+  it('feishu_delete_bitable_records maps a missing record to not_found', async () => {
+    await expect(
+      connector.execute(
+        'feishu_delete_bitable_records',
+        { doc_id: 'd-bit', table_name: 'Leads', record_ids: ['rec_d_3', 'ghost'] },
+        withToken(),
+      ),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('feishu_delete_bitable_records maps an unknown table to not_found', async () => {
+    await expect(
+      connector.execute(
+        'feishu_delete_bitable_records',
+        { doc_id: 'd-bit', table_name: 'Nope', record_ids: ['rec_d_3'] },
+        withToken(),
+      ),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});

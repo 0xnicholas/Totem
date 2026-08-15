@@ -85,7 +85,12 @@ export class InMemoryAdminRepository implements AdminRepository {
   }
 
   /** Seeds an audit row with a controlled createdAt (purge tests, T11). */
-  seedAuditRow(input: { tenantId: string; actionName: string; createdAt: string }): void {
+  seedAuditRow(input: {
+    tenantId: string;
+    actionName: string;
+    createdAt: string;
+    metadata?: unknown;
+  }): void {
     this.audit.push({
       id: crypto.randomUUID(),
       tenantId: input.tenantId,
@@ -98,6 +103,7 @@ export class InMemoryAdminRepository implements AdminRepository {
       errorCode: null,
       durationMs: 0,
       createdAt: input.createdAt,
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
     });
   }
 
@@ -228,14 +234,22 @@ export class InMemoryAdminRepository implements AdminRepository {
     return this.dingtalkCreds.get(tenantId);
   }
 
-  async setAllowlist(connectionId: string, actions: string[]): Promise<void> {
+  async setAllowlist(
+    connectionId: string,
+    actions: string[],
+    acknowledge?: { allowDestructive?: boolean },
+  ): Promise<void> {
     const connection = this.requireConnection(connectionId);
     this.allowlists.set(connectionId, new Set(actions));
     this.writeAudit({
       tenantId: connection.tenantId,
       connectionId,
       actionName: ADMIN_AUDIT_ACTIONS.allowlistUpdated,
-      params: { connectionId, actions },
+      params: {
+        connectionId,
+        actions,
+        ...(acknowledge?.allowDestructive === true ? { allowDestructive: true } : {}),
+      },
     });
   }
 
@@ -269,7 +283,14 @@ export class InMemoryAdminRepository implements AdminRepository {
     );
     // Insertion order is chronological; newest first (matches the SQL's
     // ORDER BY created_at DESC, without sub-millisecond tie hazards).
-    return rows.reverse().slice(0, 1000);
+    return rows
+      .filter(
+        (row) =>
+          filters.destructive === undefined ||
+          this.isDestructiveMetadata(row.metadata) === filters.destructive,
+      )
+      .reverse()
+      .slice(0, 1000);
   }
 
   async getAuditPolicy(tenantId: string): Promise<TenantAuditPolicy> {
@@ -378,5 +399,14 @@ export class InMemoryAdminRepository implements AdminRepository {
     const connection = this.connections.get(connectionId);
     if (!connection) throw new NotFoundError(`Connection "${connectionId}" not found`);
     return connection;
+  }
+
+  /** Mirrors the SQL `metadata->>'effects' = 'destructive'` stamp filter. */
+  private isDestructiveMetadata(metadata: unknown): boolean {
+    return (
+      typeof metadata === 'object' &&
+      metadata !== null &&
+      (metadata as { effects?: unknown }).effects === 'destructive'
+    );
   }
 }

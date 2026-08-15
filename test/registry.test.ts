@@ -35,7 +35,9 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
     expect(names).toEqual([
       'append_doc_content',
       'create_doc',
+      'delete_doc',
       'export_doc',
+      'feishu_delete_bitable_records',
       'feishu_read_bitable_records',
       'feishu_update_bitable_records',
       'feishu_write_bitable_records',
@@ -133,6 +135,54 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
     expect(() =>
       makeExecutor({ connections: [{ ...CONN_1_A, connectorId: 'ghost' }] }),
     ).toThrow(/Connector "ghost" is not registered/);
+  });
+});
+
+describe('action registry (destructive family, ADR-0018)', () => {
+  it('declares delete_doc canonical and destructive — the class contract rides on effects alone', () => {
+    const deleteDoc = PLATFORM_ACTIONS.find((a) => a.name === 'delete_doc');
+    expect(deleteDoc).toBeDefined();
+    expect(deleteDoc?.effects).toBe('destructive');
+    expect(deleteDoc?.provider).toBeUndefined();
+    expect(deleteDoc?.hidden).toBeUndefined();
+  });
+
+  it('declares feishu_delete_bitable_records provider-native and destructive', () => {
+    const action = PLATFORM_ACTIONS.find((a) => a.name === 'feishu_delete_bitable_records');
+    expect(action).toBeDefined();
+    expect(action?.effects).toBe('destructive');
+    expect(action?.provider).toBe('feishu');
+  });
+
+  it('bounds the batch delete input at Feishu\'s 500-record limit', async () => {
+    const executor = makeExecutor();
+    const tooMany = Array.from({ length: 501 }, (_, i) => `rec-${i}`);
+    const result = await executor.executeAction(
+      CONN_1_A.tenantId,
+      CONN_1_A.connectionId,
+      'feishu_delete_bitable_records',
+      { doc_id: 'd', table_name: 't', record_ids: tooMany },
+      'rpc',
+    );
+    // Validation failure: the destructive class never reaches a handler with
+    // an oversized batch.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('validation_error');
+  });
+
+  it('rejects an empty record_ids batch (minItems 1)', async () => {
+    const executor = makeExecutor();
+    const result = await executor.executeAction(
+      CONN_1_A.tenantId,
+      CONN_1_A.connectionId,
+      'feishu_delete_bitable_records',
+      { doc_id: 'd', table_name: 't', record_ids: [] },
+      'rpc',
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('validation_error');
   });
 });
 

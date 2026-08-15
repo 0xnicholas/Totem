@@ -60,6 +60,8 @@ export interface AuditFilters {
   since?: string;
   source?: AuditSource;
   success?: boolean;
+  /** Only rows stamped destructive (ADR-0018 `metadata.effects`). */
+  destructive?: boolean;
 }
 
 export interface FeishuCreds {
@@ -161,10 +163,16 @@ export interface AdminRepository {
   /** Lists the tenant's connections with their auth state. @throws NotFoundError when the tenant does not exist. */
   listConnections(tenantId: string): Promise<ConnectionView[]>;
   /**
-   * Replaces the connection's allowlist. @throws NotFoundError when the
-   * connection does not exist.
+   * Replaces the connection's allowlist. The ADR-0018 acknowledge flag
+   * rides the mutation's audit params when set — the opting-in act is
+   * itself audited. @throws NotFoundError when the connection does not
+   * exist.
    */
-  setAllowlist(connectionId: string, actions: string[]): Promise<void>;
+  setAllowlist(
+    connectionId: string,
+    actions: string[],
+    acknowledge?: { allowDestructive?: boolean },
+  ): Promise<void>;
   /** Sets a connection's status to suspended (true) or active (false). */
   suspendConnection(connectionId: string, suspended: boolean): Promise<void>;
   /** Re-activates a connection (OAuth re-auth path, T6). */

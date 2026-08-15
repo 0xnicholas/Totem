@@ -32,7 +32,7 @@ export interface UpstreamHttpProfile {
 }
 
 export interface UpstreamRequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'PUT';
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   token?: string;
   query?: Record<string, string>;
   body?: unknown;

@@ -47,13 +47,20 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     // ActionRegistry.visibleActions() (pinned in registry-visibility.test.ts);
     // this fixture passes the platform set in registration order.
     expect(names).toEqual(PLATFORM_ACTIONS.map((a) => a.name));
-    expect(names).toHaveLength(16);
+    expect(names).toHaveLength(18);
     const createDoc = body.actions.find((a) => a.name === 'create_doc');
     expect(createDoc).toMatchObject({ effects: 'write' });
     expect(typeof createDoc?.description).toBe('string');
     const testConnection = body.actions.find((a) => a.name === 'test_connection');
     expect(testConnection).toMatchObject({ effects: 'read' });
     expect(typeof testConnection?.description).toBe('string');
+    // ADR-0018: the destructive class is consumer-visible metadata.
+    expect(body.actions.find((a) => a.name === 'delete_doc')).toMatchObject({
+      effects: 'destructive',
+    });
+    expect(
+      body.actions.find((a) => a.name === 'feishu_delete_bitable_records'),
+    ).toMatchObject({ effects: 'destructive', provider: 'feishu' });
   });
 
   it('GET /actions carries provider on provider-native actions and omits it on canonical ones', async () => {
@@ -162,7 +169,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
   });
 
   it('POST /actions/search carries provider metadata like the list endpoint', async () => {
-    // 'bitable' hits the three provider-native actions by name and
+    // 'bitable' hits the four provider-native actions by name and
     // get_doc_metadata (canonical) by description — one response mixing
     // both scopes.
     const native = await discover('/actions/search', {
@@ -173,6 +180,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
       actions: Array<{ name: string; provider?: string }>;
     };
     expect(nativeBody.actions.map((a) => a.name).sort()).toEqual([
+      'feishu_delete_bitable_records',
       'feishu_read_bitable_records',
       'feishu_update_bitable_records',
       'feishu_write_bitable_records',

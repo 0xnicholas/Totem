@@ -5,6 +5,10 @@ import type {
   CellValue,
   CreateDocInput,
   CreateDocOutput,
+  DeleteBitableRecordsInput,
+  DeleteBitableRecordsOutput,
+  DeleteDocInput,
+  DeleteDocOutput,
   ExportDocInput,
   ExportDocOutput,
   GetDocContentInput,
@@ -103,6 +107,7 @@ export class FakeConnector implements IConnector {
         'append_doc_content',
         'rename_doc',
         'move_doc',
+        'delete_doc',
         'export_doc',
         'get_export_artifact',
         'read_sheet_cells',
@@ -110,6 +115,7 @@ export class FakeConnector implements IConnector {
         'feishu_read_bitable_records',
         'feishu_write_bitable_records',
         'feishu_update_bitable_records',
+        'feishu_delete_bitable_records',
       ],
       ...(opts.rateLimit !== undefined ? { rateLimit: opts.rateLimit } : {}),
     };
@@ -123,6 +129,7 @@ export class FakeConnector implements IConnector {
       append_doc_content: (args: AppendDocContentInput) => this.appendDocContent(args),
       rename_doc: (args: RenameDocInput) => this.renameDoc(args),
       move_doc: (args: MoveDocInput) => this.moveDoc(args),
+      delete_doc: (args: DeleteDocInput) => this.deleteDoc(args),
       export_doc: (args: ExportDocInput) => this.exportDoc(args),
       get_export_artifact: (args: GetExportArtifactInput) => this.getExportArtifact(args),
       read_sheet_cells: (args: ReadSheetCellsInput) => this.readSheetCells(args),
@@ -130,6 +137,7 @@ export class FakeConnector implements IConnector {
       feishu_read_bitable_records: (args: ReadBitableRecordsInput) => this.readBitableRecords(args),
       feishu_write_bitable_records: (args: WriteBitableRecordsInput) => this.writeBitableRecords(args),
       feishu_update_bitable_records: (args: UpdateBitableRecordsInput) => this.updateBitableRecords(args),
+      feishu_delete_bitable_records: (args: DeleteBitableRecordsInput) => this.deleteBitableRecords(args),
     };
   }
 
@@ -220,6 +228,17 @@ export class FakeConnector implements IConnector {
     }
     doc.folder_id = args.folder_id;
     return { doc_id: doc.doc_id, folder_id: doc.folder_id };
+  }
+
+  /**
+   * The fake's destructive delete (ADR-0018): removes the doc (and its
+   * sheet/bitable payload) from the in-memory drive — gone is gone, the
+   * fake has no trash.
+   */
+  private deleteDoc(args: DeleteDocInput): DeleteDocOutput {
+    const doc = this.requireDoc(args.doc_id);
+    this.docs.delete(doc.doc_id);
+    return { doc_id: doc.doc_id };
   }
 
   private exportDoc(args: ExportDocInput): ExportDocOutput {
@@ -330,6 +349,36 @@ export class FakeConnector implements IConnector {
       table_name: args.table_name,
       record_id: record.record_id,
       fields: { ...record.fields },
+    };
+  }
+
+  /**
+   * The fake's batch delete (ADR-0018): all requested ids must exist — a
+   * missing id is not_found — and success deletes the whole batch (the
+   * real batch_delete behaves as a unit; the output count is the batch
+   * size).
+   */
+  private deleteBitableRecords(args: DeleteBitableRecordsInput): DeleteBitableRecordsOutput {
+    const doc = this.requireDoc(args.doc_id);
+    const records = this.requireTable(doc, args.table_name);
+    const doomed = args.record_ids.map((recordId) => {
+      const record = records.find((r) => r.record_id === recordId);
+      if (!record) {
+        throw new ActionError(
+          'not_found',
+          `Record "${recordId}" not found in table "${args.table_name}"`,
+        );
+      }
+      return record;
+    });
+    for (const record of doomed) {
+      const index = records.indexOf(record);
+      records.splice(index, 1);
+    }
+    return {
+      doc_id: doc.doc_id,
+      table_name: args.table_name,
+      deleted_count: doomed.length,
     };
   }
 

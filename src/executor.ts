@@ -94,8 +94,10 @@ export type ActionResult =
  *    can never burn the bucket, and before validation/dispatch, which are the
  *    expensive parts)
  * 5. validate `args` against the action's input schema
- * 6. dispatch through the connection's connector (`execute`)
- * 7. validate the handler output against the action's output schema
+ * 6. screen destructive inputs fail-closed (ADR-0018: `forbidden` on a
+ *    high-risk Defender detection — before token acquisition or dispatch)
+ * 7. dispatch through the connection's connector (`execute`)
+ * 8. validate the handler output against the action's output schema
  *
  * Every attempt on a resolvable connection writes an audit row (best
  * effort). Governance lives here per ADR-0003 — the connector only
@@ -240,6 +242,46 @@ export class ActionExecutor {
       };
     }
 
+    // Destructive input screening (ADR-0018): the irreversible class scans
+    // its args before dispatch — the return-path tripwire is too late for a
+    // deletion that already happened. Fail-closed for the class: a high-risk
+    // detection blocks regardless of `blockHighRisk` (the only place
+    // Defender blocks by default — a false positive costs one agent turn, a
+    // false negative is irreversible). `enabled` governs as everywhere
+    // else; the block metadata carries `path: 'input'` so operators can
+    // tell which side tripped.
+    if (this.defenderPolicy && action.effects === 'destructive') {
+      let inputPolicy = DEFAULT_DEFENDER_POLICY;
+      try {
+        inputPolicy = await this.defenderPolicy.getPolicy(connection.tenantId);
+      } catch (err) {
+        console.error(`defender policy lookup failed: ${errorMessage(err)}`);
+      }
+      if (inputPolicy.enabled) {
+        const scan = scanDefender(args);
+        if (scan?.riskLevel === 'high') {
+          const blockInfo = { reason: 'defender_block', path: 'input', ...scan };
+          await this.recordAudit(
+            connection,
+            actionName,
+            args,
+            source,
+            'forbidden',
+            startedAt,
+            blockInfo,
+          );
+          return {
+            ok: false,
+            error: new ActionError(
+              'forbidden',
+              'Request blocked: possible prompt injection detected in arguments',
+              { details: blockInfo },
+            ),
+          };
+        }
+      }
+    }
+
     // Token acquisition (ADR-0004): an already-valid access token is
     // fetched by the orchestration layer and placed in the context, so
     // connectors never see OAuth, refresh, or expiry. Acquisition failures
@@ -302,6 +344,12 @@ export class ActionExecutor {
     // blocking is opt-in per tenant. Metadata rides the result and the
     // audit row (the observation path). Connectors stay pure translators:
     // the scan is a boundary concern, never inside a connector.
+    // ADR-0018 tiering: the response-path BLOCK applies to read/write
+    // actions only — for destructive actions the return path is too late
+    // (the deletion already happened), and reporting `forbidden` here
+    // would misreport the outcome. Destructive responses still scan for
+    // the observation path; the class's fail-closed screen lives on the
+    // input side.
     let defender: DefenderMetadata | undefined;
     if (this.defenderPolicy) {
       let policy = DEFAULT_DEFENDER_POLICY;
@@ -312,7 +360,12 @@ export class ActionExecutor {
       }
       if (policy.enabled) {
         defender = scanDefender(output);
-        if (defender && policy.blockHighRisk && defender.riskLevel === 'high') {
+        if (
+          defender &&
+          policy.blockHighRisk &&
+          defender.riskLevel === 'high' &&
+          action.effects !== 'destructive'
+        ) {
           const blockInfo = { reason: 'defender_block', ...defender };
           await this.recordAudit(connection, actionName, args, source, 'forbidden', startedAt, blockInfo);
           return {
@@ -335,7 +388,11 @@ export class ActionExecutor {
    * Writes the audit row for an attempt on a resolved connection. Best
    * effort: a failing sink is logged and swallowed so an audit outage never
    * breaks the action layer. Tenants with an error-only policy (T11) skip
-   * success rows; failures are always recorded.
+   * success rows; failures are always recorded — except that destructive
+   * successes are exempt (ADR-0018): "which objects did agents delete" is
+   * the one question the trail must always answer. Destructive attempts
+   * (any outcome, once the registry resolved the action) are stamped with
+   * `metadata.effects = 'destructive'`, merged with any Defender metadata.
    */
   private async recordAudit(
     connection: ConnectionRecord,
@@ -346,7 +403,12 @@ export class ActionExecutor {
     startedAt: number,
     metadata?: unknown,
   ): Promise<void> {
-    if (errorCode === null && this.auditPolicy) {
+    // The registry is the effects source of truth; the lookup stamps what
+    // the platform classified at execution time (query-time derivation
+    // would drift as the catalog evolves).
+    const effects = this.registry.getAction(actionName)?.effects;
+    const destructive = effects === 'destructive';
+    if (errorCode === null && !destructive && this.auditPolicy) {
       try {
         const policy = await this.auditPolicy.getPolicy(connection.tenantId);
         if (policy.errorOnly) return;
@@ -356,6 +418,11 @@ export class ActionExecutor {
         console.error(`audit policy lookup failed: ${errorMessage(err)}`);
       }
     }
+    const stamped = !destructive
+      ? metadata
+      : isRecordLike(metadata)
+        ? { ...metadata, effects }
+        : { effects };
     try {
       await this.audit.writeAudit({
         tenantId: connection.tenantId,
@@ -368,7 +435,7 @@ export class ActionExecutor {
         errorCode,
         durationMs: Date.now() - startedAt,
         createdAt: new Date().toISOString(),
-        ...(metadata !== undefined ? { metadata } : {}),
+        ...(stamped !== undefined ? { metadata: stamped } : {}),
       });
     } catch (err) {
       console.error(`audit write failed: ${errorMessage(err)}`);
@@ -463,4 +530,9 @@ export function createActionExecutor(config: {
 
 function connectionKey(tenantId: string, connectionId: string): string {
   return `${tenantId}\u0000${connectionId}`;
+}
+
+/** Narrow unknown to a spreadable record for the effects-stamp merge. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

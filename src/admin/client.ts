@@ -76,9 +76,14 @@ export class AdminApiClient {
     });
   }
 
-  setAllowlist(connectionId: string, actions: string[]): Promise<{ ok: true }> {
+  setAllowlist(
+    connectionId: string,
+    actions: string[],
+    acknowledge?: { allowDestructive?: boolean },
+  ): Promise<{ ok: true }> {
     return this.request('PUT', `/admin/connections/${encodeURIComponent(connectionId)}/allowlist`, {
       actions,
+      ...(acknowledge?.allowDestructive === true ? { allowDestructive: true } : {}),
     });
   }
 
@@ -121,6 +126,7 @@ export class AdminApiClient {
     if (filters.since !== undefined) params.set('since', filters.since);
     if (filters.source !== undefined) params.set('source', filters.source);
     if (filters.success !== undefined) params.set('success', String(filters.success));
+    if (filters.destructive !== undefined) params.set('destructive', String(filters.destructive));
     const query = params.toString();
     return this.request(
       'GET',

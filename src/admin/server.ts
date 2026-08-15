@@ -37,6 +37,15 @@ export interface AdminAppConfig {
    * entry always wires the real cipher).
    */
   secretCipher?: { encrypt(tenantId: string, plaintext: string): string };
+  /**
+   * The registry's destructive action names (ADR-0018), injected by the
+   * composition root so the admin surface can demand an explicit
+   * `allowDestructive: true` acknowledge when an allowlist update sweeps
+   * one in. Optional — when absent the acknowledge check is skipped (the
+   * executor's allowlist gate still enforces); production wiring always
+   * provides it.
+   */
+  destructiveActions?: ReadonlySet<string>;
 }
 
 /**
@@ -148,7 +157,27 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     ) {
       return badRequest(c, 'body must include an "actions" array of strings');
     }
-    await repo.setAllowlist(c.req.param('connectionId'), body.actions);
+    if (body.allowDestructive !== undefined && typeof body.allowDestructive !== 'boolean') {
+      return badRequest(c, '"allowDestructive" must be a boolean');
+    }
+    // Destructive acknowledge gate (ADR-0018): the only place allowlists
+    // are written demands an explicit flag before a destructive name may
+    // enter a connection's allowlist — the single gate (the allowlist)
+    // gains an intent signal, not a second runtime check.
+    const destructive = config.destructiveActions;
+    if (destructive !== undefined && body.allowDestructive !== true) {
+      const offenders = body.actions.filter((action: string) => destructive.has(action));
+      if (offenders.length > 0) {
+        return badRequest(
+          c,
+          `allowlist includes destructive actions (${offenders.join(', ')}) — ` +
+            'set "allowDestructive": true to acknowledge the irreversible class (ADR-0018)',
+        );
+      }
+    }
+    await repo.setAllowlist(c.req.param('connectionId'), body.actions, {
+      allowDestructive: body.allowDestructive === true,
+    });
     return c.json({ ok: true });
   });
 
@@ -177,6 +206,12 @@ export function createAdminApp(config: AdminAppConfig): Hono {
         return badRequest(c, '"success" must be true or false');
       }
       filters.success = query.success === 'true';
+    }
+    if (query.destructive !== undefined && query.destructive !== '') {
+      if (query.destructive !== 'true' && query.destructive !== 'false') {
+        return badRequest(c, '"destructive" must be true or false');
+      }
+      filters.destructive = query.destructive === 'true';
     }
     const rows = await repo.queryAudit(c.req.param('tenantId'), filters);
     return c.json({ rows });

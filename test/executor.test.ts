@@ -244,7 +244,9 @@ describe('listAllowedTools (the tool-list question at Seam A)', () => {
     expect(all.map((a) => a.name)).toEqual([
       'append_doc_content',
       'create_doc',
+      'delete_doc',
       'export_doc',
+      'feishu_delete_bitable_records',
       'feishu_read_bitable_records',
       'feishu_update_bitable_records',
       'feishu_write_bitable_records',

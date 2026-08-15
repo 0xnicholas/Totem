@@ -41,8 +41,12 @@ const SIGNATURES: Signature[] = [
   { name: 'repeat-after-me', pattern: /repeat (after me|the following (instructions|text|prompt))/i },
 ];
 
-/** Size guard (ADR-0009): responses above this are skipped, not claimed. */
-export const DEFENDER_MAX_RESPONSE_BYTES = 1_048_576;
+/**
+ * Size guard (ADR-0009, ADR-0018): values above this are skipped, not
+ * claimed — one guard for both sides of the boundary (tool responses and
+ * destructive input args).
+ */
+export const DEFENDER_MAX_SCAN_BYTES = 1_048_576;
 
 /**
  * Scans a unified action output for injection signatures. Returns undefined
@@ -60,7 +64,7 @@ export function scanDefender(output: unknown): DefenderMetadata | undefined {
   } catch {
     return undefined;
   }
-  if (serialized.length > DEFENDER_MAX_RESPONSE_BYTES) return undefined;
+  if (serialized.length > DEFENDER_MAX_SCAN_BYTES) return undefined;
   const detections = SIGNATURES.filter((s) => s.pattern.test(serialized)).map((s) => s.name);
   if (detections.length === 0) return { tier: 'pattern', riskLevel: 'low' };
   return { tier: 'pattern', riskLevel: 'high', detections };
