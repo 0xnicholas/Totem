@@ -664,13 +664,20 @@ const deleteBitableRecordsOutputSchema: JSONSchemaType<DeleteBitableRecordsOutpu
  * Exactly-one-of addressing for `send_message` (ADR-0016): the email /
  * chat_id union is a JSON Schema `oneOf` with negation, which
  * `JSONSchemaType` cannot infer — same escape hatch as `cellValueSchema`.
+ *
+ * The oneOf keys on property PRESENCE, so the property schemas must not
+ * be nullable (#56): `{email: null}` would otherwise validate (the
+ * property is present), reach the connector as a null recipient, and
+ * surface as an opaque upstream failure instead of validation_error.
+ * Null is absent-with-no-fallback here — unlike repo-wide optional
+ * strings, neither branch may fall back when the value is null.
  */
 const sendMessageInputSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    email: { type: 'string', nullable: true, minLength: 1 },
-    chat_id: { type: 'string', nullable: true, minLength: 1 },
+    email: { type: 'string', minLength: 1 },
+    chat_id: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
   },
   required: ['content'],

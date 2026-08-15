@@ -338,7 +338,9 @@ ADR-0010);目录无版本号,pin 机制 v2。
 企微为后续批次(未实现的 provider = 覆盖缺口,§11.1)。钉钉的 `email`
 入参是 §11.4 input 规则的首个生效案例:平台无 email→userid 查询 API,
 故 connector 以 `validation` 错误**响亮拒绝**(不会静默忽略),接入方应改用
-`chat_id`。
+`chat_id`。显式 `null` 寻址(如 `{email: null}`)同样在边界被
+`validation` 拒绝(#56 错误语义修复:此前飞书路径会以 opaque
+`upstream_error` 失败)。
 
 ---
 

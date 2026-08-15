@@ -325,6 +325,26 @@ describe('FeishuConnector through the executor (Seam A + B)', () => {
     expect(neither).toMatchObject({ ok: false, error: { code: 'validation_error' } });
   });
 
+  it('rejects send_message with an explicit null recipient at the boundary, not as an upstream failure (#56)', async () => {
+    // The exactly-one-of oneOf keys on property PRESENCE, so {email: null}
+    // used to validate and surface as an opaque upstream error — the
+    // schema now rejects null addressing as validation_error for every
+    // connector (rationale in sendMessageInputSchema's comment).
+    const { executor } = makeExecutor(['send_message']);
+
+    const nullEmail = await executor.executeAction(TENANT, CONNECTION, 'send_message', {
+      email: null,
+      content: 'x',
+    });
+    expect(nullEmail).toMatchObject({ ok: false, error: { code: 'validation_error', retryable: false } });
+
+    const nullChat = await executor.executeAction(TENANT, CONNECTION, 'send_message', {
+      chat_id: null,
+      content: 'x',
+    });
+    expect(nullChat).toMatchObject({ ok: false, error: { code: 'validation_error', retryable: false } });
+  });
+
   it('surfaces connector-mapped errors through executeAction', async () => {
     const { executor } = makeExecutor(['get_doc_content']);
     const missing = await executor.executeAction(TENANT, CONNECTION, 'get_doc_content', {
