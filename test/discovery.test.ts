@@ -270,6 +270,8 @@ describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postg
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { actions: unknown[] };
-    expect(body.actions).toHaveLength(13);
+    // PLATFORM_ACTIONS is the full registry fixture: 16 docs actions
+    // (12 canonical + 4 feishu-native) + send_message + test_connection.
+    expect(body.actions).toHaveLength(18);
   });
 });

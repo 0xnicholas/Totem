@@ -2,6 +2,13 @@
 export interface DingTalkAppCredentials {
   appKey: string;
   appSecret: string;
+  /**
+   * The app robot's robotCode (console value) — required by the robot
+   * messaging APIs (`groupMessages/send`, #49). Optional: tenants that
+   * never sync it simply cannot use send_message (the connector fails
+   * loudly with an actionable error, never silently).
+   */
+  robotCode?: string;
 }
 
 /**

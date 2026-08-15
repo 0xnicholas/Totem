@@ -21,6 +21,8 @@ import type {
   RenameDocOutput,
   SearchDocsInput,
   SearchDocsOutput,
+  SendMessageInput,
+  SendMessageOutput,
   TestConnectionOutput,
   WriteSheetCellsInput,
   WriteSheetCellsOutput,
@@ -115,6 +117,24 @@ export function mapDingtalkError(err: DingTalkApiError): ActionError {
  * surfaces that upstream failure to the agent instead of hiding the
  * capability. The exportType mapping below remains an unconfirmed
  * assumption (patterned on the published `dingTalksheetToxlsx` example).
+ *
+ * Messaging surface (#49, second ADR-0016 batch — chat path only):
+ * `POST /v1.0/robot/groupMessages/send` with `{msgKey: "sampleText",
+ * msgParam: <JSON string>, openConversationId, robotCode}` under the APP
+ * token — no operatorId: the app robot IS the actor (no per-user sending
+ * API exists; the canonical description says "identity of this
+ * connection", ADR-0016 amendment). The robotCode is the app robot's
+ * console value, resolved per tenant from the credentials synced via the
+ * admin API. `email` addressing fails `validation_error` BEFORE any
+ * upstream call: DingTalk exposes no email→userid lookup API, so the
+ * canonical input cannot be honored here — the ADR-0014 §4 input rule
+ * (consumption standard §11.4; a provider that cannot honor a canonical
+ * optional input fails loudly, never silently). chat_id = openConversationId
+ * of a group the app created
+ * or learned via message events, with the robot as a member — the same
+ * app-created universe as WeCom. The exact group-not-found /
+ * robot-not-in-group upstream codes are provisional until the live pass
+ * pins them; mapDingTalkError owns the mapping either way.
  */
 export class DingTalkConnector implements IConnector {
   readonly manifest = {
@@ -133,6 +153,9 @@ export class DingTalkConnector implements IConnector {
       'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
+      // Chat path only (#49): the messaging send joins the manifest — the
+      // robot group-send API, no per-user addressing on this provider.
+      'send_message',
     ],
     // Conservative comfort level (120/min = 2 QPS average) until the live
     // pass measures DingTalk's real per-API limits; the boundary throttles
@@ -145,6 +168,13 @@ export class DingTalkConnector implements IConnector {
   private readonly exportMaxAttempts: number;
   private readonly request: UpstreamHttp;
   private readonly getAppAccessToken: ((tenantId: string) => Promise<string>) | undefined;
+  /**
+   * The app robot's console robotCode per tenant (#49) — resolved by the
+   * composition root from the credentials synced via the admin API. A
+   * tenant without one simply cannot send messages (the handler fails
+   * loudly with an actionable error).
+   */
+  private readonly getRobotCode: ((tenantId: string) => Promise<string | undefined>) | undefined;
   /**
    * DingTalk's doc APIs require the acting user's `unionId` as
    * `operatorId`. The unionId is stable per connection and resolvable from
@@ -163,11 +193,13 @@ export class DingTalkConnector implements IConnector {
     private readonly apiBaseUrl: string,
     options: {
       getAppAccessToken?: (tenantId: string) => Promise<string>;
+      getRobotCode?: (tenantId: string) => Promise<string | undefined>;
       exportPollMs?: number;
       exportMaxAttempts?: number;
     } = {},
   ) {
     this.getAppAccessToken = options.getAppAccessToken;
+    this.getRobotCode = options.getRobotCode;
     this.exportPollMs = options.exportPollMs ?? 2000;
     this.exportMaxAttempts = options.exportMaxAttempts ?? 60;
 
@@ -548,6 +580,43 @@ export class DingTalkConnector implements IConnector {
         };
         return output;
       },
+
+      send_message: async (args: SendMessageInput, ctx) => {
+        const input = args;
+        // ADR-0014 §4 input rule (first live case; consumption standard
+        // §11.4): DingTalk exposes no email→userid lookup API, so the
+        // canonical email input cannot be honored — fail validation loudly
+        // BEFORE any upstream call, never silently ignore the parameter.
+        if (input.email !== undefined) {
+          throw new ActionError(
+            'validation_error',
+            'send_message on DingTalk cannot address a user by email: the platform has no email→userid lookup API. ' +
+              'Address a chat by chat_id instead (a group the app created, with the robot as a member).',
+          );
+        }
+        const robotCode = await this.resolveRobotCode(ctx.tenantId);
+        const response = await this.robotRequest<GroupMessageSendResponse>(
+          '/v1.0/robot/groupMessages/send',
+          {
+            method: 'POST',
+            body: {
+              msgParam: JSON.stringify({ content: input.content }),
+              msgKey: 'sampleText',
+              openConversationId: input.chat_id,
+              robotCode,
+            },
+          },
+          ctx,
+        );
+        if (!response.messageId) {
+          throw new ActionError(
+            'upstream_error',
+            'DingTalk send-message response omitted messageId',
+          );
+        }
+        const output: SendMessageOutput = { message_id: response.messageId };
+        return output;
+      },
     };
   }
 
@@ -593,14 +662,58 @@ export class DingTalkConnector implements IConnector {
     } catch (err) {
       if (err instanceof ActionError && err.code === 'auth_expired') {
         this.unionIds.delete(ctx.connectionId);
-        throw new ActionError(
-          'upstream_error',
-          `DingTalk rejected the app token (operator-config issue, not the connection grant): ${err.message}`,
-          { upstream: err.upstream },
-        );
+        throw reclassifiedAppTokenRejection(err);
       }
       throw err;
     }
+  }
+
+  /**
+   * One APP-token call with NO acting user (#49): the robot messaging
+   * APIs speak for the app itself, so there is no operatorId and no
+   * unionId context. App-token rejection is reclassified exactly like
+   * docRequest's (operator-config problem, not the connection grant).
+   */
+  private async robotRequest<T>(
+    path: string,
+    opts: { method?: 'POST'; body?: unknown },
+    ctx: ActionContext,
+  ): Promise<T> {
+    const appToken = await this.appToken(ctx.tenantId);
+    try {
+      return await this.request<T>(path, { method: opts.method, token: appToken, body: opts.body });
+    } catch (err) {
+      if (err instanceof ActionError && err.code === 'auth_expired') {
+        throw reclassifiedAppTokenRejection(err);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * The app robot's console robotCode (#49): resolved per tenant by the
+   * composition root from the synced credentials. A tenant without one
+   * cannot use send_message — fail loudly with the operator action, not a
+   * silent skip (an operator-config gap, so upstream_error like the
+   * missing app-token provider, not a validation problem of the args).
+   */
+  private async resolveRobotCode(tenantId: string): Promise<string> {
+    if (!this.getRobotCode) {
+      throw new ActionError(
+        'upstream_error',
+        'DingTalk connector has no robotCode provider configured (composition root)',
+      );
+    }
+    const robotCode = await this.getRobotCode(tenantId);
+    if (robotCode === undefined || robotCode === '') {
+      throw new ActionError(
+        'upstream_error',
+        `Tenant "${tenantId}" has no DingTalk robotCode synced — ` +
+          'send_message needs the app robot\u2019s code; sync it via the admin API ' +
+          '(POST /admin/tenants/<tenantId>/dingtalk-creds with robotCode)',
+      );
+    }
+    return robotCode;
   }
 
   /** The app-level token, resolved by the composition-root provider. */
@@ -729,6 +842,26 @@ export class DingTalkConnector implements IConnector {
     }
     return Promise.resolve(handler(args, ctx));
   }
+}
+
+/** The robot group-send response (official-docs shape; messageId is the platform's message_id). */
+interface GroupMessageSendResponse {
+  processQueryKey?: string;
+  messageId?: string;
+}
+
+/**
+ * A rejected APP token is an operator-config problem (rotated secret,
+ * revoked app), NOT a dead user grant: the reclassification keeps the
+ * agent from re-authorizing the connection for an app-level issue. One
+ * policy shared by every app-token call (doc family, #49 robot send).
+ */
+function reclassifiedAppTokenRejection(err: ActionError): ActionError {
+  return new ActionError(
+    'upstream_error',
+    `DingTalk rejected the app token (operator-config issue, not the connection grant): ${err.message}`,
+    { upstream: err.upstream },
+  );
 }
 
 /** A dentry in a doc_2.0 create/rename/move response (live-confirmed shape). */

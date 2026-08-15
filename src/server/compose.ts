@@ -100,6 +100,9 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     new FeishuConnector(feishuBaseUrl),
     new DingTalkConnector(dingtalkApiBaseUrl, {
       getAppAccessToken: (tenantId) => dingtalkTokenManager.getValidAppAccessToken(tenantId),
+      // #49: the app robot's console robotCode, synced via the admin API
+      // and decrypted on read (ciphertext at rest like the app secret).
+      getRobotCode: async (tenantId) => (await dingtalkCredsStore.get(tenantId))?.robotCode,
     }),
   ];
   const allowlists = new PostgresAllowlistStore(pool);

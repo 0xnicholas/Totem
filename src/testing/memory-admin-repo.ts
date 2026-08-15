@@ -221,7 +221,15 @@ export class InMemoryAdminRepository implements AdminRepository {
 
   async setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void> {
     this.requireTenant(tenantId);
-    this.dingtalkCreds.set(tenantId, creds);
+    // Merge semantics mirror Postgres (#49): an absent robotCode keeps the
+    // stored value, a present one replaces it.
+    const previous = this.dingtalkCreds.get(tenantId);
+    const robotCode = creds.robotCode ?? previous?.robotCode;
+    this.dingtalkCreds.set(tenantId, {
+      appKey: creds.appKey,
+      appSecret: creds.appSecret,
+      ...(robotCode !== undefined ? { robotCode } : {}),
+    });
     // The secret stays out of the audit trail (param_hash covers appKey only).
     this.writeAudit({
       tenantId,

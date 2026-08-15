@@ -69,10 +69,16 @@ export class AdminApiClient {
     });
   }
 
-  setDingTalkCreds(tenantId: string, appKey: string, appSecret: string): Promise<{ ok: true }> {
+  setDingTalkCreds(
+    tenantId: string,
+    appKey: string,
+    appSecret: string,
+    robotCode?: string,
+  ): Promise<{ ok: true }> {
     return this.request('POST', `/admin/tenants/${encodeURIComponent(tenantId)}/dingtalk-creds`, {
       appKey,
       appSecret,
+      ...(robotCode !== undefined ? { robotCode } : {}),
     });
   }
 

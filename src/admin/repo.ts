@@ -73,6 +73,12 @@ export interface FeishuCreds {
 export interface DingTalkCreds {
   appKey: string;
   appSecret: string;
+  /**
+   * The app robot's robotCode, ciphertext at rest (#49). Optional with
+   * merge semantics: absent leaves the stored value untouched, present
+   * replaces it (a separate console value from appKey/appSecret).
+   */
+  robotCode?: string;
 }
 
 /**

@@ -112,6 +112,50 @@ describe('admin API (HTTP boundary)', () => {
     expect(repo.getDingTalkCreds(tenant.id)).toEqual({ appKey: 'cli_app_key', appSecret: 's3cret' });
   });
 
+  it('stores dingtalk credentials with a robotCode (#49)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-dt-robot');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'cli_app_key', appSecret: 's3cret', robotCode: 'robot-1' }),
+    });
+    expect(response.status).toBe(200);
+    expect(repo.getDingTalkCreds(tenant.id)).toEqual({
+      appKey: 'cli_app_key',
+      appSecret: 's3cret',
+      robotCode: 'robot-1',
+    });
+  });
+
+  it('keeps the synced robotCode when dingtalk creds are re-registered without one (#49)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-dt-robot-keep');
+    await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'k1', appSecret: 's1', robotCode: 'robot-1' }),
+    });
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'k2', appSecret: 's2' }),
+    });
+    expect(response.status).toBe(200);
+    // Merge semantics: appKey/appSecret replace (the endpoint's existing
+    // contract), robotCode is a separate console value that survives a
+    // credential rotation.
+    expect(repo.getDingTalkCreds(tenant.id)).toEqual({
+      appKey: 'k2',
+      appSecret: 's2',
+      robotCode: 'robot-1',
+    });
+  });
+
+  it('400s on a dingtalk robotCode that is not a non-empty string (#49)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-dt-robot-bad');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'k', appSecret: 's', robotCode: 42 }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   it('400s on dingtalk creds with a missing field (T17a)', async () => {
     const tenant = await repo.createTenant('creds-tenant-dt2');
     const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
@@ -570,5 +614,14 @@ describe('admin API: OAuth flow and connections (T6)', () => {
     });
     const stored = repo.getDingTalkCreds(tenantId);
     expect(stored?.appSecret).toBe(`v1:${tenantId}:super-secret`);
+  });
+
+  it('encrypts the dingtalk robotCode via the injected cipher (#49)', async () => {
+    await adminFetch(`/admin/tenants/${tenantId}/dingtalk-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ appKey: 'app-1', appSecret: 'super-secret', robotCode: 'robot-code-1' }),
+    });
+    const stored = repo.getDingTalkCreds(tenantId);
+    expect(stored?.robotCode).toBe(`v1:${tenantId}:robot-code-1`);
   });
 });

@@ -202,12 +202,17 @@ export class PostgresAdminRepository implements AdminRepository {
   async setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void> {
     await this.mutate(async (client) => {
       await this.requireTenant(client, tenantId);
+      // robotCode merges (#49): absent keeps the stored value (appKey /
+      // appSecret replace, the endpoint's existing contract), so a
+      // credential rotation never silently drops the synced robot code.
       await client.query(
-        `INSERT INTO dingtalk_credentials (tenant_id, app_key, app_secret)
-         VALUES ($1, $2, $3)
+        `INSERT INTO dingtalk_credentials (tenant_id, app_key, app_secret, robot_code)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (tenant_id) DO UPDATE
-           SET app_key = $2, app_secret = $3, updated_at = now()`,
-        [tenantId, creds.appKey, creds.appSecret],
+           SET app_key = $2, app_secret = $3,
+               robot_code = COALESCE($4, dingtalk_credentials.robot_code),
+               updated_at = now()`,
+        [tenantId, creds.appKey, creds.appSecret, creds.robotCode ?? null],
       );
       // The secret stays out of the audit trail (param_hash covers appKey only).
       await this.writeAudit(client, {

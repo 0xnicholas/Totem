@@ -34,6 +34,12 @@ export interface MockDingTalkServerOptions {
   accessTokenTtlMs?: number;
   /** Refresh token lifetime issued to clients, in ms. */
   refreshTokenTtlMs?: number;
+  /**
+   * The app robot's console robotCode (#49). When set, the robot
+   * send API only accepts matching robotCodes; unset means no robot is
+   * configured for this app (every robotCode is rejected).
+   */
+  robotCode?: string;
 }
 
 /** A seeded online document in the mock's DingTalk knowledge base (T17b). */
@@ -81,6 +87,26 @@ export interface MockDingTalkWorkbook {
   ownerUnionId: string;
   /** The worksheets in display order — the first one is the default target. */
   sheets: MockDingTalkSheet[];
+}
+
+/**
+ * A seeded group chat the app robot can message (#49). The chat universe
+ * mirrors the constraint from the spec: only groups the app created or
+ * learned via message events exist, and the robot must be a member.
+ */
+export interface MockDingTalkChat {
+  /** The openConversationId — the platform's opaque chat_id. */
+  openConversationId: string;
+  /** Whether the app robot is a member (it must be, to send). Defaults to true. */
+  robotInGroup?: boolean;
+}
+
+/** A robot-sent group message the mock recorded (#49). */
+export interface RecordedGroupMessage {
+  openConversationId: string;
+  robotCode: string;
+  msgKey: string;
+  content: string;
 }
 
 /**
@@ -140,6 +166,8 @@ export class MockDingTalkServer {
   exchangeRequestCount = 0;
   /** Number of app-token (client credentials) calls received. */
   appTokenRequestCount = 0;
+  /** Robot-sent group messages, in send order (#49) — pins the connector's request shape. */
+  sentGroupMessages: RecordedGroupMessage[] = [];
 
   private readonly accessTokenTtlMs: number;
   private readonly refreshTokenTtlMs: number;
@@ -153,6 +181,7 @@ export class MockDingTalkServer {
   private readonly docs: MockDingTalkDoc[] = [];
   private readonly folders: MockDingTalkFolder[] = [];
   private readonly workbooks: MockDingTalkWorkbook[] = [];
+  private readonly chats: MockDingTalkChat[] = [];
   private readonly exportJobs = new Map<
     string,
     { status: string } & DownloadedFile
@@ -719,6 +748,66 @@ export class MockDingTalkServer {
         status: 'success',
       });
     });
+
+    // POST /v1.0/robot/groupMessages/send — the robot group-send surface
+    // (#49, official-docs shape; error codes PROVISIONAL until the live
+    // pass pins them): app-token auth (no operatorId — the robot IS the
+    // actor), body {msgKey, msgParam (a JSON string), openConversationId,
+    // robotCode} → {processQueryKey, messageId}. The mock records each
+    // accepted message so tests pin the connector's request shape.
+    this.app.post('/v1.0/robot/groupMessages/send', async (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      if (!this.isAppAuthorized(c.req.header('x-acs-dingtalk-access-token'))) {
+        return c.json(INVALID_AUTH, 401);
+      }
+      const body = await readJson(c);
+      const openConversationId =
+        isRecord(body) && typeof body.openConversationId === 'string'
+          ? body.openConversationId
+          : undefined;
+      const robotCode =
+        isRecord(body) && typeof body.robotCode === 'string' ? body.robotCode : undefined;
+      const msgKey = isRecord(body) && typeof body.msgKey === 'string' ? body.msgKey : undefined;
+      const msgParam =
+        isRecord(body) && typeof body.msgParam === 'string' ? body.msgParam : undefined;
+      if (!openConversationId || !robotCode || !msgKey || msgParam === undefined) {
+        return c.json(
+          { code: 'invalidRequestParam', message: 'openConversationId, robotCode, msgKey and msgParam are required' },
+          400,
+        );
+      }
+      const chat = this.chats.find((candidate) => candidate.openConversationId === openConversationId);
+      if (!chat) {
+        return c.json({ code: 'invalidConversationId', message: 'conversation not exists' }, 404);
+      }
+      // The robotCode must be the configured app robot's own code.
+      if (this.options.robotCode === undefined || robotCode !== this.options.robotCode) {
+        return c.json({ code: 'invalidRobotCode', message: 'the robot does not belong to this app' }, 403);
+      }
+      if (chat.robotInGroup === false) {
+        return c.json(
+          { code: 'Forbidden.RobotNotInGroup', message: 'robot is not in the group' },
+          403,
+        );
+      }
+      let content = '';
+      try {
+        const parsed: unknown = JSON.parse(msgParam);
+        if (isRecord(parsed) && typeof parsed.content === 'string') content = parsed.content;
+      } catch {
+        // fall through: an unparsable msgParam is a param error
+      }
+      if (msgKey !== 'sampleText' || content === '') {
+        return c.json(
+          { code: 'invalidRequestParam', message: 'sampleText requires a msgParam {content}' },
+          400,
+        );
+      }
+      const messageId = `mid_${randomUUID()}`;
+      this.sentGroupMessages.push({ openConversationId, robotCode, msgKey, content });
+      return c.json({ processQueryKey: messageId, messageId });
+    });
   }
 
   /** True when the presented token is a USER token this mock issued. */
@@ -903,6 +992,11 @@ export class MockDingTalkServer {
   /** Seeds workbooks (T18a): the sheet surface's knowledge base. */
   seedWorkbooks(workbooks: MockDingTalkWorkbook[]): void {
     this.workbooks.push(...workbooks);
+  }
+
+  /** Seeds group chats (#49): the robot send surface's knowledge base. */
+  seedChats(chats: MockDingTalkChat[]): void {
+    this.chats.push(...chats);
   }
 
   /** Finds a seeded workbook by its dentryUuid (the opaque doc_id). */

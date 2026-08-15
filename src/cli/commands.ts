@@ -110,11 +110,11 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
       }
 
       case 'set-dingtalk-creds': {
-        const [tenantId, appKey, appSecret] = rest;
+        const [tenantId, appKey, appSecret, robotCode] = rest;
         if (!tenantId || !appKey || !appSecret) {
-          throw new UsageError('set-dingtalk-creds <tenant-id> <app-key> <app-secret>');
+          throw new UsageError('set-dingtalk-creds <tenant-id> <app-key> <app-secret> [robot-code]');
         }
-        await io.client.setDingTalkCreds(tenantId, appKey, appSecret);
+        await io.client.setDingTalkCreds(tenantId, appKey, appSecret, robotCode);
         io.stdout(`DingTalk credentials updated for tenant ${tenantId}`);
         return 0;
       }

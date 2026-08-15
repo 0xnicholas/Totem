@@ -271,21 +271,23 @@ describe.runIf(hasDb)('OAuth flow end to end (Postgres)', () => {
     });
     await mcpClient.connect(transport);
     try {
-      // The real Feishu connector exposes its full v1 action set.
+      // The real Feishu connector exposes its full v1 action set (the
+      // visible-action projection is name-sorted, and the allowlist above
+      // is exactly these twelve).
       const { tools } = await mcpClient.listTools();
       expect(tools.map((t) => t.name)).toEqual([
-        'create_doc',
-        'search_docs',
-        'get_doc_content',
-        'get_doc_metadata',
         'append_doc_content',
-        'rename_doc',
-        'move_doc',
+        'create_doc',
         'export_doc',
-        'read_sheet_cells',
-        'write_sheet_cells',
         'feishu_read_bitable_records',
         'feishu_write_bitable_records',
+        'get_doc_content',
+        'get_doc_metadata',
+        'move_doc',
+        'read_sheet_cells',
+        'rename_doc',
+        'search_docs',
+        'write_sheet_cells',
       ]);
 
       // The call only succeeds if the TokenManager retrieved a valid token

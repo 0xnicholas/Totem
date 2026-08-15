@@ -136,14 +136,23 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     ) {
       return badRequest(c, 'body must include non-empty "appKey" and "appSecret"');
     }
+    // The robot's console code (#49): optional (absent keeps the stored
+    // value), but present means a non-empty string.
+    if (body.robotCode !== undefined && (typeof body.robotCode !== 'string' || body.robotCode === '')) {
+      return badRequest(c, '"robotCode" must be a non-empty string when present');
+    }
     // Encrypt at rest with the per-tenant key when the cipher is wired
     // (ADR-0004); the plaintext never reaches the repository.
-    const storedSecret = config.secretCipher
-      ? config.secretCipher.encrypt(c.req.param('tenantId'), body.appSecret)
-      : body.appSecret;
+    const cipher = config.secretCipher;
+    const storedSecret = cipher ? cipher.encrypt(c.req.param('tenantId'), body.appSecret) : body.appSecret;
+    const storedRobotCode =
+      typeof body.robotCode === 'string' && cipher
+        ? cipher.encrypt(c.req.param('tenantId'), body.robotCode)
+        : body.robotCode;
     await repo.setDingTalkCreds(c.req.param('tenantId'), {
       appKey: body.appKey,
       appSecret: storedSecret,
+      ...(storedRobotCode !== undefined ? { robotCode: storedRobotCode } : {}),
     });
     return c.json({ ok: true });
   });

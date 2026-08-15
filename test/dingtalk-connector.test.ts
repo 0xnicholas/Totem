@@ -14,6 +14,7 @@ import { MockDingTalkServer } from '../src/testing/mock-dingtalk-server.js';
 
 const APP_KEY = 'conn_app_key';
 const APP_SECRET = 'conn_app_secret';
+const ROBOT_CODE = 'conn_robot_code';
 const REDIRECT_URI = 'https://totem.example.com/oauth/callback/dingtalk';
 const TENANT = 'tenant-conn';
 const CONNECTION = 'conn-dingtalk';
@@ -35,7 +36,7 @@ describe('DingTalkConnector (Seam B)', () => {
   let appToken: string;
 
   beforeAll(async () => {
-    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET, robotCode: ROBOT_CODE });
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -46,6 +47,9 @@ describe('DingTalkConnector (Seam B)', () => {
       // The app token the doc APIs authenticate with (T17 live pass); the
       // test resolves it from the mock's client-credentials endpoint.
       getAppAccessToken: () => Promise.resolve(appToken),
+      // #49: the app robot's console code, as the composition root would
+      // resolve it from the tenant's synced credentials.
+      getRobotCode: () => Promise.resolve(ROBOT_CODE),
     });
 
     // A real user token from the mock's token endpoint, as the token
@@ -91,6 +95,12 @@ describe('DingTalkConnector (Seam B)', () => {
     mock.seedFolders([
       { folderId: 'folder-1', dentryId: 'dentry-folder-1', name: 'Projects', spaceId: 'space-1' },
       { folderId: 'folder-other', dentryId: 'dentry-folder-other', name: 'Other Space', spaceId: 'space-2' },
+    ]);
+    // #49 messaging fixtures: the app-created group universe the robot
+    // can address, plus a group the robot has not joined.
+    mock.seedChats([
+      { openConversationId: 'chat-1' },
+      { openConversationId: 'chat-orphan', robotInGroup: false },
     ]);
     // T18a sheet fixtures. wb-1 is the shared read fixture (never
     // mutated); the wb-w* workbooks are dedicated write fixtures so
@@ -144,7 +154,7 @@ describe('DingTalkConnector (Seam B)', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets + #43 export flip)', () => {
+  it('declares the full implemented manifest (T17b reads + T17c writes + T18a sheets + #43 export flip + #49 messaging)', () => {
     expect(connector.manifest.id).toBe('dingtalk_docs');
     expect(connector.manifest.provider).toBe('dingtalk');
     expect(connector.manifest.implements).toEqual([
@@ -160,6 +170,7 @@ describe('DingTalkConnector (Seam B)', () => {
       'get_export_artifact',
       'read_sheet_cells',
       'write_sheet_cells',
+      'send_message',
     ]);
     expect(connector.manifest.rateLimit).toEqual({ requestsPerMinute: 120 });
   });
@@ -191,6 +202,133 @@ describe('DingTalkConnector (Seam B)', () => {
     await expect(
       dead.execute('test_connection', {}, { tenantId: TENANT, connectionId: CONNECTION, token: 'x' }),
     ).rejects.toMatchObject({ code: 'upstream_error' });
+  });
+
+  // #49 messaging batch (ADR-0016, second implementation): the chat path
+  // only — the app robot sends to a group conversation; there is no
+  // per-user sending API on DingTalk.
+  it('send_message sends to a chat as the app robot and returns the message id (#49)', async () => {
+    const output = (await connector.execute(
+      'send_message',
+      { chat_id: 'chat-1', content: 'deploy done' },
+      { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^mid_/);
+    // The request shape the canonical mapping pins: sampleText + JSON
+    // msgParam, openConversationId = chat_id, robotCode = console value,
+    // app-token auth (no operatorId — the robot is the actor).
+    expect(mock.sentGroupMessages).toEqual([
+      {
+        openConversationId: 'chat-1',
+        robotCode: ROBOT_CODE,
+        msgKey: 'sampleText',
+        content: 'deploy done',
+      },
+    ]);
+  });
+
+  it('send_message rejects email addressing with validation_error before any upstream call (#49, ADR-0014 §4)', async () => {
+    // DingTalk has no email→userid lookup API — a canonical input this
+    // provider cannot honor fails loudly, never silently (the first live
+    // case of the input coverage-gap rule).
+    const sentBefore = mock.sentGroupMessages.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        { email: 'a@b.c', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+      message: /email/,
+    });
+    // Nothing left the platform: no message was sent upstream.
+    expect(mock.sentGroupMessages).toHaveLength(sentBefore);
+  });
+
+  it('send_message maps an unknown chat to not_found', async () => {
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-none', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'not_found', retryable: false });
+  });
+
+  it('send_message maps a robot-not-in-group rejection to upstream_error with the code preserved', async () => {
+    // The exact upstream codes are provisional until the live pass pins
+    // them; the mapping contract (mapDingTalkError) is what is pinned here.
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-orphan', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      upstream: { code: 'Forbidden.RobotNotInGroup' },
+    });
+  });
+
+  it('send_message maps a rate limit to rate_limited (retryable)', async () => {
+    mock.failNext({ code: 'TooManyRequests', message: 'slow down', httpStatus: 429 });
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'rate_limited', retryable: true });
+  });
+
+  it('send_message fails loudly when no robotCode is synced for the tenant (#49)', async () => {
+    const bare = new DingTalkConnector(baseUrl, {
+      getAppAccessToken: () => Promise.resolve(appToken),
+    });
+    await expect(
+      bare.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      message: /robotCode/,
+    });
+
+    const unset = new DingTalkConnector(baseUrl, {
+      getAppAccessToken: () => Promise.resolve(appToken),
+      getRobotCode: () => Promise.resolve(undefined),
+    });
+    const sentBefore = mock.sentGroupMessages.length;
+    await expect(
+      unset.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({ code: 'upstream_error' });
+    expect(mock.sentGroupMessages).toHaveLength(sentBefore);
+  });
+
+  it('send_message reclassifies an app-token rejection as an operator-config problem, not the connection grant', async () => {
+    const stale = new DingTalkConnector(baseUrl, {
+      getAppAccessToken: () => Promise.resolve('stale-app-token'),
+      getRobotCode: () => Promise.resolve(ROBOT_CODE),
+    });
+    await expect(
+      stale.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: 'x' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      message: /app token/,
+    });
   });
 
   it('search_docs matches titles case-insensitively and returns the List Envelope', async () => {
@@ -942,7 +1080,7 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
   let appToken: string;
 
   beforeAll(async () => {
-    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET, robotCode: ROBOT_CODE });
     server = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => server.once('listening', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -969,6 +1107,8 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
         updatedTime: Date.parse('2026-02-15T08:00:00Z'),
       },
     ]);
+    // #49: the chat the Seam A send_message test addresses.
+    mock.seedChats([{ openConversationId: 'chat-1' }]);
   });
 
   afterAll(async () => {
@@ -985,7 +1125,12 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
     const audit = new InMemoryAuditSink();
     const executor = createActionExecutor({
       actions: [...DOCS_ACTIONS, ...MESSAGING_ACTIONS, ...CONNECTION_ACTIONS],
-      connectors: [new DingTalkConnector(baseUrl, { getAppAccessToken: () => Promise.resolve(appToken) })],
+      connectors: [
+        new DingTalkConnector(baseUrl, {
+          getAppAccessToken: () => Promise.resolve(appToken),
+          getRobotCode: () => Promise.resolve(ROBOT_CODE),
+        }),
+      ],
       connections: [{ tenantId: TENANT, connectionId: CONNECTION, connectorId: 'dingtalk_docs' }],
       allowlists,
       audit,
@@ -1023,16 +1168,55 @@ describe('test_connection through Seam A (governance applies unchanged)', () => 
   });
 
   it('rejects actions the connector does not implement (hide, don\'t reject)', async () => {
-    // send_message is canonical (registered) but not implemented by
-    // dingtalk_docs — the executor must never route it (export_doc joined
-    // the manifest in the #43 flip).
-    const { executor } = makeExecutor({ allowed: ['send_message'] });
-    const result = await executor.executeAction(TENANT, CONNECTION, 'send_message', { content: 'x', email: 'a@b.c' }, 'cli');
+    // delete_doc is canonical (registered) but not implemented by
+    // dingtalk_docs — the executor must never route it (send_message
+    // joined the manifest in the #49 batch).
+    const { executor } = makeExecutor({ allowed: ['delete_doc'] });
+    const result = await executor.executeAction(TENANT, CONNECTION, 'delete_doc', { doc_id: 'x' }, 'cli');
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('action_not_found');
       expect(result.error.message).toContain('not available on connection');
     }
+  });
+
+  it('executes send_message when allowed, audited like any action; email fails validation through the boundary (#49)', async () => {
+    const { executor, audit } = makeExecutor({ allowed: ['send_message'] });
+    const ok = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'send_message',
+      { chat_id: 'chat-1', content: 'e2e hello' },
+      'rpc',
+    );
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      const sent = ok.output as { message_id: string };
+      expect(sent.message_id).toMatch(/^mid_/);
+    }
+    expect(audit.list()).toHaveLength(1);
+    expect(audit.list()[0]).toMatchObject({
+      actionName: 'send_message',
+      source: 'rpc',
+      success: true,
+      errorCode: null,
+    });
+
+    // The connector's coverage-gap rejection (email) surfaces through the
+    // boundary as a failed, audited execution — same vocabulary code.
+    const rejected = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'send_message',
+      { email: 'a@b.c', content: 'x' },
+      'rpc',
+    );
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.error).toMatchObject({ code: 'validation_error', retryable: false });
+    }
+    const failedRow = audit.list().find((row) => row.success === false);
+    expect(failedRow).toMatchObject({ actionName: 'send_message', errorCode: 'validation_error' });
   });
 
   it('executes a read action when allowed, audited like any action (T17b AC-5)', async () => {

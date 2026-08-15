@@ -28,6 +28,7 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
   const REDIRECT_URI = 'https://totem.example.com/oauth/callback/dingtalk';
   const APP_KEY = 'e2e_app_key';
   const APP_SECRET = 'e2e_app_secret';
+  const ROBOT_CODE = 'e2e_robot_code';
 
   let dingtalk: ServerType;
   let dingtalkBaseUrl: string;
@@ -41,7 +42,7 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     await migrateUp(dbUrl!);
     await pool.query("DELETE FROM tenants WHERE name NOT LIKE 'live-%'");
 
-    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET });
+    mock = new MockDingTalkServer({ appKey: APP_KEY, appSecret: APP_SECRET, robotCode: ROBOT_CODE });
     mock.seedDocs([
       {
         docKey: 'e2e-doc-1',
@@ -62,6 +63,8 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
         ],
       },
     ]);
+    // #49: the group the robot sends to (the app-created universe).
+    mock.seedChats([{ openConversationId: 'e2e-chat-1' }]);
     dingtalk = serve({ fetch: mock.app.fetch, port: 0 });
     await new Promise((resolve) => dingtalk.once('listening', resolve));
     dingtalkBaseUrl = `http://127.0.0.1:${(dingtalk.address() as AddressInfo).port}`;
@@ -95,10 +98,10 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
   });
 
   it('stores dingtalk app credentials as ciphertext, decryptable with the tenant key', async () => {
-    await client.setDingTalkCreds(tenantId, APP_KEY, APP_SECRET);
+    await client.setDingTalkCreds(tenantId, APP_KEY, APP_SECRET, ROBOT_CODE);
     const row = (
-      await pool.query<{ app_key: string; app_secret: string }>(
-        'SELECT app_key, app_secret FROM dingtalk_credentials WHERE tenant_id = $1',
+      await pool.query<{ app_key: string; app_secret: string; robot_code: string | null }>(
+        'SELECT app_key, app_secret, robot_code FROM dingtalk_credentials WHERE tenant_id = $1',
         [tenantId],
       )
     ).rows[0];
@@ -106,6 +109,18 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     expect(row?.app_secret).not.toContain(APP_SECRET);
     expect(isCiphertext(row?.app_secret ?? '')).toBe(true);
     expect(decryptValue(tenantId, row!.app_secret, MASTER_KEY)).toBe(APP_SECRET);
+    // #49: the synced robotCode is ciphertext at rest too, and re-registers
+    // without it keep the synced value (merge semantics).
+    expect(isCiphertext(row?.robot_code ?? '')).toBe(true);
+    expect(decryptValue(tenantId, row!.robot_code!, MASTER_KEY)).toBe(ROBOT_CODE);
+    await client.setDingTalkCreds(tenantId, APP_KEY, APP_SECRET);
+    const reRead = (
+      await pool.query<{ robot_code: string | null }>(
+        'SELECT robot_code FROM dingtalk_credentials WHERE tenant_id = $1',
+        [tenantId],
+      )
+    ).rows[0];
+    expect(decryptValue(tenantId, reRead!.robot_code!, MASTER_KEY)).toBe(ROBOT_CODE);
   });
 
   it('walks the DingTalk flow: start → authorize → callback → dingtalk_docs connection + encrypted tokens', async () => {
@@ -331,5 +346,61 @@ describe.runIf(hasDb)('DingTalk connection end to end (Postgres)', () => {
     const readAudit = await client.queryAudit(tenantId, { action: 'read_sheet_cells' });
     expect(readAudit.rows).toHaveLength(1);
     expect(readAudit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
+  });
+
+  it('sends a message as the app robot through the RPC surface, audited (#49)', async () => {
+    const { connections } = await client.listConnections(tenantId);
+    const connection = connections[0]!;
+    await client.setAllowlist(connection.id, ['send_message']);
+
+    const key = await client.createKey(tenantId, 'actions');
+    const send = await fetch(`${apiBaseUrl}/actions/rpc`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key.key}`,
+        'x-connection-id': connection.id,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'send_message',
+        args: { chat_id: 'e2e-chat-1', content: 'build green' },
+      }),
+    });
+    expect(send.status).toBe(200);
+    const payload = (await send.json()) as { message_id: string };
+    expect(payload.message_id).toMatch(/^mid_/);
+    // The composed wiring resolved the robotCode from the tenant's synced
+    // credentials (decrypted read) and the app token from the token
+    // manager — the robot identity the canonical description promises.
+    expect(mock.sentGroupMessages).toEqual([
+      {
+        openConversationId: 'e2e-chat-1',
+        robotCode: ROBOT_CODE,
+        msgKey: 'sampleText',
+        content: 'build green',
+      },
+    ]);
+
+    const audit = await client.queryAudit(tenantId, { action: 'send_message' });
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]).toMatchObject({ connectionId: connection.id, success: true });
+
+    // The coverage-gap input (email) fails loudly through the composed
+    // wiring too: HTTP 400 + the unified vocabulary, audited as a failure.
+    const rejected = await fetch(`${apiBaseUrl}/actions/rpc`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${key.key}`,
+        'x-connection-id': connection.id,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        action: 'send_message',
+        args: { email: 'a@b.c', content: 'x' },
+      }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ code: 'validation_error', retryable: false });
+    expect(mock.sentGroupMessages).toHaveLength(1);
   });
 });

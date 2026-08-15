@@ -127,6 +127,23 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     expect(stdout[0]).toContain('tenant-1');
   });
 
+  it('set-dingtalk-creds POSTs the optional robotCode (#49)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
+    const { io } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['set-dingtalk-creds', 'tenant-1', 'cli_app_key', 's3cret', 'robot-1'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/dingtalk-creds',
+      expect.objectContaining({
+        body: JSON.stringify({ appKey: 'cli_app_key', appSecret: 's3cret', robotCode: 'robot-1' }),
+      }),
+    );
+  });
+
   it('set-allowlist PUTs the actions', async () => {
     const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
     const { io, stdout } = makeHarness(fetchMock);

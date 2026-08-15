@@ -67,8 +67,9 @@ at all.
 - **Input:** an optional input parameter a provider cannot honor is a
   `validation` error at execution — silently ignoring it is forbidden,
   because the agent would otherwise believe the parameter took effect
-  (e.g. an ordering hint that wasn't applied). No live case exists yet;
-  the principle is fixed now so connector authors don't diverge.
+  (e.g. an ordering hint that wasn't applied). First live case: DingTalk
+  `send_message` rejects `email` addressing (#49 — no email→userid lookup
+  API exists there; recorded in the consumption standard §11.5).
 
 ## Consequences
 

@@ -331,8 +331,14 @@ ADR-0010);目录无版本号,pin 机制 v2。
 
 首个非文档 canonical 动作 `send_message` 进入目录:纯文本内容,寻址为
 `{ email, chat_id }` 恰好取一(`email` = 自然键,`chat_id` = opaque 群 ID);
-以连接所有者身份发送。飞书首批实现;钉钉、企微为路线图后续批次(未实现的
-provider = 覆盖缺口,§11.1)。接收消息方向属 v2 事件面(§8),不在动作目录。
+以连接所有者身份发送。接收消息方向属 v2 事件面(§8),不在动作目录。
+
+实现批次:飞书首批(完整双路径);钉钉第二批(#49,仅 chat 路径——
+`chat_id` = openConversationId,以应用机器人身份发送,需管理员同步 robotCode);
+企微为后续批次(未实现的 provider = 覆盖缺口,§11.1)。钉钉的 `email`
+入参是 §11.4 input 规则的首个生效案例:平台无 email→userid 查询 API,
+故 connector 以 `validation` 错误**响亮拒绝**(不会静默忽略),接入方应改用
+`chat_id`。
 
 ---
 
