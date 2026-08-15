@@ -16,6 +16,7 @@ import { createFeishuTokenProvider } from '../feishu/tokens.js';
 import { createWeComOAuthClient } from '../wecom/oauth.js';
 import { PostgresWeComCredsStore } from '../wecom/pg-creds-store.js';
 import { WECOM_CONNECTOR_ID } from '../wecom/creds-store.js';
+import { WeComConnector } from '../wecom/connector.js';
 import { createWeComTokenProvider } from '../wecom/tokens.js';
 import { PostgresConnectionStateStore } from '../oauth/pg-connection-state.js';
 import { PostgresTokenStore } from '../oauth/pg-token-store.js';
@@ -95,13 +96,35 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     masterKey,
   });
 
+  // The WeCom token cell resolves connections through the same indexed
+  // lookup the routing provider uses (ADR-0017) — declared first so the
+  // credential-form wiring below can share it.
+  const connectionLookup = new PostgresConnectionStore(pool);
+
+  // WeCom (ADR-0017, #48): the credential-connection form — no OAuth flow,
+  // no token store. The connection is created at creds registration (admin
+  // repo), and its tokens come from the cached gettoken cell keyed by
+  // tenant, resolved through the same connection lookup the routing
+  // provider uses. #47: the messaging connector consumes the form — its
+  // agentid bit resolves from the same credentials (the connection's
+  // identity is the app).
+  const wecomApiBaseUrl = env.wecomApiBaseUrl ?? 'https://qyapi.weixin.qq.com';
+  const wecomCredsStore = new PostgresWeComCredsStore(pool, masterKey);
+  const wecomTokenManager = createWeComTokenProvider({
+    connections: connectionLookup,
+    credsStore: wecomCredsStore,
+    oauth: createWeComOAuthClient({ apiBaseUrl: wecomApiBaseUrl }),
+  });
+
   // The real Feishu Docs connector (T7) plus the DingTalk connector (T17a,
-  // test_connection skeleton; doc actions in T17b/T17c). Both serve the
-  // same platform action set; the executor dispatches by connection. The
-  // DingTalk connector receives the app-token resolver (T17 live pass):
-  // its doc/wiki/storage APIs authenticate with the app-level client-
-  // credentials token, while ActionContext.token stays the user token for
-  // the identity APIs.
+  // test_connection skeleton; doc actions in T17b/T17c) and the WeCom
+  // messaging connector (#47). All serve the same platform action set; the
+  // executor dispatches by connection. The DingTalk connector receives the
+  // app-token resolver (T17 live pass): its doc/wiki/storage APIs
+  // authenticate with the app-level client-credentials token, while
+  // ActionContext.token stays the user token for the identity APIs. The
+  // WeCom connector gets the app's agentid per tenant — its connection
+  // form has no user tokens at all (ADR-0017).
   const connectors = [
     new FeishuConnector(feishuBaseUrl),
     new DingTalkConnector(dingtalkApiBaseUrl, {
@@ -110,22 +133,14 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
       // and decrypted on read (ciphertext at rest like the app secret).
       getRobotCode: async (tenantId) => (await dingtalkCredsStore.get(tenantId))?.robotCode,
     }),
+    new WeComConnector(wecomApiBaseUrl, {
+      // #47: the self-built app's agentid — the connection's identity —
+      // decrypted on read from the same credentials row the token cell
+      // fetches gettoken with.
+      getAgentId: async (tenantId) => (await wecomCredsStore.get(tenantId))?.agentId,
+    }),
   ];
   const allowlists = new PostgresAllowlistStore(pool);
-  const connectionLookup = new PostgresConnectionStore(pool);
-
-  // WeCom (ADR-0017, #48): the credential-connection form — no OAuth flow,
-  // no token store. The connection is created at creds registration (admin
-  // repo), and its tokens come from the cached gettoken cell keyed by
-  // tenant, resolved through the same connection lookup the routing
-  // provider uses. No connector consumes the form until #47.
-  const wecomApiBaseUrl = env.wecomApiBaseUrl ?? 'https://qyapi.weixin.qq.com';
-  const wecomCredsStore = new PostgresWeComCredsStore(pool, masterKey);
-  const wecomTokenManager = createWeComTokenProvider({
-    connections: connectionLookup,
-    credsStore: wecomCredsStore,
-    oauth: createWeComOAuthClient({ apiBaseUrl: wecomApiBaseUrl }),
-  });
 
   // The executor resolves connections live from Postgres, so connections
   // created by the OAuth flow (T6) are visible without a restart. Token

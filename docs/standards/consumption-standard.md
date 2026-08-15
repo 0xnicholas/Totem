@@ -335,7 +335,13 @@ ADR-0010);目录无版本号,pin 机制 v2。
 
 实现批次:飞书首批(完整双路径);钉钉第二批(#49,仅 chat 路径——
 `chat_id` = openConversationId,以应用机器人身份发送,需管理员同步 robotCode);
-企微为后续批次(未实现的 provider = 覆盖缺口,§11.1)。钉钉的 `email`
+企微第三批(#47,双路径):`email` 经 get_userid_by_email 解析 userid 后以
+应用身份发送(要求应用有成员可见权限);`chat_id` 仅可达**应用自建群**
+(appchat/create 创建的群,任意组织群不可达);以应用身份(agentid)发送,
+需管理员经 wecom-creds 端点注册 corpid/secret/agentid(ADR-0017 credential
+connection)。企微对超频消息**静默丢弃**(接口不报错:每成员 30 条/分、
+1000 条/时;群消息 200 条/分、1 万条/天),无法映射为错误——平台侧以
+保守 rate limit(60/分)兜底,live pass 后再校准。钉钉的 `email`
 入参是 §11.4 input 规则的首个生效案例:平台无 email→userid 查询 API,
 故 connector 以 `validation` 错误**响亮拒绝**(不会静默忽略),接入方应改用
 `chat_id`。显式 `null` 寻址(如 `{email: null}`)同样在边界被

@@ -93,6 +93,7 @@ export { PostgresDingTalkCredsStore } from './dingtalk/pg-creds-store.js';
 export { DingTalkApiError, createDingTalkOAuthClient } from './dingtalk/oauth.js';
 export type { DingTalkOAuthClient } from './dingtalk/oauth.js';
 export { DingTalkConnector, mapDingtalkError } from './dingtalk/connector.js';
+export { WeComConnector, mapWeComError } from './wecom/connector.js';
 export { createDingTalkOAuthFlow } from './dingtalk/flows.js';
 export { createDingTalkTokenProvider } from './dingtalk/tokens.js';
 export type { DingTalkTokenProvider } from './dingtalk/tokens.js';

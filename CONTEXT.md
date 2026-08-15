@@ -1,6 +1,6 @@
 # Totem
 
-Totem is a multi-tenant action layer for AI agents: a curated, schema-first set of actions over MCP, backed by pluggable connectors to real systems (docs: Feishu, DingTalk; messaging send: Feishu per ADR-0016), with per-connection allowlists and audit logging. It is an internal platform: tenants are the operator's own internal projects, not paying customers (no SaaS, no second-level customer).
+Totem is a multi-tenant action layer for AI agents: a curated, schema-first set of actions over MCP, backed by pluggable connectors to real systems (docs: Feishu, DingTalk; messaging send: Feishu, DingTalk, WeCom per ADR-0016), with per-connection allowlists and audit logging. It is an internal platform: tenants are the operator's own internal projects, not paying customers (no SaaS, no second-level customer).
 
 ## Language
 
