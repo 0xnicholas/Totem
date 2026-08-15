@@ -156,6 +156,74 @@ describe('admin API (HTTP boundary)', () => {
     expect(response.status).toBe(400);
   });
 
+  it('registers wecom creds and creates the credential connection (ADR-0017, #48)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-wecom');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/wecom-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ corpId: 'ww_corp', secret: 's3cret', agentId: '1000002' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: true; connectionId: string };
+    expect(body.ok).toBe(true);
+
+    // The registration IS the connection creation: active immediately, no
+    // authorize URL, no callback, identity = the tenant (the app).
+    const connections = await repo.listConnections(tenant.id);
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toMatchObject({
+      id: body.connectionId,
+      connectorId: 'wecom_messaging',
+      status: 'active',
+      ownerId: tenant.id,
+      oauthRedirectUri: null,
+    });
+  });
+
+  it('re-registering wecom creds rotates credentials without duplicating the connection (#48)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-wecom-rotate');
+    const first = await adminFetch(`/admin/tenants/${tenant.id}/wecom-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ corpId: 'ww1', secret: 's1', agentId: '1000001' }),
+    });
+    const firstBody = (await first.json()) as { connectionId: string };
+    const second = await adminFetch(`/admin/tenants/${tenant.id}/wecom-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ corpId: 'ww2', secret: 's2', agentId: '1000002' }),
+    });
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { connectionId: string };
+
+    // One credential connection per tenant; rotation keeps it.
+    expect(secondBody.connectionId).toBe(firstBody.connectionId);
+    const connections = await repo.listConnections(tenant.id);
+    expect(connections).toHaveLength(1);
+    expect(repo.getWecomCreds(tenant.id)).toEqual({
+      corpId: 'ww2',
+      secret: 's2',
+      agentId: '1000002',
+    });
+  });
+
+  it('400s on wecom creds with a missing field (#48)', async () => {
+    const tenant = await repo.createTenant('creds-tenant-wecom-bad');
+    const response = await adminFetch(`/admin/tenants/${tenant.id}/wecom-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ corpId: 'ww', secret: 's' }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('404s on wecom creds for an unknown tenant (#48)', async () => {
+    const response = await adminFetch(
+      '/admin/tenants/00000000-0000-0000-0000-000000000000/wecom-creds',
+      {
+        method: 'POST',
+        body: JSON.stringify({ corpId: 'ww', secret: 's', agentId: '1' }),
+      },
+    );
+    expect(response.status).toBe(404);
+  });
+
   it('400s on dingtalk creds with a missing field (T17a)', async () => {
     const tenant = await repo.createTenant('creds-tenant-dt2');
     const response = await adminFetch(`/admin/tenants/${tenant.id}/dingtalk-creds`, {
@@ -545,6 +613,24 @@ describe('admin API: OAuth flow and connections (T6)', () => {
     expect(flow.start).not.toHaveBeenCalled();
   });
 
+  it('rejects oauth-start for the credential connector with the registration pointer (#48)', async () => {
+    // ADR-0017: WeCom connections are created by registering credentials,
+    // not by an authorize flow — the error must say so and point at the
+    // endpoint, instead of a misleading "unknown connector".
+    flow.start.mockClear();
+    const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
+      method: 'POST',
+      body: JSON.stringify({
+        redirectUri: 'https://totem.example.com/oauth/callback/x',
+        connectorId: 'wecom_messaging',
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('credential connector');
+    expect(body.error).toContain('wecom-creds');
+    expect(flow.start).not.toHaveBeenCalled();
+  });
   it('404s a known connector whose flow is not configured (T17a)', async () => {
     flow.start.mockClear();
     const response = await adminFetch(`/admin/tenants/${tenantId}/oauth/start`, {
@@ -623,5 +709,14 @@ describe('admin API: OAuth flow and connections (T6)', () => {
     });
     const stored = repo.getDingTalkCreds(tenantId);
     expect(stored?.robotCode).toBe(`v1:${tenantId}:robot-code-1`);
+  });
+
+  it('encrypts the wecom secret via the injected cipher (#48)', async () => {
+    await adminFetch(`/admin/tenants/${tenantId}/wecom-creds`, {
+      method: 'POST',
+      body: JSON.stringify({ corpId: 'ww-1', secret: 'super-secret', agentId: '1000002' }),
+    });
+    const stored = repo.getWecomCreds(tenantId);
+    expect(stored?.secret).toBe(`v1:${tenantId}:super-secret`);
   });
 });

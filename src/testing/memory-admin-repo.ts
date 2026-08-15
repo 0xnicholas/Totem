@@ -15,8 +15,15 @@ import {
   type TenantAuditPolicyPatch,
   type TenantDefenderPolicy,
   type TenantDefenderPolicyPatch,
+  type WeComCreds,
 } from '../admin/repo.js';
 import { auditParamHash } from '../audit.js';
+import { WECOM_CONNECTOR_ID } from '../wecom/creds-store.js';
+
+/** The display name of a tenant's WeCom credential connection (pg-repo's twin). */
+function wecomConnectionName(creds: WeComCreds): string {
+  return `WeCom ${creds.agentId}`;
+}
 
 interface MemoryConnection {
   id: string;
@@ -41,6 +48,7 @@ export class InMemoryAdminRepository implements AdminRepository {
   private readonly apiKeys = new Map<string, ApiKeyRecord>();
   private readonly creds = new Map<string, FeishuCreds>();
   private readonly dingtalkCreds = new Map<string, DingTalkCreds>();
+  private readonly wecomCreds = new Map<string, WeComCreds>();
   private readonly allowlists = new Map<string, Set<string>>();
   private readonly connections = new Map<string, MemoryConnection>();
   private readonly policies = new Map<string, TenantAuditPolicy>();
@@ -240,6 +248,35 @@ export class InMemoryAdminRepository implements AdminRepository {
 
   getDingTalkCreds(tenantId: string): DingTalkCreds | undefined {
     return this.dingtalkCreds.get(tenantId);
+  }
+
+  async setWecomCreds(tenantId: string, creds: WeComCreds): Promise<{ connectionId: string }> {
+    this.requireTenant(tenantId);
+    this.wecomCreds.set(tenantId, { ...creds });
+    // ADR-0017: ensure exactly one wecom_messaging connection per tenant;
+    // rotation keeps it (mirror of the Postgres semantics).
+    const existing = this.listConnectionsSync(tenantId).find(
+      (candidate) => candidate.connectorId === WECOM_CONNECTOR_ID,
+    );
+    const connectionId =
+      existing?.id ??
+      (
+        await this.createConnection(tenantId, {
+          connectorId: WECOM_CONNECTOR_ID,
+          name: wecomConnectionName(creds),
+        })
+      ).id;
+    // The secret stays out of the audit trail (param_hash covers corpId only).
+    this.writeAudit({
+      tenantId,
+      actionName: ADMIN_AUDIT_ACTIONS.wecomCredsUpdated,
+      params: { corpId: creds.corpId },
+    });
+    return { connectionId };
+  }
+
+  getWecomCreds(tenantId: string): WeComCreds | undefined {
+    return this.wecomCreds.get(tenantId);
   }
 
   async setAllowlist(

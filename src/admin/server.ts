@@ -13,6 +13,7 @@ import {
   type TenantDefenderPolicyPatch,
 } from './repo.js';
 import { isRecord } from './util.js';
+import { WECOM_CONNECTOR_ID } from '../wecom/creds-store.js';
 
 export interface AdminAppConfig {
   repo: AdminRepository;
@@ -157,6 +158,34 @@ export function createAdminApp(config: AdminAppConfig): Hono {
     return c.json({ ok: true });
   });
 
+  app.post('/admin/tenants/:tenantId/wecom-creds', async (c) => {
+    const body = await readJson(c);
+    if (
+      !isRecord(body) ||
+      typeof body.corpId !== 'string' ||
+      body.corpId === '' ||
+      typeof body.secret !== 'string' ||
+      body.secret === '' ||
+      typeof body.agentId !== 'string' ||
+      body.agentId === ''
+    ) {
+      return badRequest(c, 'body must include non-empty "corpId", "secret" and "agentId"');
+    }
+    // Encrypt at rest with the per-tenant key when the cipher is wired
+    // (ADR-0004); the plaintext never reaches the repository.
+    const storedSecret = config.secretCipher
+      ? config.secretCipher.encrypt(c.req.param('tenantId'), body.secret)
+      : body.secret;
+    // ADR-0017: the registration IS the connection creation — the response
+    // carries the connection id so the operator can set its allowlist.
+    const { connectionId } = await repo.setWecomCreds(c.req.param('tenantId'), {
+      corpId: body.corpId,
+      secret: storedSecret,
+      agentId: body.agentId,
+    });
+    return c.json({ ok: true, connectionId });
+  });
+
   app.put('/admin/connections/:connectionId/allowlist', async (c) => {
     const body = await readJson(c);
     if (
@@ -287,6 +316,16 @@ export function createAdminApp(config: AdminAppConfig): Hono {
         : 'feishu_docs';
     const flow = pickOAuthFlow(config, connectorId);
     if (!flow) {
+      // ADR-0017: credential connections have no authorize flow at all —
+      // point the operator at the registration endpoint instead of a
+      // misleading "unknown connector" or a missing route.
+      if (connectorId === WECOM_CONNECTOR_ID) {
+        return badRequest(
+          c,
+          `"${connectorId}" is a credential connector (ADR-0017): no authorize flow exists — ` +
+            'register credentials via POST /admin/tenants/<tenantId>/wecom-creds to create its connection',
+        );
+      }
       if (connectorId === 'feishu_docs' || connectorId === 'dingtalk_docs') {
         return notFound(c, 'route not found');
       }

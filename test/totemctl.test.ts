@@ -144,6 +144,24 @@ describe('totemctl commands (HTTP boundary mocked)', () => {
     );
   });
 
+  it('set-wecom-creds POSTs corpId, secret and agentId, printing the connection id (#48)', async () => {
+    const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true, connectionId: 'conn-wc-1' }));
+    const { io, stdout } = makeHarness(fetchMock);
+
+    const code = await run(
+      ['set-wecom-creds', 'tenant-1', 'ww_corp', 's3cret', '1000002'],
+      io,
+    );
+    expect(code).toBe(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api.test/admin/tenants/tenant-1/wecom-creds',
+      expect.objectContaining({
+        body: JSON.stringify({ corpId: 'ww_corp', secret: 's3cret', agentId: '1000002' }),
+      }),
+    );
+    expect(stdout[0]).toContain('conn-wc-1');
+  });
+
   it('set-allowlist PUTs the actions', async () => {
     const fetchMock = vi.fn<FetchLike>(() => okJson({ ok: true }));
     const { io, stdout } = makeHarness(fetchMock);

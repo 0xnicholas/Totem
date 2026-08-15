@@ -82,6 +82,24 @@ export class AdminApiClient {
     });
   }
 
+  /**
+   * Registers (or rotates) WeCom credentials; the response carries the
+   * credential connection's id (ADR-0017 — the registration IS the
+   * connection creation, so the operator can allowlist it next).
+   */
+  setWecomCreds(
+    tenantId: string,
+    corpId: string,
+    secret: string,
+    agentId: string,
+  ): Promise<{ ok: true; connectionId: string }> {
+    return this.request('POST', `/admin/tenants/${encodeURIComponent(tenantId)}/wecom-creds`, {
+      corpId,
+      secret,
+      agentId,
+    });
+  }
+
   setAllowlist(
     connectionId: string,
     actions: string[],

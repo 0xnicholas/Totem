@@ -78,6 +78,46 @@ describe.runIf(hasDb)('PostgresAdminRepository', () => {
     ).rejects.toThrow(NotFoundError);
   });
 
+  it('registers wecom credentials, creates exactly one credential connection, and 404s on unknown tenants (#48)', async () => {
+    const tenant = await repo.createTenant('wecom-creds-tenant');
+    const first = await repo.setWecomCreds(tenant.id, {
+      corpId: 'ww-1',
+      secret: 'secret-1',
+      agentId: '1000001',
+    });
+    const second = await repo.setWecomCreds(tenant.id, {
+      corpId: 'ww-2',
+      secret: 'secret-2',
+      agentId: '1000002',
+    });
+
+    // One credential connection per tenant; rotation keeps it (ADR-0017).
+    expect(second.connectionId).toBe(first.connectionId);
+    const connections = await repo.listConnections(tenant.id);
+    expect(connections).toHaveLength(1);
+    expect(connections[0]).toMatchObject({
+      id: first.connectionId,
+      connectorId: 'wecom_messaging',
+      status: 'active',
+    });
+
+    const row = (
+      await pool.query<{ corp_id: string; agent_id: string; secret: string }>(
+        'SELECT corp_id, agent_id, secret FROM wecom_credentials WHERE tenant_id = $1',
+        [tenant.id],
+      )
+    ).rows[0];
+    expect(row).toMatchObject({ corp_id: 'ww-2', agent_id: '1000002', secret: 'secret-2' });
+
+    await expect(
+      repo.setWecomCreds('00000000-0000-0000-0000-000000000000', {
+        corpId: 'ww',
+        secret: 's',
+        agentId: '1',
+      }),
+    ).rejects.toThrow(NotFoundError);
+  });
+
   it('replaces the allowlist and audits the change', async () => {
     const tenant = await repo.createTenant('allowlist-tenant');
     const connection = await seedConnection(pool, tenant.id, 'conn-repo-1');

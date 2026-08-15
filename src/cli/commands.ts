@@ -119,6 +119,18 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         return 0;
       }
 
+      case 'set-wecom-creds': {
+        const [tenantId, corpId, secret, agentId] = rest;
+        if (!tenantId || !corpId || !secret || !agentId) {
+          throw new UsageError('set-wecom-creds <tenant-id> <corp-id> <secret> <agent-id>');
+        }
+        const { connectionId } = await io.client.setWecomCreds(tenantId, corpId, secret, agentId);
+        io.stdout(
+          `WeCom credentials updated for tenant ${tenantId} — credential connection ${connectionId} is ready; set its allowlist next`,
+        );
+        return 0;
+      }
+
       case 'oauth-start': {
         const { positionals, flags } = parseFlags(rest);
         const [tenantId] = positionals;
@@ -132,8 +144,16 @@ export async function run(argv: string[], io: CommandIO): Promise<number> {
         }
         const connectionId = flags.connection;
         const connectorId = flags.connector;
-        if (connectorId !== undefined && connectorId !== 'feishu_docs' && connectorId !== 'dingtalk_docs') {
-          throw new UsageError('--connector must be "feishu_docs" or "dingtalk_docs"');
+        // wecom_messaging passes through deliberately (ADR-0017): the
+        // server answers with the credential-connector pointer — a far
+        // better error than a CLI-side list the CLI cannot keep honest.
+        if (
+          connectorId !== undefined &&
+          connectorId !== 'feishu_docs' &&
+          connectorId !== 'dingtalk_docs' &&
+          connectorId !== 'wecom_messaging'
+        ) {
+          throw new UsageError('--connector must be "feishu_docs", "dingtalk_docs" or "wecom_messaging"');
         }
         const { authorizationUrl } = await io.client.startOAuth(
           tenantId,

@@ -14,7 +14,20 @@ export interface UpstreamHttpProfile {
   baseUrl: string;
   /** System name in failure messages, e.g. "Feishu Docs API". */
   label: string;
-  authHeaderName: string;
+  /**
+   * Auth header carrying the token (Feishu: Authorization, DingTalk:
+   * x-acs-dingtalk-access-token). Optional — a family that authenticates
+   * by query param (#48, WeCom) or a pre-auth endpoint (gettoken) sets
+   * neither this nor `tokenQueryName` and no auth is attached.
+   */
+  authHeaderName?: string;
+  /**
+   * Query-param auth (#48): when set, the token rides the URL as this
+   * query parameter (WeCom: ?access_token=…) and NO auth header is sent —
+   * the token never double-attaches. Mutually exclusive in effect with
+   * `authHeaderName`: whichever is set wins, query taking precedence.
+   */
+  tokenQueryName?: string;
   /** Prefix prepended to the token in the auth header (Feishu: "Bearer "). */
   tokenPrefix?: string;
   /** Empty 2xx bodies: a valid payload (DingTalk) or a non-JSON failure (Feishu). */
@@ -67,12 +80,12 @@ export interface UpstreamHttp {
   <T>(path: string, opts?: UpstreamRequestOptions): Promise<T>;
   /**
    * Binary download (`get_export_artifact`). A relative path builds on
-   * `baseUrl` and carries the profile auth header (Feishu medias). An
-   * absolute http(s) URL is fetched verbatim with NO auth header —
-   * pre-signed links (DingTalk export downloadUrl) must never leak the
-   * connection's token to a third-party host. Non-2xx failures map
-   * through the profile's `handleResponse` (error bodies are JSON even
-   * when success is binary).
+   * `baseUrl` and carries the profile's auth (header, or query param for
+   * query-token families — WeCom media). An absolute http(s) URL is
+   * fetched verbatim with NO auth of any kind — pre-signed links (DingTalk
+   * export downloadUrl) must never leak the connection's token to a
+   * third-party host. Non-2xx failures map through the profile's
+   * `handleResponse` (error bodies are JSON even when success is binary).
    */
   download(pathOrUrl: string, opts?: UpstreamDownloadOptions): Promise<DownloadedFile>;
 }
@@ -80,10 +93,22 @@ export interface UpstreamHttp {
 export function createUpstreamHttp(profile: UpstreamHttpProfile): UpstreamHttp {
   const fetchImpl = profile.fetchImpl ?? fetch;
   const tokenPrefix = profile.tokenPrefix ?? '';
+
+  /** Where the token goes for this profile: query param, auth header, or nowhere. */
+  const authHeaders = (token: string | undefined): Record<string, string> =>
+    profile.authHeaderName === undefined || profile.tokenQueryName !== undefined
+      ? {}
+      : { [profile.authHeaderName]: `${tokenPrefix}${token ?? ''}` };
+
   const request = async <T>(path: string, opts: UpstreamRequestOptions = {}): Promise<T> => {
     const url = new URL(`${profile.baseUrl}${path}`);
     for (const [key, value] of Object.entries(opts.query ?? {})) {
       url.searchParams.set(key, value);
+    }
+    // Query-param auth (#48): the token rides the URL AFTER the caller's
+    // own query params, and the header stack stays empty.
+    if (profile.tokenQueryName !== undefined && opts.token !== undefined) {
+      url.searchParams.set(profile.tokenQueryName, opts.token);
     }
 
     let response: Response;
@@ -91,7 +116,7 @@ export function createUpstreamHttp(profile: UpstreamHttpProfile): UpstreamHttp {
       response = await fetchImpl(url, {
         method: opts.method ?? 'GET',
         headers: {
-          [profile.authHeaderName]: `${tokenPrefix}${opts.token ?? ''}`,
+          ...authHeaders(opts.token),
           ...(opts.body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -134,14 +159,15 @@ export function createUpstreamHttp(profile: UpstreamHttpProfile): UpstreamHttp {
   ): Promise<DownloadedFile> => {
     const absolute = /^https?:\/\//i.test(pathOrUrl);
     const url = absolute ? new URL(pathOrUrl) : new URL(`${profile.baseUrl}${pathOrUrl}`);
+    if (!absolute && profile.tokenQueryName !== undefined && opts.token !== undefined) {
+      url.searchParams.set(profile.tokenQueryName, opts.token);
+    }
 
     let response: Response;
     try {
       response = await fetchImpl(url, {
         method: 'GET',
-        headers: absolute
-          ? {}
-          : { [profile.authHeaderName]: `${tokenPrefix}${opts.token ?? ''}` },
+        headers: absolute ? {} : authHeaders(opts.token),
       });
     } catch (err) {
       throw new ActionError(

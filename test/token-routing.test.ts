@@ -67,6 +67,23 @@ describe('TokenRoutingProvider', () => {
     );
   });
 
+  it('routes a credential connection to the WeCom cached-cell provider (#48, ADR-0017)', async () => {
+    // Same seam, third kind: the wecom_messaging provider receives the
+    // connectionId and resolves the tenant itself (its cell is per tenant).
+    const WECOM_CONN = 'conn-wecom';
+    const connections = new ConnectionStore([
+      { tenantId: TENANT, connectionId: WECOM_CONN, connectorId: 'wecom_messaging' },
+    ]);
+    const wecomProvider = { getValidAccessToken: (id: string) => Promise.resolve(`wecom-token:${id}`) };
+    const routing = new TokenRoutingProvider(connections, {
+      wecom_messaging: wecomProvider,
+    });
+
+    await expect(routing.getValidAccessToken(WECOM_CONN)).resolves.toBe(
+      `wecom-token:${WECOM_CONN}`,
+    );
+  });
+
   it('fails with upstream_error for an unknown connection', async () => {
     const routing = new TokenRoutingProvider(new ConnectionStore([]), {
       feishu_docs: { getValidAccessToken: () => Promise.resolve('x') },

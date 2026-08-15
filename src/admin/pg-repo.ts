@@ -17,8 +17,10 @@ import {
   type TenantAuditPolicyPatch,
   type TenantDefenderPolicy,
   type TenantDefenderPolicyPatch,
+  type WeComCreds,
 } from './repo.js';
 import { auditParamHash } from '../audit.js';
+import { WECOM_CONNECTOR_ID } from '../wecom/creds-store.js';
 
 interface AuditInsert {
   tenantId: string;
@@ -26,6 +28,15 @@ interface AuditInsert {
   actionName: string;
   params: unknown;
   durationMs: number;
+}
+
+/**
+ * The display name of a tenant's WeCom credential connection: the agentid
+ * is the app identity the connection acts with (ADR-0017), so it is the
+ * most honest label an operator can see in listConnections.
+ */
+function wecomConnectionName(creds: WeComCreds): string {
+  return `WeCom ${creds.agentId}`;
 }
 
 interface TenantRow {
@@ -221,6 +232,53 @@ export class PostgresAdminRepository implements AdminRepository {
         params: { appKey: creds.appKey },
         durationMs: 0,
       });
+    });
+  }
+
+  async setWecomCreds(tenantId: string, creds: WeComCreds): Promise<{ connectionId: string }> {
+    return this.mutate(async (client) => {
+      await this.requireTenant(client, tenantId);
+      await client.query(
+        `INSERT INTO wecom_credentials (tenant_id, corp_id, agent_id, secret)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id) DO UPDATE
+           SET corp_id = $2, agent_id = $3, secret = $4, updated_at = now()`,
+        [tenantId, creds.corpId, creds.agentId, creds.secret],
+      );
+      // ADR-0017: the registration IS the connection creation — exactly one
+      // wecom_messaging connection per tenant; rotation keeps it.
+      const existing = (
+        await client.query<{ id: string }>(
+          'SELECT id FROM connections WHERE tenant_id = $1 AND connector_id = $2',
+          [tenantId, WECOM_CONNECTOR_ID],
+        )
+      ).rows[0];
+      const connectionId =
+        existing?.id ??
+        (
+          await client.query<{ id: string }>(
+            `INSERT INTO connections (tenant_id, connector_id, name, owner_id)
+             VALUES ($1, $2, $3, $4) RETURNING id`,
+            [tenantId, WECOM_CONNECTOR_ID, wecomConnectionName(creds), tenantId],
+          )
+        ).rows[0]!.id;
+      if (!existing) {
+        await this.writeAudit(client, {
+          tenantId,
+          connectionId,
+          actionName: ADMIN_AUDIT_ACTIONS.connectionCreated,
+          params: { connectionId, connectorId: WECOM_CONNECTOR_ID, name: wecomConnectionName(creds) },
+          durationMs: 0,
+        });
+      }
+      // The secret stays out of the audit trail (param_hash covers corpId only).
+      await this.writeAudit(client, {
+        tenantId,
+        actionName: ADMIN_AUDIT_ACTIONS.wecomCredsUpdated,
+        params: { corpId: creds.corpId },
+        durationMs: 0,
+      });
+      return { connectionId };
     });
   }
 

@@ -51,7 +51,7 @@ The minimal OAuth dance that opens a connection: the tenant registers App Creden
 _Avoid_: Connect session, Hub, linking flow
 
 **Token Lifecycle**:
-The platform-owned module (`src/oauth/`) behind a connection's OAuth tokens (ADR-0015): the refresh discipline (early-refresh window, single-flight, fail-fast auth-expired marking) and the Authorize Flow state machine, one platform implementation with thin provider adapters (feishu/, dingtalk/). The execution seam stays ADR-0004's one-method `TokenProvider`; provider app-level tokens (DingTalk) are an adapter detail the executor never sees.
+The platform-owned module (`src/oauth/`) behind a connection's OAuth tokens (ADR-0015): the refresh discipline (early-refresh window, single-flight, fail-fast auth-expired marking) and the Authorize Flow state machine, one platform implementation with thin provider adapters (feishu/, dingtalk/); the cached app-token cell for credential connections (WeCom, ADR-0017 — wecom/tokens.ts) is the same module's app-level half, never marking auth-expired. The execution seam stays ADR-0004's one-method `TokenProvider`; provider app-level tokens (DingTalk) are an adapter detail the executor never sees.
 _Avoid_: Token manager (when meaning a per-provider copy — there is one platform lifecycle, providers contribute adapters)
 
 **Allowlist**:
@@ -75,7 +75,7 @@ The external system a connector talks to (v1: Feishu Open Platform). The source 
 _Avoid_: Backend, third-party API, provider
 
 **Upstream HTTP Kernel**:
-The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, the binary download stack (relative path with the profile's auth header, or an absolute pre-signed URL fetched verbatim with no credentials, both under an optional byte cap), and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, auth header, empty-body policy, and the envelope convention (success check + error mapping, applied to error envelopes on downloads too) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003).
+The shared request machinery behind the connectors (`src/upstream-http.ts`): URL + query building, fetch, JSON parsing, the binary download stack (relative path with the profile's auth — an auth header, or a query token for query-param families like WeCom — or an absolute pre-signed URL fetched verbatim with no credentials, both under an optional byte cap), and the network / non-JSON failure vocabulary. Each connector family contributes a profile — the system label, the auth attachment (header name or query param), empty-body policy, and the envelope convention (success check + error mapping, applied to error envelopes on downloads too) — so handlers declare endpoint and response shape only. Connectors stay pure translators (ADR-0003).
 _Avoid_: HTTP client, fetch helper
 
 **Execution Boundary**:

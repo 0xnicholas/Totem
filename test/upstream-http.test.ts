@@ -180,6 +180,65 @@ describe('createUpstreamHttp (the shared request stack)', () => {
   });
 });
 
+describe('query-param auth profiles (#48, WeCom: ?access_token=)', () => {
+  it('sends the token as a query param and NO auth header when tokenQueryName is set', async () => {
+    const captured: Captured[] = [];
+    const request = createUpstreamHttp(
+      profile({
+        tokenQueryName: 'access_token',
+        fetchImpl: fakeFetch((url, init) => {
+          captured.push({ url, init });
+          return new Response('{}', { status: 200 });
+        }),
+      }),
+    );
+
+    await request('/cgi-bin/x', { token: 'wc-token-1', query: { a: 'b' } });
+
+    expect(captured[0]!.url.toString()).toBe('https://api.example.com/cgi-bin/x?a=b&access_token=wc-token-1');
+    expect(captured[0]!.init.headers).toEqual({});
+  });
+
+  it('sends no auth at all when the profile declares neither header nor query token', async () => {
+    const captured: Captured[] = [];
+    const request = createUpstreamHttp(
+      profile({
+        authHeaderName: undefined,
+        fetchImpl: fakeFetch((url, init) => {
+          captured.push({ url, init });
+          return new Response('{}', { status: 200 });
+        }),
+      }),
+    );
+
+    await request('/cgi-bin/gettoken', { query: { corpid: 'c1' } });
+
+    expect(captured[0]!.url.searchParams.get('corpid')).toBe('c1');
+    expect(captured[0]!.init.headers).toEqual({});
+  });
+
+  it('downloads a relative path with the token in the query for query-param profiles', async () => {
+    const captured: Captured[] = [];
+    const request = createUpstreamHttp(
+      profile({
+        tokenQueryName: 'access_token',
+        fetchImpl: fakeFetch((url, init) => {
+          captured.push({ url, init });
+          return new Response('bytes', {
+            status: 200,
+            headers: { 'content-type': 'application/octet-stream' },
+          });
+        }),
+      }),
+    );
+
+    await request.download('/cgi-bin/media/get', { token: 'wc-token-1' });
+
+    expect(captured[0]!.url.searchParams.get('access_token')).toBe('wc-token-1');
+    expect(captured[0]!.init.headers).toEqual({});
+  });
+});
+
 describe('createUpstreamHttp.download (the binary download stack)', () => {
   it('downloads a relative path with the profile auth header, returning bytes and content-type', async () => {
     const captured: Captured[] = [];

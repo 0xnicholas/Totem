@@ -81,6 +81,14 @@ export interface DingTalkCreds {
   robotCode?: string;
 }
 
+/** A tenant's WeCom self-built app credentials as stored by the admin surface (ADR-0017, #48). */
+export interface WeComCreds {
+  corpId: string;
+  /** Ciphertext at rest (written encrypted by the admin API). */
+  secret: string;
+  agentId: string;
+}
+
 /**
  * A tenant's audit policy (T11): the tenants-row config the schema has
  * carried since T2 but nothing read or set. `captureBody` is the opt-in
@@ -159,6 +167,14 @@ export interface AdminRepository {
    */
   setDingTalkCreds(tenantId: string, creds: DingTalkCreds): Promise<void>;
   /**
+   * Registers (or rotates) a tenant's WeCom credentials AND ensures the
+   * credential connection exists — the registration IS the connection
+   * creation (ADR-0017): no authorize URL, no callback, one
+   * `wecom_messaging` connection per tenant, re-registration rotates
+   * credentials without duplicating it.
+   */
+  setWecomCreds(tenantId: string, creds: WeComCreds): Promise<{ connectionId: string }>;
+  /**
    * Creates a connection for the OAuth flow (T6). `ownerId` is server-set
    * to the tenant id. @throws NotFoundError when the tenant does not exist.
    */
@@ -219,6 +235,7 @@ export const ADMIN_AUDIT_ACTIONS = {
   keyDisabled: 'admin.key_disabled',
   feishuCredsUpdated: 'admin.feishu_creds_updated',
   dingtalkCredsUpdated: 'admin.dingtalk_creds_updated',
+  wecomCredsUpdated: 'admin.wecom_creds_updated',
   allowlistUpdated: 'admin.allowlist_updated',
   connectionSuspended: 'admin.connection_suspended',
   connectionResumed: 'admin.connection_resumed',

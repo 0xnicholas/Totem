@@ -13,6 +13,10 @@ import { createFeishuOAuthFlow } from '../feishu/flows.js';
 import { createFeishuOAuthClient } from '../feishu/oauth.js';
 import { PostgresFeishuCredsStore } from '../feishu/pg-creds-store.js';
 import { createFeishuTokenProvider } from '../feishu/tokens.js';
+import { createWeComOAuthClient } from '../wecom/oauth.js';
+import { PostgresWeComCredsStore } from '../wecom/pg-creds-store.js';
+import { WECOM_CONNECTOR_ID } from '../wecom/creds-store.js';
+import { createWeComTokenProvider } from '../wecom/tokens.js';
 import { PostgresConnectionStateStore } from '../oauth/pg-connection-state.js';
 import { PostgresTokenStore } from '../oauth/pg-token-store.js';
 import { createDiscoveryApp } from '../rest/discovery.js';
@@ -36,6 +40,8 @@ export interface ServerEnv {
   dingtalkApiBaseUrl?: string;
   /** DingTalk authorize base URL (DINGTALK_AUTHORIZE_BASE_URL); defaults to login.dingtalk.com. */
   dingtalkAuthorizeBaseUrl?: string;
+  /** WeCom API base URL (WECOM_API_BASE_URL); defaults to qyapi.weixin.qq.com. */
+  wecomApiBaseUrl?: string;
   /** Public base URL of this deployment (TOTEM_URL); mirrored into the OpenAPI document. */
   serverUrl?: string;
 }
@@ -108,6 +114,19 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
   const allowlists = new PostgresAllowlistStore(pool);
   const connectionLookup = new PostgresConnectionStore(pool);
 
+  // WeCom (ADR-0017, #48): the credential-connection form — no OAuth flow,
+  // no token store. The connection is created at creds registration (admin
+  // repo), and its tokens come from the cached gettoken cell keyed by
+  // tenant, resolved through the same connection lookup the routing
+  // provider uses. No connector consumes the form until #47.
+  const wecomApiBaseUrl = env.wecomApiBaseUrl ?? 'https://qyapi.weixin.qq.com';
+  const wecomCredsStore = new PostgresWeComCredsStore(pool, masterKey);
+  const wecomTokenManager = createWeComTokenProvider({
+    connections: connectionLookup,
+    credsStore: wecomCredsStore,
+    oauth: createWeComOAuthClient({ apiBaseUrl: wecomApiBaseUrl }),
+  });
+
   // The executor resolves connections live from Postgres, so connections
   // created by the OAuth flow (T6) are visible without a restart. Token
   // acquisition routes by connector id (T17a): one TokenProvider seam for
@@ -123,6 +142,7 @@ export function composeServer(pool: pg.Pool, env: ServerEnv): Hono {
     tokenProvider: new TokenRoutingProvider(connectionLookup, {
       feishu_docs: tokenManager,
       dingtalk_docs: dingtalkTokenManager,
+      [WECOM_CONNECTOR_ID]: wecomTokenManager,
     }),
     connectionLookup,
     defenderPolicy: new PostgresDefenderPolicyStore(pool),

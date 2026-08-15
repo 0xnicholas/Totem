@@ -34,7 +34,7 @@ export type ActionEffect = 'read' | 'write' | 'destructive';
  * open string registry. Provider-native action names carry `<token>_` as
  * their prefix, and a canonical action's name must not carry any of them.
  */
-export const PROVIDER_TOKENS = ['feishu', 'dingtalk'] as const;
+export const PROVIDER_TOKENS = ['feishu', 'dingtalk', 'wecom'] as const;
 
 export type ProviderToken = (typeof PROVIDER_TOKENS)[number];
 
