@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
 import type { CellValue } from '../actions.js';
 import { isRecord } from '../admin/util.js';
+import type { DownloadedFile } from '../upstream-http.js';
 import { parseRange, sliceValues, writeValues } from './range.js';
 
 /** DingTalk v1.0 API error shape: HTTP status + `{code, message}`. */
@@ -154,7 +155,7 @@ export class MockDingTalkServer {
   private readonly workbooks: MockDingTalkWorkbook[] = [];
   private readonly exportJobs = new Map<
     string,
-    { status: string; bytes: Uint8Array; contentType: string }
+    { status: string } & DownloadedFile
   >();
   /**
    * Base URL for presigned export downloadUrls (#43): when set, the task

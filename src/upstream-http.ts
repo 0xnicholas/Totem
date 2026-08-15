@@ -49,7 +49,6 @@ export interface DownloadedFile {
 
 export interface UpstreamDownloadOptions {
   token?: string;
-  query?: Record<string, string>;
   /**
    * Raw-byte ceiling for the artifact: a content-length precheck rejects
    * announced oversize before the body is read; the post-read check
@@ -135,11 +134,6 @@ export function createUpstreamHttp(profile: UpstreamHttpProfile): UpstreamHttp {
   ): Promise<DownloadedFile> => {
     const absolute = /^https?:\/\//i.test(pathOrUrl);
     const url = absolute ? new URL(pathOrUrl) : new URL(`${profile.baseUrl}${pathOrUrl}`);
-    if (!absolute) {
-      for (const [key, value] of Object.entries(opts.query ?? {})) {
-        url.searchParams.set(key, value);
-      }
-    }
 
     let response: Response;
     try {

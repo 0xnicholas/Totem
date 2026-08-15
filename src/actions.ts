@@ -1,5 +1,6 @@
 import type { JSONSchemaType } from 'ajv';
 import type { Action } from './action.js';
+import type { DownloadedFile } from './upstream-http.js';
 
 export interface CreateDocInput {
   title: string;
@@ -134,7 +135,7 @@ export const GET_EXPORT_ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
  */
 export function toArtifactOutput(
   artifactId: string,
-  file: { bytes: Uint8Array; contentType: string | undefined },
+  file: DownloadedFile,
 ): GetExportArtifactOutput {
   return {
     artifact_id: artifactId,

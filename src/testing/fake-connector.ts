@@ -35,6 +35,7 @@ import { ActionError } from '../errors.js';
 import { toArtifactOutput } from '../actions.js';
 import type { RateLimitDeclaration } from '../rate-limit.js';
 import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js';
+import type { DownloadedFile } from '../upstream-http.js';
 
 export const FAKE_CONNECTOR_ID = 'fake';
 
@@ -80,7 +81,7 @@ export class FakeConnector implements IConnector {
 
   private readonly docs = new Map<string, FakeDoc>();
   /** Export artifacts by artifact_id (#43): export_doc creates, get_export_artifact downloads. */
-  private readonly artifacts = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  private readonly artifacts = new Map<string, DownloadedFile>();
   private readonly handlers: Record<string, ActionHandler>;
 
   constructor(

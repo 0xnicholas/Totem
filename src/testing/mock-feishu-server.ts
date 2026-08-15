@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { isRecord } from '../admin/util.js';
 import { parseRange, sliceValues, writeValues, type RangeRef } from './range.js';
 import type { CellValue } from '../actions.js';
+import type { DownloadedFile } from '../upstream-http.js';
 
 const INVALID_TOKEN_ENVELOPE = { code: 99991672, msg: 'invalid access token' };
 
@@ -93,7 +94,7 @@ export class MockFeishuServer {
   private readonly bitables = new Map<string, Array<{ name: string; tableId: string; records: Array<{ record_id: string; fields: Record<string, unknown> }> }>>();
   private readonly exports = new Map<string, { status: number; fileToken: string }>();
   /** Downloadable export artifacts keyed by exported file token (#43). */
-  private readonly artifacts = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  private readonly artifacts = new Map<string, DownloadedFile>();
   private readonly moveTasks = new Map<string, { status: 'success' | 'process' | 'fail' }>();
   private holdNextExportArmed = false;
   private failNextExportArmed = false;
