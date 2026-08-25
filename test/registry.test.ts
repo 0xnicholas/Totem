@@ -46,6 +46,7 @@ describe('action registry (registration contract, ADR-0001/0003)', () => {
       'get_export_artifact',
       'move_doc',
       'read_sheet_cells',
+      'recall_message',
       'rename_doc',
       'search_docs',
       'send_message',
@@ -152,6 +153,41 @@ describe('action registry (destructive family, ADR-0018)', () => {
     expect(action).toBeDefined();
     expect(action?.effects).toBe('destructive');
     expect(action?.provider).toBe('feishu');
+  });
+
+  it('declares recall_message canonical and destructive with the bare-ack output (#60)', () => {
+    const action = PLATFORM_ACTIONS.find((a) => a.name === 'recall_message');
+    expect(action).toBeDefined();
+    expect(action?.effects).toBe('destructive');
+    expect(action?.provider).toBeUndefined();
+    expect(action?.hidden).toBeUndefined();
+    // Input is exactly the opaque id send_message returned; output is the
+    // bare ack — no content beyond success.
+    expect(action?.inputSchema).toMatchObject({ required: ['message_id'] });
+    expect(action?.outputSchema).toMatchObject({ properties: {}, required: [] });
+  });
+
+  it('rejects a recall_message call without message_id at the boundary (validation_error)', async () => {
+    // The FakeConnector does not implement recall_message (WeCom-only so
+    // far, #60), so this test wires a minimal implementing connector —
+    // validation precedes dispatch, the handler never runs.
+    const executor = makeExecutor({
+      connectors: [
+        makeConnector(FAKE_CONNECTOR_ID, ['recall_message'], {
+          recall_message: () => ({}),
+        }),
+      ],
+    });
+    const result = await executor.executeAction(
+      CONN_1_A.tenantId,
+      CONN_1_A.connectionId,
+      'recall_message',
+      {},
+      'rpc',
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe('validation_error');
   });
 
   it('bounds the batch delete input at Feishu\'s 500-record limit', async () => {

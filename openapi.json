@@ -1198,6 +1198,25 @@
           "message_id"
         ]
       },
+      "recall_message_input": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "message_id"
+        ]
+      },
+      "recall_message_output": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
       "test_connection_input": {
         "type": "object",
         "additionalProperties": false,

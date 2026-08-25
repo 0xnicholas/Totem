@@ -63,7 +63,8 @@ export interface RecordedUseridLookup {
  * WeCom (企业微信) self-built-app API surface the platform talks to — the
  * gettoken endpoint behind the cached token cell, plus the messaging trio
  * `send_message` maps onto (#47): user/get_userid_by_email,
- * message/send, appchat/send.
+ * message/send, appchat/send — and message/recall for `recall_message`
+ * (#60), which resolves against the msgids the send endpoints issued.
  *
  * WeCom's envelope convention (tracked by the kernel's WeCom profile):
  * HTTP is (almost) always 200 and `errcode !== 0` is the failure signal —
@@ -86,6 +87,8 @@ export class MockWeComServer {
   readonly sentUserMessages: RecordedUserMessage[] = [];
   /** Messages accepted through appchat/send (chatid path), in order. */
   readonly sentChatMessages: RecordedChatMessage[] = [];
+  /** msgids recalled through message/recall (#60), in order. */
+  readonly recalledMsgIds: string[] = [];
   /** Every email→userid lookup served, with the email_type namespace probed. */
   readonly useridLookups: RecordedUseridLookup[] = [];
 
@@ -93,6 +96,14 @@ export class MockWeComServer {
   private readonly issuedAccessTokens = new Map<string, { expiresAt: number }>();
   private readonly members: MockWeComMember[] = [];
   private readonly chats: MockWeComChat[] = [];
+  /**
+   * msgids this mock's send endpoints issued (#60) — the recallable
+   * universe. message/recall resolves against it: unknown → errcode 40058,
+   * expired (seeded) → 42052, otherwise the msgid is consumed (a recalled
+   * message is gone — a second recall is an unknown-msgid miss).
+   */
+  private readonly issuedMsgIds = new Set<string>();
+  private readonly expiredMsgIds = new Set<string>();
   private scriptedFailure: ScriptedFailure | undefined;
 
   constructor(private readonly options: MockWeComServerOptions) {
@@ -177,6 +188,7 @@ export class MockWeComServer {
       }
       const msgid = `wcmsg_${randomUUID()}`;
       this.sentUserMessages.push({ touser, agentId: agentid, msgtype, content });
+      this.issuedMsgIds.add(msgid);
       return c.json({ errcode: 0, errmsg: 'ok', msgid });
     });
 
@@ -205,7 +217,34 @@ export class MockWeComServer {
       }
       const msgid = `wcchat_${randomUUID()}`;
       this.sentChatMessages.push({ chatid, msgtype, content });
+      this.issuedMsgIds.add(msgid);
       return c.json({ errcode: 0, errmsg: 'ok', msgid });
+    });
+
+    // POST /cgi-bin/message/recall (#60, official-docs shape): body {msgid}
+    // → bare errcode/errmsg ack. Only msgids this mock issued recall;
+    // success consumes the msgid (a recalled message is gone). Seeded
+    // expired msgids answer 42052 (msgid已过期 — 仅可撤回24小时内的消息,
+    // official global error-code list); unknown msgids answer 40058 (the
+    // official 40058 notes call out the recall case).
+    this.app.post('/cgi-bin/message/recall', async (c) => {
+      const scripted = this.scriptedResponse();
+      if (scripted) return scripted;
+      const auth = this.requireToken(c);
+      if (auth) return auth;
+      const body = readJsonBody(await c.req.text());
+      const msgid = body.msgid;
+      if (typeof msgid !== 'string' || msgid === '') {
+        return c.json({ errcode: 40058, errmsg: 'msgid is required' }, 200);
+      }
+      if (this.expiredMsgIds.has(msgid)) {
+        return c.json({ errcode: 42052, errmsg: 'msgid expired: only messages sent within 24 hours can be recalled' }, 200);
+      }
+      if (!this.issuedMsgIds.delete(msgid)) {
+        return c.json({ errcode: 40058, errmsg: 'invalid msgid' }, 200);
+      }
+      this.recalledMsgIds.push(msgid);
+      return c.json({ errcode: 0, errmsg: 'ok' }, 200);
     });
   }
 
@@ -223,6 +262,14 @@ export class MockWeComServer {
   /** Seeds the group chats — the app-created universe appchat/send reaches (#47). */
   seedChats(chats: MockWeComChat[]): void {
     this.chats.push(...chats);
+  }
+
+  /**
+   * Marks an issued msgid as past the recall window (#60): message/recall
+   * then answers 42052 (msgid已过期) instead of recalling.
+   */
+  expireMsgId(msgid: string): void {
+    this.expiredMsgIds.add(msgid);
   }
 
   /** Scripts one failure for the next API call (any endpoint, errcode envelope). */

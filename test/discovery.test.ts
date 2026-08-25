@@ -47,7 +47,7 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     // ActionRegistry.visibleActions() (pinned in registry-visibility.test.ts);
     // this fixture passes the platform set in registration order.
     expect(names).toEqual(PLATFORM_ACTIONS.map((a) => a.name));
-    expect(names).toHaveLength(18);
+    expect(names).toHaveLength(19);
     const createDoc = body.actions.find((a) => a.name === 'create_doc');
     expect(createDoc).toMatchObject({ effects: 'write' });
     expect(typeof createDoc?.description).toBe('string');
@@ -56,6 +56,9 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
     expect(typeof testConnection?.description).toBe('string');
     // ADR-0018: the destructive class is consumer-visible metadata.
     expect(body.actions.find((a) => a.name === 'delete_doc')).toMatchObject({
+      effects: 'destructive',
+    });
+    expect(body.actions.find((a) => a.name === 'recall_message')).toMatchObject({
       effects: 'destructive',
     });
     expect(
@@ -271,7 +274,8 @@ describe.runIf(Boolean(process.env.DATABASE_URL))('REST discovery with the Postg
     expect(response.status).toBe(200);
     const body = (await response.json()) as { actions: unknown[] };
     // PLATFORM_ACTIONS is the full registry fixture: 16 docs actions
-    // (12 canonical + 4 feishu-native) + send_message + test_connection.
-    expect(body.actions).toHaveLength(18);
+    // (12 canonical + 4 feishu-native) + send_message + recall_message +
+    // test_connection.
+    expect(body.actions).toHaveLength(19);
   });
 });

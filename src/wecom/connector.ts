@@ -1,5 +1,7 @@
 import type { ActionContext, ActionHandler } from '../action.js';
 import type {
+  RecallMessageInput,
+  RecallMessageOutput,
   SendMessageInput,
   SendMessageOutput,
   TestConnectionOutput,
@@ -40,6 +42,21 @@ const TOKEN_REJECTED_CODES = new Set([40014, 41001, 42001, 42009]);
 
 /** get_userid_by_email's documented miss code. */
 const USERID_NOT_FOUND = 60111;
+
+/**
+ * Recall-path errcodes (#60, provisional-until-live-pass per the #47
+ * pinning convention; the #57 live pass confirms the sets):
+ * - 42052 msgid已过期 ("仅可撤回24小时内的消息" — official global
+ *   error-code list): the recall window closed. The message exists but can
+ *   no longer be recalled — non-retryable by nature.
+ * - 40058 不合法的参数: on message/recall this is the unknown/never-existed
+ *   msgid signal (the official 40058 notes call out the recall case —
+ *   "撤回消息时报错，请检查发消息和撤回消息是否同一个应用"). Cross-app
+ *   msgids land here too, which the canonical same-Connection keying makes
+ *   indistinguishable from "never existed" — both are not_found.
+ */
+const RECALL_WINDOW_CLOSED = 42052;
+const RECALL_MSGID_UNKNOWN = 40058;
 
 /**
  * Maps a WeCom API failure into the unified error vocabulary (ADR-0005).
@@ -105,6 +122,12 @@ export function mapWeComError(err: WeComApiError): ActionError {
  *   subset, content ≤ 2048 bytes). The content is passed through verbatim:
  *   the connector stays a pure translator (ADR-0003), no platform-side
  *   markdown parsing.
+ * - `recall_message` (#60) → `POST /cgi-bin/message/recall` `{msgid}` with
+ *   the msgid either send path returned. Destructive class (ADR-0018): the
+ *   governance contract rides on the registry's effects value; the
+ *   connector owns only the recall-specific errcode mapping (unknown msgid
+ *   → not_found, closed 24h window → non-retryable upstream_error — see
+ *   RECALL_* codes).
  *
  * Silently-dropped limits (recorded here because upstream never errors on
  * them — unmappable by construction): message/send drops beyond 30
@@ -128,6 +151,9 @@ export class WeComConnector implements IConnector {
       // Chat path (app-created groups) and email path (get_userid_by_email
       // → touser) both landed in the first WeCom messaging batch (#47).
       'send_message',
+      // Recall batch (#60): POST /cgi-bin/message/recall on the msgids both
+      // send paths return.
+      'recall_message',
     ],
     // Conservative (candidate 60/min per #47): WeCom silently drops member
     // messages over its per-member caps without erroring, so the boundary
@@ -179,6 +205,10 @@ export class WeComConnector implements IConnector {
         }
         return this.sendToChat(input.chat_id!, input.content, input.format, ctx);
       },
+
+      recall_message: async (args: RecallMessageInput, ctx) => {
+        return this.recallMessage(args.message_id, ctx);
+      },
     };
   }
 
@@ -223,6 +253,51 @@ export class WeComConnector implements IConnector {
       );
     }
     return { message_id: response.msgid };
+  }
+
+  /**
+   * message_id → POST /cgi-bin/message/recall `{msgid}` (#60). The msgid is
+   * the one send_message returned on this connection — WeCom only recalls
+   * messages the same app sent, within the upstream window (currently 24h).
+   * Whether appchat-path msgids are recallable is undocumented; the
+   * connector attempts any message_id and maps whatever upstream answers
+   * (the #57 live pass pins the appchat case).
+   *
+   * The recall-only errcodes map here, before the shared envelope mapping:
+   * an unknown msgid is not_found ("never existed" — distinguishable from
+   * the window), a closed window is a NON-RETRYABLE upstream_error whose
+   * message says so, so the agent stops retrying and reports honestly.
+   */
+  private async recallMessage(
+    messageId: string,
+    ctx: ActionContext,
+  ): Promise<RecallMessageOutput> {
+    try {
+      await this.http('/cgi-bin/message/recall', {
+        method: 'POST',
+        token: ctx.token,
+        body: { msgid: messageId },
+      });
+      return {};
+    } catch (err) {
+      if (err instanceof WeComApiError) {
+        if (err.errcode === RECALL_MSGID_UNKNOWN) {
+          throw new ActionError('not_found', `WeCom knows no message "${messageId}": ${err.message}`, {
+            upstream: { code: String(err.errcode), message: err.message },
+          });
+        }
+        if (err.errcode === RECALL_WINDOW_CLOSED) {
+          throw new ActionError(
+            'upstream_error',
+            `WeCom refused to recall message "${messageId}": the recall window has closed ` +
+              '(WeCom recalls messages only within 24 hours of send) — do not retry; ' +
+              `the message stays delivered: ${err.message}`,
+            { upstream: { code: String(err.errcode), message: err.message } },
+          );
+        }
+      }
+      throw this.toVocabulary(err);
+    }
   }
 
   /** chat_id → appchat/send (app-created groups only, upstream-enforced). */

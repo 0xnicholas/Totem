@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DOCS_ACTIONS, createActionExecutor } from '../src/index.js';
+import { DOCS_ACTIONS, MESSAGING_ACTIONS, createActionExecutor } from '../src/index.js';
 import { McpAdapter } from '../src/mcp/adapter.js';
 import { InMemoryAllowlistStore, InMemoryAuditSink } from '../src/testing/memory-governance.js';
 import {
@@ -74,6 +74,30 @@ describe('McpAdapter', () => {
     const tools = await adapter.listTools(TENANT_A, CONN_1);
     expect(tools).toEqual([
       expect.objectContaining({ name: 'delete_doc', annotations: { destructiveHint: true } }),
+    ]);
+  });
+
+  it('projects recall_message with destructiveHint (#60)', async () => {
+    // The platform action straight from the registry (MESSAGING_ACTIONS),
+    // behind a minimal implementing connector: the projection must carry
+    // the class hint agents use to require user confirmation.
+    const connector = makeConnector('recaller', ['recall_message'], {
+      recall_message: () => ({}),
+    });
+    const allowlists = new InMemoryAllowlistStore();
+    allowlists.setAllowed(TENANT_A, CONN_1, ['recall_message']);
+    const executor = createActionExecutor({
+      actions: [...MESSAGING_ACTIONS],
+      connectors: [connector],
+      connections: [{ ...CONN_1_A, connectorId: 'recaller' }],
+      allowlists,
+      audit: new InMemoryAuditSink(),
+    });
+    const adapter = new McpAdapter(executor);
+
+    const tools = await adapter.listTools(TENANT_A, CONN_1);
+    expect(tools).toEqual([
+      expect.objectContaining({ name: 'recall_message', annotations: { destructiveHint: true } }),
     ]);
   });
 

@@ -73,7 +73,7 @@ describe('WeComConnector (Seam B)', () => {
     expect(connector.manifest).toMatchObject({
       id: 'wecom_messaging',
       provider: 'wecom',
-      implements: ['test_connection', 'send_message'],
+      implements: ['test_connection', 'send_message', 'recall_message'],
       rateLimit: { requestsPerMinute: 60 },
     });
   });
@@ -303,6 +303,81 @@ describe('WeComConnector (Seam B)', () => {
       dead.execute('send_message', { chat_id: 'chat-1', content: 'x' }, ctx()),
     ).rejects.toMatchObject({ code: 'upstream_error' });
   });
+
+  it('recall_message recalls a sent message by the message_id send_message returned (#60)', async () => {
+    const sent = (await connector.execute(
+      'send_message',
+      { email: 'zhangsan@corp.example', content: 'wrong recipient' },
+      ctx(),
+    )) as { message_id: string };
+
+    const output = await connector.execute(
+      'recall_message',
+      { message_id: sent.message_id },
+      ctx(),
+    );
+    // Bare ack: success IS the output, no content curated from upstream.
+    expect(output).toEqual({});
+    // The upstream saw exactly the msgid its own message/send issued.
+    expect(mock.recalledMsgIds).toEqual([sent.message_id]);
+  });
+
+  it('recall_message recalls a chat message too (the connector attempts any message_id)', async () => {
+    const sent = (await connector.execute(
+      'send_message',
+      { chat_id: 'chat-1', content: 'premature send' },
+      ctx(),
+    )) as { message_id: string };
+    const output = await connector.execute(
+      'recall_message',
+      { message_id: sent.message_id },
+      ctx(),
+    );
+    expect(output).toEqual({});
+    expect(mock.recalledMsgIds.at(-1)).toBe(sent.message_id);
+  });
+
+  it('recall_message maps an unknown message_id (40058) to not_found (#60)', async () => {
+    // "Never existed" — distinguishable from the window closing.
+    const recalledBefore = mock.recalledMsgIds.length;
+    await expect(
+      connector.execute('recall_message', { message_id: 'wcmsg_never_existed' }, ctx()),
+    ).rejects.toMatchObject({ code: 'not_found', retryable: false });
+    expect(mock.recalledMsgIds).toHaveLength(recalledBefore);
+  });
+
+  it('recall_message maps a closed recall window (42052) to a non-retryable upstream_error that says so (#60)', async () => {
+    const sent = (await connector.execute(
+      'send_message',
+      { chat_id: 'chat-1', content: 'old news' },
+      ctx(),
+    )) as { message_id: string };
+    mock.expireMsgId(sent.message_id);
+    const recalledBefore = mock.recalledMsgIds.length;
+
+    // The window is upstream policy: the error must say it closed so the
+    // agent stops retrying and reports honestly instead of blind-retrying.
+    await expect(
+      connector.execute('recall_message', { message_id: sent.message_id }, ctx()),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      message: /window has closed|24 hours/i,
+      upstream: { code: '42052' },
+    });
+    expect(mock.recalledMsgIds).toHaveLength(recalledBefore);
+  });
+
+  it('recall_message keeps the token-rejection mapping unchanged (operator creds, never auth_expired)', async () => {
+    mock.failNext({ errcode: 42001, message: 'access token expired' });
+    await expect(
+      connector.execute('recall_message', { message_id: 'wcmsg_any' }, ctx()),
+    ).rejects.toMatchObject({
+      code: 'upstream_error',
+      retryable: false,
+      message: /credential|wecom-creds/i,
+    });
+  });
 });
 
 /** Seam A slice: the same governance as any connector, through the boundary. */
@@ -429,5 +504,57 @@ describe('WeComConnector (Seam A slice)', () => {
     if (!result.ok) expect(result.error.code).toBe('validation_error');
     expect(mock.sentChatMessages).toHaveLength(sentBefore);
     expect(audit.list()[0]).toMatchObject({ errorCode: 'validation_error' });
+  });
+
+  it('recall_message flows through the destructive path: forbidden without the acknowledged allowlist entry (#60, ADR-0018)', async () => {
+    // Replace semantics: an allowlist that omits recall_message is the
+    // unacknowledged case — the destructive class is default-deny.
+    const { executor } = makeExecutor({ allowed: ['send_message'] });
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'recall_message',
+      { message_id: 'wcmsg_any' },
+      'rpc',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forbidden');
+    expect(mock.recalledMsgIds).toHaveLength(0);
+  });
+
+  it('recall_message executes when allowlisted and lands a stamped audit row (#60, ADR-0018)', async () => {
+    const { executor, audit } = makeExecutor({ allowed: ['send_message', 'recall_message'] });
+    const sent = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'send_message',
+      { chat_id: 'chat-1', content: 'recall me' },
+      'rpc',
+    );
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) return;
+    const messageId = (sent.output as { message_id: string }).message_id;
+
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'recall_message',
+      { message_id: messageId },
+      'rpc',
+    );
+    // Bare ack through the boundary too.
+    expect(result).toMatchObject({ ok: true, output: {} });
+    expect(mock.recalledMsgIds).toEqual([messageId]);
+
+    // Every destructive attempt is audited with the effects stamp.
+    const row = audit.list().at(-1);
+    expect(row).toMatchObject({
+      tenantId: TENANT,
+      connectionId: CONNECTION,
+      actionName: 'recall_message',
+      source: 'rpc',
+      success: true,
+    });
+    expect(row?.metadata).toMatchObject({ effects: 'destructive' });
   });
 });

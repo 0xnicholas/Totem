@@ -358,6 +358,21 @@ connection)。企微对超频消息**静默丢弃**(接口不报错:每成员 30
 `validation` 拒绝(#56 错误语义修复:此前飞书路径会以 opaque
 `upstream_error` 失败)。
 
+`recall_message`(#60,破坏类 ADR-0018):撤回经**同一连接**发送的消息,
+入参即 `send_message` 返回的 opaque `message_id`,输出为空 ack(成功即
+全部语义,上游无可策展内容)。撤回窗口由上游定义(企微当前为 24 小时,
+客户端可见文案可能随上游调整):窗口已关闭 = **不可重试**的
+`upstream_error`(消息明说窗口已关,agent 不得盲目重试);`message_id`
+上游不认识 = `not_found`("从未存在"与"窗口已关"可区分)。token 拒收
+沿用企微既有映射(运营方凭证问题,永非 `auth_expired`,ADR-0017)。
+治理零新增接线:`effects: 'destructive'` 声明即继承 ADR-0018 全类契约
+(allowlist 需 `allowDestructive: true` 显式确认、入参失败关闭扫描、
+必留审计带 `metadata.effects` 戳记且豁免 error-only 模式、MCP 投影
+`destructiveHint`)。实现批次:企微首批(message/recall,仅可撤回本应用
+发送的消息;appchat 路径 msgid 是否可撤回上游未文档化,connector 尝试
+并如实映射,live pass #57 钉死);飞书/钉钉为目录覆盖缺口,后续批次补齐
+(delete_doc 先例)。
+
 ---
 
 *标准来源:StackOne 官方文档(webhooks / platform-events / Actions RPC OpenAPI /

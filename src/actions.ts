@@ -298,6 +298,17 @@ export interface SendMessageOutput {
   message_id: string;
 }
 
+export interface RecallMessageInput {
+  /** The opaque message_id a prior send_message returned on the same connection. */
+  message_id: string;
+}
+
+/**
+ * recall_message's output is a bare ack (#60): the upstream returns no
+ * content worth curating — success IS the response.
+ */
+export type RecallMessageOutput = Record<string, never>;
+
 const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
   type: 'object',
   additionalProperties: false,
@@ -711,6 +722,23 @@ const sendMessageOutputSchema: JSONSchemaType<SendMessageOutput> = {
   required: ['message_id'],
 };
 
+const recallMessageInputSchema: JSONSchemaType<RecallMessageInput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message_id: { type: 'string', minLength: 1 },
+  },
+  required: ['message_id'],
+};
+
+/** Bare ack (#60): an empty object — no content beyond success itself. */
+const recallMessageOutputSchema: JSONSchemaType<RecallMessageOutput> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {},
+  required: [],
+};
+
 const getDocMetadataOutputSchema: JSONSchemaType<GetDocMetadataOutput> = {
   type: 'object',
   additionalProperties: false,
@@ -988,5 +1016,26 @@ export const MESSAGING_ACTIONS: Action[] = [
     inputSchema: sendMessageInputSchema,
     outputSchema: sendMessageOutputSchema,
     effects: 'write',
+  },
+  {
+    name: 'recall_message',
+    // Destructive class (ADR-0018, #60): recalling deletes a sent message,
+    // irreversible from the platform's and agent's world — the class
+    // contract (acknowledged allowlisting, fail-closed input screening,
+    // always-audited with the effects stamp, MCP destructiveHint) rides on
+    // this effects value alone, same as delete_doc.
+    description:
+      'Recall a message previously sent through this connection, by the opaque message_id ' +
+      'that send_message returned. DESTRUCTIVE and irreversible: the message is deleted for ' +
+      'every recipient and cannot be restored by agents; confirm with the user before calling. ' +
+      'Recalls are keyed to the same connection that sent the message. The recall window is ' +
+      'upstream-defined (currently 24 hours on WeCom): once it closes the call fails with a ' +
+      'non-retryable upstream_error, and an unknown message_id fails with not_found — do not ' +
+      'blind-retry either. The guarantee is pinned for user-path messages; whether chat-path ' +
+      '(appchat) message ids are recallable is upstream-undocumented and attempted as-is. ' +
+      'Returns an empty acknowledgement; there is no output beyond success.',
+    inputSchema: recallMessageInputSchema,
+    outputSchema: recallMessageOutputSchema,
+    effects: 'destructive',
   },
 ];
