@@ -583,6 +583,17 @@ export class DingTalkConnector implements IConnector {
 
       send_message: async (args: SendMessageInput, ctx) => {
         const input = args;
+        // #59: markdown is not implemented on DingTalk messaging — reject
+        // loudly BEFORE any upstream call (§11.4 input rule, the same
+        // posture as the email rejection below), never silently degrade to
+        // text; the agent can resend without `format`.
+        if (input.format === 'markdown') {
+          throw new ActionError(
+            'validation_error',
+            'send_message on DingTalk does not implement format=markdown yet — ' +
+              'resend without `format` to send plain text.',
+          );
+        }
         // ADR-0014 §4 input rule (first live case; consumption standard
         // §11.4): DingTalk exposes no email→userid lookup API, so the
         // canonical email input cannot be honored — fail validation loudly

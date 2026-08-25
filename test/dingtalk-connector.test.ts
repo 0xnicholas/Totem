@@ -247,6 +247,26 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(mock.sentGroupMessages).toHaveLength(sentBefore);
   });
 
+  it('send_message rejects format=markdown with validation_error before any upstream call (#59)', async () => {
+    // DingTalk messaging does not implement markdown yet — the same §11.4
+    // input-rule posture as the email rejection: fail loudly, never
+    // silently degrade to text; the agent can resend without `format`.
+    const sentBefore = mock.sentGroupMessages.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: '# hi', format: 'markdown' },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+      message: /markdown/i,
+    });
+    // Nothing left the platform: no message was sent upstream.
+    expect(mock.sentGroupMessages).toHaveLength(sentBefore);
+  });
+
   it('send_message maps an unknown chat to not_found', async () => {
     await expect(
       connector.execute(

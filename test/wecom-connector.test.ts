@@ -167,6 +167,56 @@ describe('WeComConnector (Seam B)', () => {
     ).rejects.toMatchObject({ code: 'not_found', retryable: false });
   });
 
+  it('send_message with format=markdown sends msgtype markdown on the user path (#59)', async () => {
+    const output = (await connector.execute(
+      'send_message',
+      { email: 'zhangsan@corp.example', content: '# deploy **done**', format: 'markdown' },
+      ctx(),
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^wcmsg_/);
+    // The markdown branch: msgtype flips and the content rides the
+    // markdown body field — passed through verbatim, no platform-side
+    // parsing (pure translator, ADR-0003).
+    expect(mock.sentUserMessages.at(-1)).toEqual({
+      touser: 'zhangsan',
+      agentId: Number(AGENT_ID),
+      msgtype: 'markdown',
+      content: '# deploy **done**',
+    });
+  });
+
+  it('send_message with format=markdown sends msgtype markdown on the chat path (#59)', async () => {
+    const output = (await connector.execute(
+      'send_message',
+      { chat_id: 'chat-1', content: '## build *green*', format: 'markdown' },
+      ctx(),
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^wcchat_/);
+    // appchat/send supports markdown too (official docs) — same verbatim
+    // pass-through as the user path.
+    expect(mock.sentChatMessages.at(-1)).toEqual({
+      chatid: 'chat-1',
+      msgtype: 'markdown',
+      content: '## build *green*',
+    });
+  });
+
+  it('send_message with explicit format=text stays on the text msgtype (#59 regression)', async () => {
+    const output = (await connector.execute(
+      'send_message',
+      { chat_id: 'chat-1', content: 'plain as ever', format: 'text' },
+      ctx(),
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^wcchat_/);
+    // Explicit text = the absent-format default: byte-identical to the
+    // pre-#59 request shape.
+    expect(mock.sentChatMessages.at(-1)).toEqual({
+      chatid: 'chat-1',
+      msgtype: 'text',
+      content: 'plain as ever',
+    });
+  });
+
   it('send_message maps a frequency-limit errcode (45009) to rate_limited (retryable)', async () => {
     mock.failNext({ errcode: 45009, message: 'api freq out of limit' });
     await expect(

@@ -327,11 +327,21 @@ ADR-0010);目录无版本号,pin 机制 v2。
 - **input**:provider 兑现不了的可选参数 = `validation` 错误,**不会静默忽略**
   (否则 agent 误以为参数已生效)。
 
-### 11.5 消息域(ADR-0016)
+### 11.5 消息域(ADR-0016;`format` 字段 ADR-0020)
 
-首个非文档 canonical 动作 `send_message` 进入目录:纯文本内容,寻址为
+首个非文档 canonical 动作 `send_message` 进入目录:内容为消息文本
+(默认纯文本,可选 `format` 见下),寻址为
 `{ email, chat_id }` 恰好取一(`email` = 自然键,`chat_id` = opaque 群 ID);
 以连接所有者身份发送。接收消息方向属 v2 事件面(§8),不在动作目录。
+
+`format` 可选字段(#59,minor 变更):`text`(默认,缺省即纯文本,行为与
+此前逐字节一致)/ `markdown`(内容为 markdown 源码,connector 原样透传,
+平台侧不做任何 markdown 解析——纯翻译器,ADR-0003)。各 provider 的 markdown
+子集声明:**企微实现** `format=markdown`(msgtype markdown,官方文档定义的
+markdown **子集**,内容 ≤ 2048 字节),user 路径(message/send)与 chat 路径
+(appchat/send)均支持;**飞书 / 钉钉暂未实现**,收到 `format=markdown` 时按
+§11.4 input 规则以 `validation_error` **响亮拒绝**(不会静默降级为纯文本,
+也不是 `upstream_error`——上游没有失败),agent 可去掉 `format` 重发。
 
 实现批次:飞书首批(完整双路径);钉钉第二批(#49,仅 chat 路径——
 `chat_id` = openConversationId,以应用机器人身份发送,需管理员同步 robotCode);

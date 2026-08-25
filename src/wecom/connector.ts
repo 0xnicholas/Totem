@@ -99,9 +99,12 @@ export function mapWeComError(err: WeComApiError): ActionError {
  *   text}` — and ONLY groups the app created itself (appchat/create):
  *   arbitrary org group chats are unreachable (errcode 86008's whole
  *   meaning), the same app-created universe as DingTalk messaging.
- * - `content` → msgtype `text` only. WeCom has a `markdown` msgtype — a
- *   future content upgrade, the same deferred decision as the Feishu
- *   batch.
+ * - `content` → msgtype `text` by default; `format=markdown` (#59) flips
+ *   BOTH paths to msgtype `markdown` with the `markdown: {content}` body —
+ *   message/send and appchat/send both support it (official docs: markdown
+ *   subset, content ≤ 2048 bytes). The content is passed through verbatim:
+ *   the connector stays a pure translator (ADR-0003), no platform-side
+ *   markdown parsing.
  *
  * Silently-dropped limits (recorded here because upstream never errors on
  * them — unmappable by construction): message/send drops beyond 30
@@ -172,9 +175,9 @@ export class WeComConnector implements IConnector {
           // agentid is the USER path's identity bit only — the appchat path
           // carries no agentid, so the chat branch never resolves it.
           const agentid = await this.resolveAgentId(ctx.tenantId);
-          return this.sendToUser(input.email, input.content, agentid, ctx);
+          return this.sendToUser(input.email, input.content, input.format, agentid, ctx);
         }
-        return this.sendToChat(input.chat_id!, input.content, ctx);
+        return this.sendToChat(input.chat_id!, input.content, input.format, ctx);
       },
     };
   }
@@ -193,6 +196,7 @@ export class WeComConnector implements IConnector {
   private async sendToUser(
     email: string,
     content: string,
+    format: SendMessageInput['format'],
     agentid: number,
     ctx: ActionContext,
   ): Promise<SendMessageOutput> {
@@ -202,11 +206,10 @@ export class WeComConnector implements IConnector {
       token: ctx.token,
       body: {
         touser: userid,
-        msgtype: 'text',
         // WeCom documents agentid as an integer (整型) — the string the
         // creds store holds is converted at this boundary only.
         agentid,
-        text: { content },
+        ...messageBody(format, content),
       },
     });
     if (!response.msgid) {
@@ -226,6 +229,7 @@ export class WeComConnector implements IConnector {
   private async sendToChat(
     chatId: string,
     content: string,
+    format: SendMessageInput['format'],
     ctx: ActionContext,
   ): Promise<SendMessageOutput> {
     const response = await this.wecomRequest<AppChatSendResponse>('/cgi-bin/appchat/send', {
@@ -233,8 +237,7 @@ export class WeComConnector implements IConnector {
       token: ctx.token,
       body: {
         chatid: chatId,
-        msgtype: 'text',
-        text: { content },
+        ...messageBody(format, content),
       },
     });
     if (!response.msgid) {
@@ -340,6 +343,23 @@ export class WeComConnector implements IConnector {
     if (err instanceof WeComApiError) return mapWeComError(err);
     return err;
   }
+}
+
+/**
+ * The msgtype + body fields both send paths share (#59): msgtype markdown
+ * carries `markdown: {content}` (supported on message/send and
+ * appchat/send alike — official docs, markdown subset, content ≤ 2048
+ * bytes), everything else is `text: {content}`. Content passes through
+ * verbatim in both cases, and absent format IS text, so the default path
+ * is byte-identical to pre-#59.
+ */
+function messageBody(
+  format: SendMessageInput['format'],
+  content: string,
+): { msgtype: string; markdown?: { content: string }; text?: { content: string } } {
+  return format === 'markdown'
+    ? { msgtype: 'markdown', markdown: { content } }
+    : { msgtype: 'text', text: { content } };
 }
 
 /** The get_userid_by_email response (official-docs shape). */

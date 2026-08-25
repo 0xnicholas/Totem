@@ -214,6 +214,27 @@ describe('FeishuConnector (Seam B)', () => {
       .then(() => undefined, (e: unknown) => e);
     expect(err).toMatchObject({ code: 'rate_limited', retryable: true });
   });
+
+  it('send_message rejects format=markdown with validation_error before any upstream call (#59)', async () => {
+    // Feishu does not implement markdown yet — the §11.4 input rule: fail
+    // loudly, never silently degrade to text; the agent can resend without
+    // `format`.
+    const sentBefore = mock.sentMessages.length;
+    const err = await connector
+      .execute(
+        'send_message',
+        { email: 'zhangsan@corp.com', content: '# hi', format: 'markdown' },
+        ctx,
+      )
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+      message: /markdown/i,
+    });
+    // Nothing left the platform: no message was sent upstream.
+    expect(mock.sentMessages).toHaveLength(sentBefore);
+  });
 });
 
 /**

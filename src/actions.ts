@@ -277,8 +277,20 @@ export interface SendMessageInput {
    * `email` / `chat_id` is required.
    */
   chat_id?: string;
-  /** Plain-text message content. */
+  /**
+   * Message content, interpreted per `format`. Absent `format` (or
+   * `text`) means plain text; `markdown` means the content is markdown
+   * source, passed through verbatim — only providers that declare a
+   * markdown msgtype honor it (WeCom; #59); the rest reject it with
+   * `validation_error`.
+   */
   content: string;
+  /**
+   * Content format (`text` default / `markdown`, #59). WeCom implements
+   * `markdown` (msgtype markdown, upstream subset, ≤2048 bytes) on both
+   * send paths; Feishu/DingTalk reject it with `validation_error`.
+   */
+  format?: 'text' | 'markdown';
 }
 
 export interface SendMessageOutput {
@@ -679,6 +691,9 @@ const sendMessageInputSchema = {
     email: { type: 'string', minLength: 1 },
     chat_id: { type: 'string', minLength: 1 },
     content: { type: 'string', minLength: 1 },
+    // #59: optional like any repo-wide optional string — null is absent
+    // (the connectors only branch on the exact 'markdown' value).
+    format: { type: 'string', enum: ['text', 'markdown'], nullable: true },
   },
   required: ['content'],
   oneOf: [
@@ -959,11 +974,17 @@ export const MESSAGING_ACTIONS: Action[] = [
   {
     name: 'send_message',
     description:
-      'Send a plain-text message to a user by email, or to a chat by its opaque chat_id ' +
-      '(exactly one of email/chat_id). The message is sent with the identity of this ' +
-      "connection — the owner's identity on user-grant systems, the app identity where the " +
-      "system only knows applications (DingTalk messaging, WeCom). Returns the sent " +
-      "message's opaque message_id.",
+      'Send a message to a user by email, or to a chat by its opaque chat_id ' +
+      '(exactly one of email/chat_id). Content is plain text by default; ' +
+      'format=markdown sends it as markdown source (passed through verbatim) ' +
+      'where the provider supports it — WeCom implements format=markdown ' +
+      '(upstream markdown SUBSET, content <= 2048 bytes) on both the user and ' +
+      'chat paths; Feishu and DingTalk reject format=markdown with ' +
+      'validation_error (resend without format). The message is sent with the ' +
+      "identity of this connection — the owner's identity on user-grant " +
+      'systems, the app identity where the system only knows applications ' +
+      "(DingTalk messaging, WeCom). Returns the sent message's opaque " +
+      'message_id.',
     inputSchema: sendMessageInputSchema,
     outputSchema: sendMessageOutputSchema,
     effects: 'write',

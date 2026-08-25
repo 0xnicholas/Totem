@@ -151,9 +151,10 @@ export class MockWeComServer {
     });
 
     // POST /cgi-bin/message/send (#47, official-docs shape): body {touser,
-    // msgtype, agentid (整型), text:{content}} → {msgid}. A single invalid
-    // recipient is the all-recipients-invalid case: errcode 81013 over
-    // HTTP 200 (the documented full-failure code).
+    // msgtype, agentid (整型), text:{content}} → {msgid}; msgtype markdown
+    // (#59) carries markdown:{content} instead. A single invalid recipient
+    // is the all-recipients-invalid case: errcode 81013 over HTTP 200 (the
+    // documented full-failure code).
     this.app.post('/cgi-bin/message/send', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
@@ -163,9 +164,9 @@ export class MockWeComServer {
       const touser = body.touser;
       const msgtype = body.msgtype;
       const agentid = body.agentid;
-      const content = isRecord(body.text) && typeof body.text.content === 'string' ? body.text.content : undefined;
+      const content = readMessageContent(body);
       if (typeof touser !== 'string' || typeof msgtype !== 'string' || typeof agentid !== 'number' || typeof content !== 'string') {
-        return c.json({ errcode: 40058, errmsg: 'touser, msgtype, agentid and text.content are required' }, 200);
+        return c.json({ errcode: 40058, errmsg: 'touser, msgtype, agentid and text.content/markdown.content are required' }, 200);
       }
       if (this.options.agentId !== undefined && agentid !== Number(this.options.agentId)) {
         // Documented mismatch: the token belongs to a different app.
@@ -180,12 +181,13 @@ export class MockWeComServer {
     });
 
     // POST /cgi-bin/appchat/send (#47, official-docs shape): body {chatid,
-    // msgtype, text:{content}} → {msgid}. The chat must be one the app
-    // created (the mock's seeded universe) — an unknown chatid is errcode
-    // 86003 (参数 chatid 不存在) over HTTP 200. NOTE: the documented
-    // envelope is errcode/errmsg only; the msgid mirrors the current live
-    // behavior (SDK-observed) the connector's live pass will pin — tests
-    // script the msgid-less shape separately.
+    // msgtype, text:{content}} → {msgid}; msgtype markdown (#59) carries
+    // markdown:{content} instead. The chat must be one the app created (the
+    // mock's seeded universe) — an unknown chatid is errcode 86003 (参数
+    // chatid 不存在) over HTTP 200. NOTE: the documented envelope is
+    // errcode/errmsg only; the msgid mirrors the current live behavior
+    // (SDK-observed) the connector's live pass will pin — tests script the
+    // msgid-less shape separately.
     this.app.post('/cgi-bin/appchat/send', async (c) => {
       const scripted = this.scriptedResponse();
       if (scripted) return scripted;
@@ -194,9 +196,9 @@ export class MockWeComServer {
       const body = readJsonBody(await c.req.text());
       const chatid = body.chatid;
       const msgtype = body.msgtype;
-      const content = isRecord(body.text) && typeof body.text.content === 'string' ? body.text.content : undefined;
+      const content = readMessageContent(body);
       if (typeof chatid !== 'string' || typeof msgtype !== 'string' || typeof content !== 'string') {
-        return c.json({ errcode: 40058, errmsg: 'chatid, msgtype and text.content are required' }, 200);
+        return c.json({ errcode: 40058, errmsg: 'chatid, msgtype and text.content/markdown.content are required' }, 200);
       }
       if (!this.chats.some((chat) => chat.chatId === chatid)) {
         return c.json({ errcode: 86003, errmsg: 'chatid not exists' }, 200);
@@ -262,4 +264,13 @@ function readJsonBody(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Reads the message content from the msgtype's own body field (#59):
+ * `markdown: {content}` for msgtype markdown, `text: {content}` otherwise.
+ */
+function readMessageContent(body: Record<string, unknown>): string | undefined {
+  const field = body.msgtype === 'markdown' ? body.markdown : body.text;
+  return isRecord(field) && typeof field.content === 'string' ? field.content : undefined;
 }

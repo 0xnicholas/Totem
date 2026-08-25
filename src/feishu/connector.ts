@@ -585,6 +585,17 @@ export class FeishuConnector implements IConnector {
 
       send_message: async (args: SendMessageInput, ctx) => {
         const input = args;
+        // #59: markdown is not implemented on Feishu (markdown→post subset
+        // translation is its own design problem) — reject loudly BEFORE any
+        // upstream call (§11.4 input rule), never silently degrade to text;
+        // the agent can resend without `format`.
+        if (input.format === 'markdown') {
+          throw new ActionError(
+            'validation_error',
+            'send_message on Feishu does not implement format=markdown yet — ' +
+              'resend without `format` to send plain text.',
+          );
+        }
         // ADR-0016: the connection owner's identity (user access token),
         // natural-key email addressing or the opaque chat_id — never
         // provider tokens (open_id/user_id/union_id). Exactly-one-of is
