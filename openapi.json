@@ -1158,6 +1158,17 @@
               "text",
               "markdown"
             ]
+          },
+          "mentions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
           }
         },
         "required": [

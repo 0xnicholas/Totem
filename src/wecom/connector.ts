@@ -128,6 +128,16 @@ export function mapWeComError(err: WeComApiError): ActionError {
  *   connector owns only the recall-specific errcode mapping (unknown msgid
  *   → not_found, closed 24h window → non-retryable upstream_error — see
  *   RECALL_* codes).
+ * - `mentions` (#61) → chat path only: every mention email resolves through
+ *   the same get_userid_by_email two-namespace probe as recipient
+ *   addressing (the `'@all'` sentinel passes through unresolved), then text
+ *   carries `mentioned_list` and markdown appends inline `<@userid>` tokens
+ *   to the content — the two mechanisms the official appchat/send docs
+ *   define. `@all`+markdown and any mentions on the user path are
+ *   unhonorable upstream (message/send has no mention field): both reject
+ *   with `validation_error` before any upstream call (§11.4 input rule).
+ *   One unresolvable email fails the WHOLE send with not_found — atomic
+ *   mentions, no partial notification.
  *
  * Silently-dropped limits (recorded here because upstream never errors on
  * them — unmappable by construction): message/send drops beyond 30
@@ -198,12 +208,24 @@ export class WeComConnector implements IConnector {
       send_message: async (args: SendMessageInput, ctx) => {
         const input = args;
         if (input.email !== undefined) {
+          // #61: upstream mentions are group-scoped — message/send has no
+          // mention mechanism (mentioned_list exists only on appchat/send
+          // text) — so the user path rejects them loudly BEFORE any
+          // upstream call (§11.4 input rule, the #59 format posture).
+          if (input.mentions !== undefined && input.mentions.length > 0) {
+            throw new ActionError(
+              'validation_error',
+              'send_message on WeCom implements mentions on the chat path only — upstream ' +
+                'mentions are group-scoped (message/send has no mention field). Resend to a ' +
+                'chat_id, or drop `mentions`.',
+            );
+          }
           // agentid is the USER path's identity bit only — the appchat path
           // carries no agentid, so the chat branch never resolves it.
           const agentid = await this.resolveAgentId(ctx.tenantId);
           return this.sendToUser(input.email, input.content, input.format, agentid, ctx);
         }
-        return this.sendToChat(input.chat_id!, input.content, input.format, ctx);
+        return this.sendToChat(input.chat_id!, input.content, input.format, input.mentions, ctx);
       },
 
       recall_message: async (args: RecallMessageInput, ctx) => {
@@ -305,14 +327,38 @@ export class WeComConnector implements IConnector {
     chatId: string,
     content: string,
     format: SendMessageInput['format'],
+    mentions: string[] | undefined,
     ctx: ActionContext,
   ): Promise<SendMessageOutput> {
+    // #61: mention translation is pinned against the official appchat/send
+    // docs — text carries `mentioned_list` (userids + the '@all' literal),
+    // markdown has no mentioned_list and no documented '@all', only the
+    // inline `<@userid>` syntax (5.0.6+). The '@all'+markdown combo is
+    // therefore unhonorable: reject BEFORE resolving anything (§11.4 input
+    // rule), never silently drop the sentinel.
+    if (format === 'markdown' && mentions?.includes('@all')) {
+      throw new ActionError(
+        'validation_error',
+        'send_message on WeCom cannot @all with format=markdown — appchat markdown supports ' +
+          'only inline <@userid> mentions, no @all. Resend as text, or mention members by email.',
+      );
+    }
+    // One resolution pass, in mention order; the '@all' sentinel needs none.
+    // Any email miss fails the WHOLE send with not_found before anything
+    // goes out — atomic mentions, no partial notification (#61 spec).
+    const resolved = mentions?.length
+      ? await this.resolveMentions(mentions, ctx.token)
+      : undefined;
+    const markdownSuffix =
+      format === 'markdown' && resolved?.length
+        ? '\n' + resolved.map((userid) => `<@${userid}>`).join(' ')
+        : '';
     const response = await this.wecomRequest<AppChatSendResponse>('/cgi-bin/appchat/send', {
       method: 'POST',
       token: ctx.token,
       body: {
         chatid: chatId,
-        ...messageBody(format, content),
+        ...messageBody(format, content + markdownSuffix, resolved),
       },
     });
     if (!response.msgid) {
@@ -368,6 +414,24 @@ export class WeComConnector implements IConnector {
         'email namespace resolved it)',
       { upstream: { code: String(USERID_NOT_FOUND), message: 'userid not found' } },
     );
+  }
+
+  /**
+   * mention emails → userids in mention order (#61): the '@all' sentinel
+   * passes through unresolved, every email goes through the same
+   * two-namespace probe as recipient addressing. Sequential on purpose —
+   * get_userid_by_email locks for a day after many errors. Any miss throws
+   * (not_found), failing the whole send before anything goes out.
+   */
+  private async resolveMentions(
+    mentions: string[],
+    token: string | undefined,
+  ): Promise<string[]> {
+    const resolved: string[] = [];
+    for (const mention of mentions) {
+      resolved.push(mention === '@all' ? mention : await this.resolveUserid(mention, token));
+    }
+    return resolved;
   }
 
   /** The connection's identity, as the integer message/send wants it. */
@@ -431,10 +495,17 @@ export class WeComConnector implements IConnector {
 function messageBody(
   format: SendMessageInput['format'],
   content: string,
-): { msgtype: string; markdown?: { content: string }; text?: { content: string } } {
-  return format === 'markdown'
-    ? { msgtype: 'markdown', markdown: { content } }
-    : { msgtype: 'text', text: { content } };
+  mentionedList?: string[],
+): { msgtype: string; markdown?: { content: string }; text?: { content: string; mentioned_list?: string[] } } {
+  if (format === 'markdown') {
+    return { msgtype: 'markdown', markdown: { content } };
+  }
+  return {
+    msgtype: 'text',
+    // mentioned_list is the appchat/send text mention field (#61); absent
+    // mentions keep the pre-#61 request shape byte-identical.
+    text: mentionedList?.length ? { content, mentioned_list: mentionedList } : { content },
+  };
 }
 
 /** The get_userid_by_email response (official-docs shape). */

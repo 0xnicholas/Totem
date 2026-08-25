@@ -594,6 +594,17 @@ export class DingTalkConnector implements IConnector {
               'resend without `format` to send plain text.',
           );
         }
+        // #61: DingTalk @-addressing is mobile-number based — email→mobile
+        // lookup (or explicit rejection) is its own batch's question. Reject
+        // loudly BEFORE any upstream call (§11.4 input rule), never silently
+        // drop the mentions.
+        if (input.mentions !== undefined && input.mentions.length > 0) {
+          throw new ActionError(
+            'validation_error',
+            'send_message on DingTalk does not implement mentions yet — ' +
+              'resend without `mentions`.',
+          );
+        }
         // ADR-0014 §4 input rule (first live case; consumption standard
         // §11.4): DingTalk exposes no email→userid lookup API, so the
         // canonical email input cannot be honored — fail validation loudly

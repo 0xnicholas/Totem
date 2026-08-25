@@ -217,6 +217,102 @@ describe('WeComConnector (Seam B)', () => {
     });
   });
 
+  it('send_message with mentions resolves emails to userids into mentioned_list on the chat text path (#61)', async () => {
+    const lookupsBefore = mock.useridLookups.length;
+    const output = (await connector.execute(
+      'send_message',
+      {
+        chat_id: 'chat-1',
+        content: 'release blocked',
+        mentions: ['zhangsan@corp.example', 'wangwu@personal.example', '@all'],
+      },
+      ctx(),
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^wcchat_/);
+    // Every mention email goes through the same two-namespace probe as
+    // recipient addressing; the '@all' sentinel passes through unresolved.
+    expect(mock.useridLookups.slice(lookupsBefore)).toEqual([
+      { email: 'zhangsan@corp.example', emailType: 1 },
+      { email: 'wangwu@personal.example', emailType: 1 },
+      { email: 'wangwu@personal.example', emailType: 2 },
+    ]);
+    // appchat/send text carries mentioned_list (official docs): resolved
+    // userids in mention order, '@all' literal last.
+    expect(mock.sentChatMessages.at(-1)).toEqual({
+      chatid: 'chat-1',
+      msgtype: 'text',
+      content: 'release blocked',
+      mentionedList: ['zhangsan', 'wangwu', '@all'],
+    });
+  });
+
+  it('send_message with mentions fails the whole send with not_found when one email misses, nothing sent (#61)', async () => {
+    const sentBefore = mock.sentChatMessages.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        {
+          chat_id: 'chat-1',
+          content: 'x',
+          mentions: ['zhangsan@corp.example', 'ghost@nowhere.example'],
+        },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: 'not_found', retryable: false });
+    expect(mock.sentChatMessages).toHaveLength(sentBefore);
+  });
+
+  it('send_message with format=markdown composes mentions as inline <@userid> tokens (#61)', async () => {
+    const output = (await connector.execute(
+      'send_message',
+      {
+        chat_id: 'chat-1',
+        content: '## deploy **blocked**',
+        format: 'markdown',
+        mentions: ['zhangsan@corp.example', 'lisi@personal.example'],
+      },
+      ctx(),
+    )) as { message_id: string };
+    expect(output.message_id).toMatch(/^wcchat_/);
+    // appchat markdown has no mentioned_list upstream — the documented
+    // mention syntax is inline <@userid> in the content (5.0.6+), so the
+    // connector appends one token per resolved mention.
+    expect(mock.sentChatMessages.at(-1)).toEqual({
+      chatid: 'chat-1',
+      msgtype: 'markdown',
+      content: '## deploy **blocked**\n<@zhangsan> <@lisi>',
+    });
+  });
+
+  it('send_message rejects @all with format=markdown (no upstream @all in appchat markdown) (#61)', async () => {
+    const sentBefore = mock.sentChatMessages.length;
+    const lookupsBefore = mock.useridLookups.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: '## hi', format: 'markdown', mentions: ['@all'] },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: 'validation_error', retryable: false });
+    // Rejected BEFORE any upstream call — no lookups, nothing sent.
+    expect(mock.sentChatMessages).toHaveLength(sentBefore);
+    expect(mock.useridLookups).toHaveLength(lookupsBefore);
+  });
+
+  it('send_message rejects mentions on the user path (upstream mentions are group-scoped) (#61)', async () => {
+    const sentBefore = mock.sentUserMessages.length;
+    const lookupsBefore = mock.useridLookups.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        { email: 'zhangsan@corp.example', content: 'x', mentions: ['lisi@personal.example'] },
+        ctx(),
+      ),
+    ).rejects.toMatchObject({ code: 'validation_error', retryable: false });
+    expect(mock.sentUserMessages).toHaveLength(sentBefore);
+    expect(mock.useridLookups).toHaveLength(lookupsBefore);
+  });
+
   it('send_message maps a frequency-limit errcode (45009) to rate_limited (retryable)', async () => {
     mock.failNext({ errcode: 45009, message: 'api freq out of limit' });
     await expect(
@@ -504,6 +600,39 @@ describe('WeComConnector (Seam A slice)', () => {
     if (!result.ok) expect(result.error.code).toBe('validation_error');
     expect(mock.sentChatMessages).toHaveLength(sentBefore);
     expect(audit.list()[0]).toMatchObject({ errorCode: 'validation_error' });
+  });
+
+  it('rejects an empty mentions array at the boundary (validation_error, #61)', async () => {
+    const { executor } = makeExecutor({ allowed: ['send_message'] });
+    const sentBefore = mock.sentChatMessages.length;
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'send_message',
+      { chat_id: 'chat-1', content: 'x', mentions: [] },
+      'rpc',
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(mock.sentChatMessages).toHaveLength(sentBefore);
+  });
+
+  it('passes mentions through the boundary into mentioned_list (#61)', async () => {
+    const { executor } = makeExecutor({ allowed: ['send_message'] });
+    const result = await executor.executeAction(
+      TENANT,
+      CONNECTION,
+      'send_message',
+      { chat_id: 'chat-1', content: 'boundary hello', mentions: ['zhangsan@corp.example'] },
+      'rpc',
+    );
+    expect(result.ok).toBe(true);
+    expect(mock.sentChatMessages.at(-1)).toEqual({
+      chatid: 'chat-1',
+      msgtype: 'text',
+      content: 'boundary hello',
+      mentionedList: ['zhangsan'],
+    });
   });
 
   it('recall_message flows through the destructive path: forbidden without the acknowledged allowlist entry (#60, ADR-0018)', async () => {

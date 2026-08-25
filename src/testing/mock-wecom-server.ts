@@ -45,11 +45,13 @@ export interface RecordedUserMessage {
   content: string;
 }
 
-/** An app-sent chat message the mock recorded (#47). */
+/** An app-sent chat message the mock recorded (#47); mentioned_list is the text msgtype's @-mention list (#61). */
 export interface RecordedChatMessage {
   chatid: string;
   msgtype: string;
   content: string;
+  /** The text body's mentioned_list (#61) — absent when the send carried none. */
+  mentionedList?: string[];
 }
 
 /** One email→userid lookup the mock served (#47), with the email_type namespace probed. */
@@ -216,7 +218,11 @@ export class MockWeComServer {
         return c.json({ errcode: 86003, errmsg: 'chatid not exists' }, 200);
       }
       const msgid = `wcchat_${randomUUID()}`;
-      this.sentChatMessages.push({ chatid, msgtype, content });
+      const textField = isRecord(body.text) ? body.text : undefined;
+      const mentionedList = Array.isArray(textField?.mentioned_list)
+        ? (textField.mentioned_list as string[])
+        : undefined;
+      this.sentChatMessages.push({ chatid, msgtype, content, ...(mentionedList ? { mentionedList } : {}) });
       this.issuedMsgIds.add(msgid);
       return c.json({ errcode: 0, errmsg: 'ok', msgid });
     });

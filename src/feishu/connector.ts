@@ -596,6 +596,17 @@ export class FeishuConnector implements IConnector {
               'resend without `format` to send plain text.',
           );
         }
+        // #61: @-mentions need batch email→user_id translation (the Feishu
+        // `at` tag carries user_id, not email) — its own batch. Reject
+        // loudly BEFORE any upstream call (§11.4 input rule), never
+        // silently drop the mentions.
+        if (input.mentions !== undefined && input.mentions.length > 0) {
+          throw new ActionError(
+            'validation_error',
+            'send_message on Feishu does not implement mentions yet — ' +
+              'resend without `mentions`.',
+          );
+        }
         // ADR-0016: the connection owner's identity (user access token),
         // natural-key email addressing or the opaque chat_id — never
         // provider tokens (open_id/user_id/union_id). Exactly-one-of is

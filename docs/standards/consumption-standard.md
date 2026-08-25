@@ -327,7 +327,7 @@ ADR-0010);目录无版本号,pin 机制 v2。
 - **input**:provider 兑现不了的可选参数 = `validation` 错误,**不会静默忽略**
   (否则 agent 误以为参数已生效)。
 
-### 11.5 消息域(ADR-0016;`format` 字段 ADR-0020)
+### 11.5 消息域(ADR-0016;`format` 字段 ADR-0020;`mentions` 字段 ADR-0021)
 
 首个非文档 canonical 动作 `send_message` 进入目录:内容为消息文本
 (默认纯文本,可选 `format` 见下),寻址为
@@ -357,6 +357,22 @@ connection)。企微对超频消息**静默丢弃**(接口不报错:每成员 30
 `chat_id`。显式 `null` 寻址(如 `{email: null}`)同样在边界被
 `validation` 拒绝(#56 错误语义修复:此前飞书路径会以 opaque
 `upstream_error` 失败)。
+
+`mentions` 可选字段(#61,ADR-0021,minor 变更):要 @ 的成员**邮箱**数组
+(自然键寻址,ADR-0016 的延伸),字面量 `'@all'` 为数组内哨兵值,表示
+提醒所有人;缺省即无 @,行为与此前逐字节一致。**企微实现,仅 chat
+路径**:每个 mention 邮箱经 get_userid_by_email 双命名空间探针解析为
+userid(`@all` 不解析、原样透传);text 消息携带 `mentioned_list`
+(官方 appchat/send 字段),markdown 则把 `<@userid>` 内联记号逐个追加到
+content(markdown 上游无 mentioned_list,仅支持内联语法,企微 5.0.6+;
+追加的 `<@userid>` 记号与 content 共享同一 ≤2048 字节预算——沿用
+ADR-0020「声明不强制」姿态,上限由上游兜底)。
+不可兑现的组合按 §11.4 input 规则**响亮拒绝**(`validation_error`,
+先于任何上游调用):user 路径带 mentions(message/send 上游无 @ 机制)、
+`@all` 搭配 `format=markdown`(markdown 无文档化 @all)、飞书/钉钉收到
+任何 mentions(飞书 `at` 标签需批量 email→user_id 翻译、钉钉 @ 基于手机号,
+各自成批)。解析语义**原子化**:任一 mention 邮箱解析失败,整发以
+`not_found` 失败、什么都不发——无部分通知,输出 schema 不变。
 
 `recall_message`(#60,破坏类 ADR-0018):撤回经**同一连接**发送的消息,
 入参即 `send_message` 返回的 opaque `message_id`,输出为空 ack(成功即

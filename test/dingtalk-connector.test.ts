@@ -267,6 +267,25 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(mock.sentGroupMessages).toHaveLength(sentBefore);
   });
 
+  it('send_message rejects mentions with validation_error before any upstream call (#61)', async () => {
+    // DingTalk @-addressing is mobile-number based — email→mobile lookup is
+    // its own batch's open question (#61). Until then the §11.4 input rule:
+    // fail loudly, never silently drop the mentions.
+    const sentBefore = mock.sentGroupMessages.length;
+    await expect(
+      connector.execute(
+        'send_message',
+        { chat_id: 'chat-1', content: 'hi', mentions: ['zhangsan@corp.com'] },
+        { tenantId: TENANT, connectionId: CONNECTION, token: accessToken },
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+      message: /mentions/i,
+    });
+    expect(mock.sentGroupMessages).toHaveLength(sentBefore);
+  });
+
   it('send_message maps an unknown chat to not_found', async () => {
     await expect(
       connector.execute(

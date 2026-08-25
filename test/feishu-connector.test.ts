@@ -235,6 +235,26 @@ describe('FeishuConnector (Seam B)', () => {
     // Nothing left the platform: no message was sent upstream.
     expect(mock.sentMessages).toHaveLength(sentBefore);
   });
+
+  it('send_message rejects mentions with validation_error before any upstream call (#61)', async () => {
+    // Feishu @-mentions need email→user_id batch translation — its own
+    // batch (#61). Until then the §11.4 input rule: fail loudly, never
+    // silently drop the mentions.
+    const sentBefore = mock.sentMessages.length;
+    const err = await connector
+      .execute(
+        'send_message',
+        { email: 'zhangsan@corp.com', content: 'hi', mentions: ['lisi@corp.com'] },
+        ctx,
+      )
+      .then(() => undefined, (e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+      message: /mentions/i,
+    });
+    expect(mock.sentMessages).toHaveLength(sentBefore);
+  });
 });
 
 /**

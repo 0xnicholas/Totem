@@ -291,6 +291,17 @@ export interface SendMessageInput {
    * send paths; Feishu/DingTalk reject it with `validation_error`.
    */
   format?: 'text' | 'markdown';
+  /**
+   * Members to @-mention, by natural-key email (ADR-0016), with the
+   * literal `'@all'` as the mention-everyone sentinel (#61). WeCom
+   * implements mentions on the chat path only — upstream mentions are
+   * group-scoped (appchat/send: `mentioned_list` for text, inline
+   * `<@userid>` for markdown); the user path rejects them with
+   * `validation_error`, as do Feishu/DingTalk until their batches. One
+   * unresolvable email fails the whole send with `not_found` — nothing
+   * is sent.
+   */
+  mentions?: string[];
 }
 
 export interface SendMessageOutput {
@@ -705,6 +716,13 @@ const sendMessageInputSchema = {
     // #59: optional like any repo-wide optional string — null is absent
     // (the connectors only branch on the exact 'markdown' value).
     format: { type: 'string', enum: ['text', 'markdown'], nullable: true },
+    // #61: optional like any repo-wide optional field — null is absent.
+    mentions: {
+      type: 'array',
+      items: { type: 'string', minLength: 1 },
+      minItems: 1,
+      nullable: true,
+    },
   },
   required: ['content'],
   oneOf: [
@@ -1008,7 +1026,14 @@ export const MESSAGING_ACTIONS: Action[] = [
       'where the provider supports it — WeCom implements format=markdown ' +
       '(upstream markdown SUBSET, content <= 2048 bytes) on both the user and ' +
       'chat paths; Feishu and DingTalk reject format=markdown with ' +
-      'validation_error (resend without format). The message is sent with the ' +
+      'validation_error (resend without format). Optional mentions is an array ' +
+      'of member EMAILS to @-mention, with the literal "@all" as the ' +
+      'mention-everyone sentinel (#61): WeCom implements mentions on the CHAT ' +
+      'path only (text -> mentioned_list; markdown -> inline <@userid> tokens ' +
+      'in the content; @all requires text), the user path and ' +
+      'Feishu/DingTalk reject mentions with validation_error, and one ' +
+      'unresolvable mention email fails the whole send with not_found — ' +
+      'nothing is sent. The message is sent with the ' +
       "identity of this connection — the owner's identity on user-grant " +
       'systems, the app identity where the system only knows applications ' +
       "(DingTalk messaging, WeCom). Returns the sent message's opaque " +
