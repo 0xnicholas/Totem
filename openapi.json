@@ -401,6 +401,16 @@
               "string",
               "null"
             ]
+          },
+          "doc_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "doc",
+              "sheet"
+            ]
           }
         },
         "required": [

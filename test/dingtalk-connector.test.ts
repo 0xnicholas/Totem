@@ -523,6 +523,22 @@ describe('DingTalkConnector (Seam B)', () => {
     expect(output.doc_id).toBeTruthy();
   });
 
+  it('create_doc doc_type "sheet" fails validation_error loudly (coverage gap, #64)', async () => {
+    // ADR-0014 §4 input rule: DingTalk's doc API creates online documents
+    // only (documentType 0) — a canonical optional input the provider
+    // cannot honor fails loudly, never silently (the #49 email precedent).
+    await expect(
+      connector.execute('create_doc', { title: 'X', doc_type: 'sheet' }, {
+        tenantId: TENANT,
+        connectionId: CONNECTION,
+        token: accessToken,
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+    });
+  });
+
   it('create_doc into an unknown folder maps to not_found', async () => {
     await expect(
       connector.execute('create_doc', { title: 'X', folder_id: 'no-such-folder' }, {

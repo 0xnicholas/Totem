@@ -152,12 +152,28 @@ export class FakeConnector implements IConnector {
   }
 
   private createDoc(args: CreateDocInput): CreateDocOutput {
-    const doc_id = `doc_${crypto.randomUUID()}`;
+    const doc_id =
+      args.doc_type === 'sheet' ? `sht_${crypto.randomUUID()}` : `doc_${crypto.randomUUID()}`;
+    // #64: the fake models the canonical contract — 'sheet' creates an
+    // empty spreadsheet the cell actions address immediately; seeded
+    // content is text-only and rejected for sheets exactly like the
+    // real connectors (ADR-0014 §4).
+    const sheet: FakeSheet | undefined =
+      args.doc_type === 'sheet'
+        ? { sheetId: `${doc_id}-sheet1`, sheetName: 'Sheet1', values: [] }
+        : undefined;
+    if (sheet && args.content !== undefined && args.content !== '') {
+      throw new ActionError(
+        'validation_error',
+        'content cannot seed a sheet (doc_type "sheet"): write cells with write_sheet_cells after create_doc instead',
+      );
+    }
     const doc: FakeDoc = {
       doc_id,
       title: args.title,
       content: args.content ?? '',
       ...(args.folder_id !== undefined ? { folder_id: args.folder_id } : {}),
+      ...(sheet !== undefined ? { sheet } : {}),
     };
     this.docs.set(doc_id, doc);
     return { doc_id, title: doc.title };

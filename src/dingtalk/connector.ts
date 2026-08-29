@@ -335,6 +335,18 @@ export class DingTalkConnector implements IConnector {
 
       create_doc: async (args: CreateDocInput, ctx) => {
         const input = args;
+        // #64 coverage gap (ADR-0014 §4 input rule, the #49 email
+        // precedent): the doc API creates online documents only
+        // (documentType 0) — there is no verified sheet-creation path, so
+        // doc_type "sheet" fails validation_error BEFORE any upstream
+        // call: never silently ignore a canonical input this provider
+        // cannot honor. Agents create documents (omit doc_type) here.
+        if (input.doc_type === 'sheet') {
+          throw new ActionError(
+            'validation_error',
+            'DingTalk create_doc cannot create sheets (doc_type "sheet" is unsupported here): the doc API creates online documents only. Omit doc_type to create a document',
+          );
+        }
         // Target space: an explicit folder (its nodeId IS its dentryUuid)
         // or the acting user's "我的文档" root. Live finding: the create
         // API's parentDentryId takes the folder's STORAGE dentryId, not

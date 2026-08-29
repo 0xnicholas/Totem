@@ -130,14 +130,16 @@ describe('REST discovery surface (T12, HTTP boundary)', () => {
   });
 
   it('POST /actions/search matches names and descriptions, case-insensitive', async () => {
-    // 'sheet' hits the two sheet actions by name and get_doc_metadata by
-    // description ("docx, sheet, bitable, wiki").
+    // 'sheet' hits the two sheet actions by name, get_doc_metadata by
+    // description ("docx, sheet, bitable, wiki") and create_doc by
+    // description (#64: doc_type "sheet" creates a spreadsheet).
     const byName = await discover('/actions/search', {
       method: 'POST',
       body: JSON.stringify({ query: 'sheet' }),
     });
     const nameBody = (await byName.json()) as { actions: Array<{ name: string }> };
     expect(nameBody.actions.map((a) => a.name).sort()).toEqual([
+      'create_doc',
       'get_doc_metadata',
       'read_sheet_cells',
       'write_sheet_cells',

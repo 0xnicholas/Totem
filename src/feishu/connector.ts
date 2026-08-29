@@ -238,6 +238,43 @@ export class FeishuConnector implements IConnector {
 
       create_doc: async (args: CreateDocInput, ctx) => {
         const input = args;
+        // folder_id is nullable in the schema; null means "no folder"
+        // and must not be sent as folder_token: null (both create paths).
+        const folderToken =
+          input.folder_id !== undefined && input.folder_id !== null
+            ? { folder_token: input.folder_id }
+            : {};
+        // #64: 'sheet' creates an empty spreadsheet via the sheets v3 API
+        // (scopes already in the v1 authorize set — no re-authorization);
+        // the returned spreadsheet_token IS the doc_id the cell actions
+        // address. Seeded content is text-only and cannot land in a sheet —
+        // rejected loudly (ADR-0014 §4: never silently ignore an input the
+        // provider cannot honor), so the agent uses write_sheet_cells.
+        // Explicit null content means absent (the folder_id convention).
+        if (input.doc_type === 'sheet') {
+          if (input.content !== undefined && input.content !== null && input.content !== '') {
+            throw new ActionError(
+              'validation_error',
+              'content cannot seed a sheet (doc_type "sheet"): write cells with write_sheet_cells after create_doc instead',
+            );
+          }
+          const response = await this.docsRequest<CreateSheetData>(
+            '/open-apis/sheets/v3/spreadsheets',
+            {
+              method: 'POST',
+              token: ctx.token,
+              body: {
+                title: input.title,
+                ...folderToken,
+              },
+            },
+          );
+          const output: CreateDocOutput = {
+            doc_id: response.data.spreadsheet.spreadsheet_token,
+            title: response.data.spreadsheet.title,
+          };
+          return output;
+        }
         const response = await this.docsRequest<CreateDocData>(
           '/open-apis/docx/v1/documents',
           {
@@ -245,11 +282,7 @@ export class FeishuConnector implements IConnector {
             token: ctx.token,
             body: {
               title: input.title,
-              // folder_id is nullable in the schema; null means "no folder"
-              // and must not be sent as folder_token: null.
-              ...(input.folder_id !== undefined && input.folder_id !== null
-                ? { folder_token: input.folder_id }
-                : {}),
+              ...folderToken,
             },
           },
         );
@@ -258,7 +291,8 @@ export class FeishuConnector implements IConnector {
         // through the same blocks-append path as append_doc_content. If
         // seeding fails the document exists upstream — the error message
         // says so, so the agent does not blindly retry the create.
-        if (input.content !== undefined && input.content !== '') {
+        // (Review cleanup: explicit null content means absent here too.)
+        if (input.content !== undefined && input.content !== null && input.content !== '') {
           try {
             await appendBlocks(this.request, docId, input.content, ctx.token);
           } catch (err) {
@@ -720,6 +754,11 @@ interface DocsEnvelope<T> {
 
 interface CreateDocData {
   document: { document_id: string; title: string };
+}
+
+/** #64: sheets v3 create response (live shape: the token is the doc_id). */
+interface CreateSheetData {
+  spreadsheet: { spreadsheet_token: string; title: string };
 }
 
 interface BlocksData {

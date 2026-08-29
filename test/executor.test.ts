@@ -55,6 +55,30 @@ describe('executeAction (Seam A)', () => {
     }
   });
 
+  it('create_doc doc_type "sheet" yields a spreadsheet the cell actions can use (#64)', async () => {
+    const executor = makeExecutor();
+    const created = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', {
+      title: 'Q3 numbers',
+      doc_type: 'sheet',
+    });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) return;
+    const { doc_id } = created.output as CreateDocOutput;
+
+    const written = await executor.executeAction(TENANT_A, CONN_1, 'write_sheet_cells', {
+      doc_id,
+      range: 'A1:B1',
+      values: [['h1', 'h2']],
+    });
+    expect(written).toMatchObject({ ok: true });
+
+    const read = await executor.executeAction(TENANT_A, CONN_1, 'read_sheet_cells', {
+      doc_id,
+      range: 'A1:B1',
+    });
+    expect(read).toMatchObject({ ok: true, output: { doc_id, data: [['h1', 'h2']] } });
+  });
+
   it('accepts optional input properties', async () => {
     const executor = makeExecutor();
     const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', {
@@ -147,6 +171,21 @@ describe('executeAction (Seam A)', () => {
       if (result.ok) return;
       expect(result.error.details).toEqual([
         { path: '/limit', keyword: 'minimum', message: 'must be >= 1' },
+      ]);
+    });
+
+    it('returns validation_error for an out-of-enum doc_type (#64)', async () => {
+      const executor = makeExecutor();
+      const result = await executor.executeAction(TENANT_A, CONN_1, 'create_doc', {
+        title: 'x',
+        doc_type: 'bitable',
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe('validation_error');
+      expect(result.error.details).toEqual([
+        { path: '/doc_type', keyword: 'enum', message: 'must be equal to one of the allowed values' },
       ]);
     });
 

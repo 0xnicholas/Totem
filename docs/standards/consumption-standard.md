@@ -327,6 +327,16 @@ ADR-0010);目录无版本号,pin 机制 v2。
 - **input**:provider 兑现不了的可选参数 = `validation` 错误,**不会静默忽略**
   (否则 agent 误以为参数已生效)。
 
+`create_doc` 可选字段 `doc_type`(#64,minor 变更):`doc`(默认,缺省即
+文本文档,行为与此前的逐字节一致)/ `sheet`(空电子表格,返回的 `doc_id`
+即表格 token,可立即用 `read/write_sheet_cells` 寻址;`content` 与 `sheet`
+组合按本条 input 规则响亮拒绝——表格没有文本种子路径,写单元格用
+`write_sheet_cells`)。各 provider 覆盖:**飞书实现** `doc_type=sheet`
+(sheets v3 创建,scope 已在 v1 授权集内——存量连接无需重新授权);
+**钉钉未实现**(doc API 仅能创建在线文档,无已验证的表格创建路径),
+收到 `doc_type=sheet` 时以 `validation_error` 响亮拒绝(#49 email 寻址
+先例后的第二个生效案例)。
+
 ### 11.5 消息域(ADR-0016;`format` 字段 ADR-0020;`mentions` 字段 ADR-0021)
 
 首个非文档 canonical 动作 `send_message` 进入目录:内容为消息文本

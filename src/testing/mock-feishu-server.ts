@@ -404,6 +404,36 @@ export class MockFeishuServer {
   }
 
   private writeEndpoints(): void {
+    this.app.post('/open-apis/sheets/v3/spreadsheets', async (c) => {
+      const gate = this.docsGate(c);
+      if (gate) return gate;
+
+      // #64: the sheets v3 create — mirrors the real envelope; the new
+      // spreadsheet gets one default sheet (like Feishu) with an empty
+      // value matrix, so the cell actions work on it immediately.
+      const body: unknown = await c.req.json().catch(() => ({}));
+      const title = isRecord(body) && typeof body.title === 'string' ? body.title : '';
+      if (title === '') return c.json({ code: 10002, msg: 'title is required' });
+      const folderToken =
+        isRecord(body) && typeof body.folder_token === 'string' ? body.folder_token : undefined;
+      const docId = `sht_${randomUUID()}`;
+      this.docs.push({
+        doc_id: docId,
+        title,
+        content: '',
+        owner_id: 'mock-owner',
+        doc_type: 'sheet',
+        edited_at: new Date().toISOString(),
+        ...(folderToken !== undefined ? { folder_id: folderToken } : {}),
+      });
+      this.sheets.set(docId, { sheetId: `${docId}-sheet1`, sheetName: 'Sheet1', values: [] });
+      return c.json({
+        code: 0,
+        msg: 'ok',
+        data: { spreadsheet: { spreadsheet_token: docId, title } },
+      });
+    });
+
     this.app.post('/open-apis/docx/v1/documents', async (c) => {
       const gate = this.docsGate(c);
       if (gate) return gate;

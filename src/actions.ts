@@ -6,6 +6,13 @@ export interface CreateDocInput {
   title: string;
   folder_id?: string;
   content?: string;
+  /**
+   * What to create (#64): 'doc' (default — a text document) or
+   * 'sheet' (an empty spreadsheet, immediately usable by
+   * read/write_sheet_cells). 'sheet' cannot carry seeded content —
+   * fill the sheet with write_sheet_cells instead.
+   */
+  doc_type?: 'doc' | 'sheet';
 }
 
 export interface CreateDocOutput {
@@ -327,6 +334,7 @@ const createDocInputSchema: JSONSchemaType<CreateDocInput> = {
     title: { type: 'string', minLength: 1 },
     folder_id: { type: 'string', nullable: true },
     content: { type: 'string', nullable: true },
+    doc_type: { type: 'string', enum: ['doc', 'sheet'], nullable: true },
   },
   required: ['title'],
 };
@@ -784,7 +792,9 @@ export const DOCS_ACTIONS: Action[] = [
     // the output carries doc_id + title only.
     description:
       'Create a new document and return its opaque doc_id and title. ' +
-      'Optionally place it in a folder (folder_id) and seed it with initial content.',
+      'Optionally place it in a folder (folder_id) and seed it with initial content. ' +
+      'doc_type selects what to create: "doc" (default, a text document, seedable via content) ' +
+      'or "sheet" (an empty spreadsheet — use write_sheet_cells to fill it; content is rejected).',
     inputSchema: createDocInputSchema,
     outputSchema: createDocOutputSchema,
     effects: 'write',

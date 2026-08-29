@@ -482,6 +482,66 @@ describe('FeishuConnector write actions (T8)', () => {
     expect(content).toEqual({ doc_id: created.doc_id, content: 'Seed.' });
   });
 
+  it('create_doc doc_type "sheet" creates a spreadsheet the cell actions can use (#64)', async () => {
+    ctx.token = accessToken;
+    const output = await connector.execute(
+      'create_doc',
+      { title: 'Fresh Sheet', folder_id: 'folder-1', doc_type: 'sheet' },
+    ctx,
+    );
+    expect(output).toMatchObject({ title: 'Fresh Sheet' });
+    const created = output as { doc_id: string };
+    expect(created.doc_id).toBeTruthy();
+
+    // The loop #64 closes: the new spreadsheet is immediately addressable
+    // by the cell actions — no second lookup between create and write.
+    await connector.execute(
+      'write_sheet_cells',
+      { doc_id: created.doc_id, range: 'A1:B2', values: [['h1', 'h2'], [1, 2]] },
+      ctx,
+    );
+    const cells = await connector.execute(
+      'read_sheet_cells',
+      { doc_id: created.doc_id, range: 'A1:B2' },
+      ctx,
+    );
+    expect(cells).toEqual({
+      doc_id: created.doc_id,
+      range: 'A1:B2',
+      data: [
+        ['h1', 'h2'],
+        [1, 2],
+      ],
+      next: null,
+    });
+  });
+
+  it('create_doc doc_type "sheet" with content is rejected as validation (#64)', async () => {
+    ctx.token = accessToken;
+    await expect(
+      connector.execute(
+        'create_doc',
+        { title: 'X', doc_type: 'sheet', content: 'seed' },
+        ctx,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      retryable: false,
+    });
+  });
+
+  it('create_doc doc_type "sheet" treats explicit null content as absent (#64)', async () => {
+    ctx.token = accessToken;
+    // The null-means-absent convention (same as folder_id): an explicit
+    // null must not be read as a seed attempt.
+    const output = await connector.execute(
+      'create_doc',
+      { title: 'Null Sheet', doc_type: 'sheet', content: null },
+      ctx,
+    );
+    expect(output).toMatchObject({ title: 'Null Sheet' });
+  });
+
   it('append_doc_content appends and returns the full updated content', async () => {
     ctx.token = accessToken;
     const output = await connector.execute(
